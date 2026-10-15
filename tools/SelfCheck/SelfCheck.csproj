@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WinAppGuard.SelfCheck</AssemblyName>
+    <RootNamespace>WinAppGuard.SelfCheck</RootNamespace>
+
+    <!-- 引用的主工程是 WinForms 程序，这里也要声明，否则解析不到 Windows 桌面框架 -->
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <!-- 需要管理员权限才能读写防火墙规则 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WinAppGuard\WinAppGuard.csproj" />
+  </ItemGroup>
+  <!--
+    被引用的 WinAppGuard 是个可执行工程，它的 runtimeconfig.json 会被顺带复制到发布目录，
+    导致「单文件」旁边多出一个文件。本工具自己的配置是内嵌在 exe 里的，用不到那个文件。
+    注意：这个残留文件由 tools\publish-check.ps1 负责删掉 —— MSBuild 阶段拦不住它，
+    与其留一段不生效的 MSBuild 代码，不如在脚本里显式处理并说明原因。
+  -->
+
+  <!--
+    被引用的产品工程在 Release 下是 win-x64 自包含的。
+    如果本工程不是同样的配置，MSBuild 会直接报错：
+      NETSDK1151 自包含的可执行文件不能被非自包含的可执行文件引用。
+    所以这里在 Release 下声明同样的配置，保持两边一致。
+    好处是发布脚本不用再在命令行里塞一堆 -p 参数。
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+</Project>

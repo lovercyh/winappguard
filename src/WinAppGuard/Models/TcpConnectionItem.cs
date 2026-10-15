@@ -1,0 +1,97 @@
+using System.Net;
+using System.Net.Sockets;
+
+namespace WinAppGuard.Models;
+
+/// <summary>
+/// 一条 TCP 连接。
+///
+/// 数据由 <see cref="WinAppGuard.Core.ConnectionScanner"/> 填充，界面只读取本类型，
+/// 不直接接触 Win32 结构体，这样界面代码和底层解析代码互不牵连。
+///
+/// 带 Text 后缀的属性是给 DataGridView 直接绑定的显示文本，
+/// 放在这里而不是写在界面里，是为了让「数据怎么显示」这件事只有一处定义。
+/// </summary>
+public sealed class TcpConnectionItem
+{
+    /// <summary>所属进程 PID。</summary>
+    public required int Pid { get; init; }
+
+    /// <summary>程序名，例如 chrome.exe。拿不到路径时会退化成「PID 1234」。</summary>
+    public required string ProcessName { get; init; }
+
+    /// <summary>可执行文件完整路径。拿不到时为空字符串。</summary>
+    public required string ProcessPath { get; init; }
+
+    /// <summary>协议版本，取值 "IPv4" 或 "IPv6"。</summary>
+    public required string Protocol { get; init; }
+
+    /// <summary>本地端口。</summary>
+    public required ushort LocalPort { get; init; }
+
+    /// <summary>远程 IP 地址。</summary>
+    public required IPAddress RemoteAddress { get; init; }
+
+    /// <summary>远程端口。</summary>
+    public required ushort RemotePort { get; init; }
+
+    /// <summary>连接状态。</summary>
+    public required TcpState State { get; init; }
+
+    // ------------------------------------------------------------------
+    // 以下属性不属于扫描结果本身，而是界面在扫描之后补充的展示状态
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 该程序当前是否已被本工具阻止联网。
+    /// 由界面在扫描完成后根据防火墙规则填充，扫描器本身不设置这个值。
+    /// </summary>
+    public bool IsBlocked { get; set; }
+
+    /// <summary>
+    /// 阻止状态的显示文本。
+    /// 拿不到路径的连接无法被阻止，显示为破折号而不是「未阻止」，避免误导。
+    /// </summary>
+    public string BlockStateText =>
+        string.IsNullOrEmpty(ProcessPath) ? "—" : IsBlocked ? "已阻止" : "未阻止";
+
+    // ------------------------------------------------------------------
+    // 以下为界面显示用属性
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 程序路径的显示文本。
+    /// 取不到路径是正常现象（System 进程、已退出进程、受保护进程），不要当成错误。
+    /// </summary>
+    public string ProcessPathText => string.IsNullOrEmpty(ProcessPath) ? "（无法获取）" : ProcessPath;
+
+    /// <summary>本地端口的显示文本。</summary>
+    public string LocalPortText => LocalPort == 0 ? "-" : LocalPort.ToString();
+
+    /// <summary>远程 IP 的显示文本。IPv6 加方括号，避免和端口号看混。</summary>
+    public string RemoteAddressText =>
+        RemoteAddress.AddressFamily == AddressFamily.InterNetworkV6
+            ? $"[{RemoteAddress}]"
+            : RemoteAddress.ToString();
+
+    /// <summary>远程端口的显示文本。监听状态没有对端，显示为 -。</summary>
+    public string RemotePortText => RemotePort == 0 ? "-" : RemotePort.ToString();
+
+    /// <summary>连接状态的显示文本。</summary>
+    public string StateText => State switch
+    {
+        TcpState.Closed => "已关闭",
+        TcpState.Listen => "监听中",
+        TcpState.SynSent => "同步已发送",
+        TcpState.SynReceived => "同步已接收",
+        TcpState.Established => "已建立",
+        TcpState.FinWait1 => "FIN-WAIT-1",
+        TcpState.FinWait2 => "FIN-WAIT-2",
+        TcpState.CloseWait => "关闭等待",
+        TcpState.Closing => "正在关闭",
+        TcpState.LastAck => "最后确认",
+        TcpState.TimeWait => "时间等待",
+        TcpState.DeleteTcb => "已删除",
+        _ => $"未知({(int)State})",
+    };
+}

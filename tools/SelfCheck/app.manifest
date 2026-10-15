@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="WinAppGuard.FirewallCheck.app" />
+
+  <!--
+    刻意**不**声明 requireAdministrator。
+    原因：这个工具里的审计模式（纯只读，只读一个文件的元数据）
+    在 CI（例如 GitHub Actions）这种无法弹 UAC 的环境里必须能跑起来。
+    需要管理员权限的模式，由程序自己在启动时检测并提权（见 Program.cs）。
+
+    注意：XML 注释里不能出现连续两个减号，
+    所以上面写「审计模式」而不是写具体的命令行参数名。
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="WinAppGuard.app" />
+
+  <!--
+    请求管理员权限。
+    原因：创建/删除 Windows 防火墙规则、注册/注销计划任务都需要管理员权限。
+    副作用：双击 exe 会先弹出系统 UAC 确认框，这是预期行为。
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <!-- 声明兼容 Windows 10 / 11 -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 / Windows 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!--
+        注意：这里刻意不写 dpiAware / dpiAwareness。
+        WinForms 要求高分屏适配统一由项目属性 <ApplicationHighDpiMode> 控制
+        （见 WinAppGuard.csproj），两处同时设置会互相冲突并触发 WFO0003 警告。
+      -->
+      <!-- 支持超过 260 字符的长路径，程序路径列可能很长 -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

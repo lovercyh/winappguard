@@ -1,0 +1,55 @@
+name: 功能建议
+description: 提出一个新功能或改进想法
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前建议先看一眼下面的「设计上不做的事」——
+        这个项目的核心卖点是「不碰全局策略、不引入网络代码、不增加依赖」，
+        有些看着合理的功能其实和这些前提冲突。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 先说问题，再说方案 —— 有时候问题本身能用更简单的办法解决
+      placeholder: 例如「我经常要一次阻止好几个相关的程序，一个个点太慢」
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望怎么解决
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你考虑过的其它办法
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: 这个建议是否符合项目的约束
+      description: 这些是项目的硬性前提，勾选前请确认
+      options:
+        - label: 不需要引入第三方库（.NET 自带的够用）
+          required: false
+        - label: 不需要程序访问网络（没有遥测 / 更新检查 / 统计）
+          required: false
+        - label: 不需要修改全局防火墙策略
+          required: false
+        - label: 不需要注册表做持久化
+          required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+    validations:
+      required: false

@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# 这个项目只有 .NET 自带的依赖，不需要 secrets，权限给最小。
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 构建与审计
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 还原
+        run: dotnet restore WinAppGuard.sln
+
+      # 这个项目把警告当缺陷处理，所以这里用 -warnaserror 直接卡住。
+      - name: 构建（Debug）
+        run: dotnet build WinAppGuard.sln -c Debug --no-restore -warnaserror
+
+      - name: 构建（Release）
+        run: dotnet build WinAppGuard.sln -c Release --no-restore -warnaserror
+
+      - name: 构建自检工具
+        run: dotnet build tools/SelfCheck/SelfCheck.csproj -c Debug -warnaserror
+
+      # 审计是纯只读的，刻意设计成不需要管理员权限，
+      # 所以它能在 CI 里跑起来（runner 无法弹 UAC）。
+      #
+      # 它会检查：零第三方库、零网络代码、P/Invoke 清单、没有注册表访问。
+      # 任意一项不符，进程会返回非零退出码，这一步就会失败。
+      - name: 审计编译产物
+        run: dotnet run --project tools/SelfCheck/SelfCheck.csproj -c Debug --no-build -- --audit --no-pause
+
+      # 验证发布链路本身是通的（产出单文件 exe），但不发布。
+      - name: 验证发布脚本
+        run: powershell -ExecutionPolicy Bypass -File .\build\publish.ps1
+
+      - name: 确认确实是单文件
+        shell: pwsh
+        run: |
+          $exe = '.\dist\WinAppGuard.exe'
+          if (-not (Test-Path $exe)) { throw "发布失败：找不到 $exe" }
+
+          # 出了 exe 和 pdb，不应该有别的文件。
+          # 注意：构建根目录下的文件不算，只看 dist。
+          $extra = Get-ChildItem .\dist -File |
+            Where-Object { $_.Name -ne 'WinAppGuard.exe' }
+          if ($extra) {
+            throw "dist 里出现了单文件之外的文件：$($extra.Name -join ', ')"
+          }
+
+          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "OK：dist\WinAppGuard.exe  $size MB"
+
+      # 把产物传上去，方便手动下载来试
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinAppGuard-dev-build
+          path: dist/WinAppGuard.exe
+          retention-days: 14

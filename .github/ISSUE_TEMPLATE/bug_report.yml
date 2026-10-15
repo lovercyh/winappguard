@@ -1,0 +1,97 @@
+name: Bug 报告
+description: 报告一个可以复现的问题
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。这个工具会修改系统状态，所以复现环境的信息很重要。
+
+        **安全漏洞请不要用这个模板**，见 [SECURITY.md](../blob/main/SECURITY.md)。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 开始之前
+      options:
+        - label: 我搜过已有的 issue，没有重复
+          required: true
+        - label: 我看过 README 里的常见问题（杀软报毒、SmartScreen、关闭窗口不退出等）
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: WinAppGuard 版本
+      description: 在程序状态栏右下角可以看到，或者看 exe 的「属性 → 详细信息」
+      placeholder: 例如 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 运行 `winver` 可以看到
+      placeholder: 例如 Windows 11 24H2 (26100.2033)
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开「联网连接」页
+        2. 选中 xxx 程序
+        3. 点「阻止选中程序联网」
+        4. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 有报错信息请原样贴出来
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: |
+        「设置」页里有「打开日志目录」按钮，路径是 `%LOCALAPPDATA%\WinAppGuard\logs\`。
+        请贴上时间点附近的相关行。**日志只包含操作和错误，不含个人信息。**
+      render: text
+
+  - type: input
+    id: admin
+    attributes:
+      label: 程序是否以管理员身份运行
+      placeholder: 状态栏左下角会显示
+    validations:
+      required: false
+
+  - type: dropdown
+    id: firewall-impact
+    attributes:
+      label: 防火墙规则是否受影响
+      description: 打开 `wf.msc`（高级安全 Windows 防火墙）看看
+      options:
+        - 没检查 / 不适用
+        - 规则创建成功，但行为不对
+        - 该创建的规则没创建出来
+        - 出现了不该出现的规则
+        - 本该保留的规则被删掉了
+        - 其他
+    validations:
+      required: false

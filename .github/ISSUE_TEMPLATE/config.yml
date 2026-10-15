@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 报告安全漏洞
+    url: https://github.com/lovercyh/winappguard/security/advisories/new
+    about: 请不要把安全漏洞发在公开 issue 里，用 GitHub 的私密渠道
+  - name: 常见问题
+    url: https://github.com/lovercyh/winappguard#faq
+    about: 杀软报毒、SmartScreen 提示、关闭窗口不退出、退出不等于放行 —— 这些在 README 里都解释了
+  - name: 安全模型与自查方法
+    url: https://github.com/lovercyh/winappguard/blob/main/docs/%E5%AE%89%E5%85%A8%E8%AF%B4%E6%98%8E.md
+    about: 九条安全约定逐条给出可执行的验证方法

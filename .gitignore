@@ -1,0 +1,27 @@
+# 构建输出
+bin/
+obj/
+dist/
+dist-tools/
+build/_publish/
+tools/_publish/
+
+# 自检工具运行时生成的报告（每次运行都会重新生成，没必要入库）
+WinAppGuard-自检报告.txt
+WinAppGuard-*.txt
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userprefs
+
+# 日志（本程序默认写在 %LOCALAPPDATA%，这里做兜底）
+*.log
+
+# 操作系统产生的杂物
+Thumbs.db
+Desktop.ini
+.DS_Store

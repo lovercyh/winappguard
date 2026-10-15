@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 这是一个 Windows 桌面程序，输出 exe，不弹控制台窗口 -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <AssemblyName>WinAppGuard</AssemblyName>
+    <RootNamespace>WinAppGuard</RootNamespace>
+
+    <Version>1.0.0</Version>
+    <AssemblyTitle>WinAppGuard</AssemblyTitle>
+    <Product>WinAppGuard — Windows 程序联网控制工具</Product>
+    <Description>通过管理 Windows 防火墙规则来阻止或允许指定程序联网。本程序自身不拦截任何流量、不访问网络、不上传任何数据。</Description>
+    <!--
+      Company 和 Copyright 会显示在 exe 的「属性 → 详细信息」里。
+      想用真名代替 GitHub 用户名的话，改这里就行。
+    -->
+    <Company>lovercyh</Company>
+    <Copyright>Copyright © 2026 lovercyh</Copyright>
+    <!-- 启用可空引用类型和隐式 using，减少样板代码 -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- 清单文件：声明本程序必须以管理员身份运行 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- 程序图标：exe 在资源管理器里显示的图标 -->
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+
+    <!-- 高分屏适配，取值与 app.manifest 中的 dpiAwareness 保持一致 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <!--
+    以下配置只在 Release 配置下生效，用于产出 win-x64 自包含单文件 exe。
+    Debug 配置不受影响，日常调试仍然是快速构建。
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- 把原生 dll 一起打进单文件（运行时会自解压到临时目录） -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- 压缩单文件内容，体积更小，启动稍慢 -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!--
+      注意：这里刻意不开启 PublishTrimmed（裁剪）。
+      WinForms 大量依赖反射和 COM 互操作，裁剪后很容易在运行时才报错，
+      而防火墙调用属于危险操作，宁可体积大一点也不要有隐藏的运行时故障。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      托盘图标从嵌入资源里读。
+      指定 LogicalName 是为了不依赖编译器推断出的资源名（那样改目录结构就容易悄悄失效）。
+    -->
+    <EmbeddedResource Include="Resources\app.ico" LogicalName="WinAppGuard.AppIcon.ico" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 创建 Release 需要写权限。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 构建与发布
+        run: powershell -ExecutionPolicy Bypass -File .\build\publish.ps1
+
+      # 发布前先自检：审计不过就不发。
+      # 审计是只读的，不需要管理员权限。
+      - name: 发布前审计
+        run: |
+          dotnet build tools/SelfCheck/SelfCheck.csproj -c Debug
+          dotnet run --project tools/SelfCheck/SelfCheck.csproj -c Debug --no-build -- --audit --no-pause
+
+      # 生成发布说明，把校验和写进去 —— 用户可以用它确认下载没被篡改。
+      - name: 生成发布说明
+        shell: pwsh
+        run: |
+          $exe = '.\dist\WinAppGuard.exe'
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
+          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+
+          # 从 CHANGELOG 里摘出当前版本的段落
+          $tag = "${{ github.ref_name }}"
+          $changelog = Get-Content .\CHANGELOG.md -Raw -Encoding UTF8
+          $section = ''
+          if ($changelog -match "(?ms)^## \[?$($tag -replace '^v','')\]?.*?(?=^## |\z)") {
+            $section = $Matches[0].Trim()
+          }
+
+          $notes = @"
+          ## 下载
+
+          ``WinAppGuard.exe`` — 单文件自包含，约 $size MB，目标机器无需安装 .NET。
+
+          ### 校验和
+
+          下载后可以这样确认文件没被篡改：
+
+          ``````powershell
+          Get-FileHash .\WinAppGuard.exe -Algorithm SHA256
+          ``````
+
+          应当得到：
+
+          ``````
+          $hash
+          ``````
+
+          ### 说明
+
+          - exe **没有代码签名**，SmartScreen 会提示「未知发布者」，这是预期情况。
+          - 程序需要**管理员权限**（它要创建防火墙规则和计划任务）。
+          - 想核实这个二进制文件的能力，可以运行随附的审计工具：
+            ``WinAppGuard.SelfCheck.exe --audit``
+
+          $section
+          "@
+
+          # 去掉每行前面的缩进（here-string 带来的）
+          $notes = ($notes -split "`n" | ForEach-Object { $_.TrimEnd() }) -join "`n"
+          Set-Content -Path release-notes.md -Value $notes -Encoding UTF8
+
+          Write-Host "SHA256 = $hash"
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/WinAppGuard.exe
+          body_path: release-notes.md
+          draft: true
+          generate_release_notes: false

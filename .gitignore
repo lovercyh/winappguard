@@ -10,6 +10,9 @@ tools/_publish/
 WinAppGuard-自检报告.txt
 WinAppGuard-*.txt
 
+# Release workflow 生成的发布说明（只在 CI 里产生）
+release-notes.md
+
 # Visual Studio / Rider / VS Code
 .vs/
 .idea/

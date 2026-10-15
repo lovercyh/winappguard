@@ -17,10 +17,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -31,8 +31,17 @@ jobs:
       - name: 构建（Debug）
         run: dotnet build WinAppGuard.sln -c Debug --no-restore -warnaserror
 
+      # ⚠️ 这一步刻意**不加** --no-restore，也不能只靠上面那次 restore。
+      #
+      # 原因：WinAppGuard.csproj 里的 RuntimeIdentifier（win-x64）写在
+      # Condition="'$(Configuration)' == 'Release'" 里。
+      # 上面那句 `dotnet restore` 没带 -c，是按 Debug 配置还原的 —— 那次还原里
+      # 没有 win-x64 相关的资产。如果这里再写 --no-restore，就会报：
+      #   NETSDK1047: Assets file ... doesn't have a target for 'net10.0-windows/win-x64'
+      #
+      # 加上 -c Release 让 dotnet build 自己按 Release 配置重新还原一次，问题就没了。
       - name: 构建（Release）
-        run: dotnet build WinAppGuard.sln -c Release --no-restore -warnaserror
+        run: dotnet build WinAppGuard.sln -c Release -warnaserror
 
       - name: 构建自检工具
         run: dotnet build tools/SelfCheck/SelfCheck.csproj -c Debug -warnaserror
@@ -68,7 +77,7 @@ jobs:
 
       # 把产物传上去，方便手动下载来试
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: WinAppGuard-dev-build
           path: dist/WinAppGuard.exe

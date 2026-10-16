@@ -74,11 +74,17 @@ WinAppGuard.SelfCheck.exe --audit
 The expected result for a released build:
 
 ```
-Referenced assemblies        22, all from the .NET framework   → no third-party libraries
-Networking types referenced  0                                  → no networking code in the app
-Native API calls (P/Invoke)  16
-Registry access              none
+Referenced assemblies         25, all from the .NET framework   → no third-party libraries
+Networking types referenced   2 — TcpClient / NetworkStream     → the IP ownership lookup only
+Native API calls (P/Invoke)   16
+Network-related native calls  none                              → nothing bypasses the managed check
+Registry access               none
 ```
+
+Since 1.2 this check no longer asserts "zero networking types" — it asserts that every networking
+type is **on an expected list** (and that no one bypassed it via a direct `ws2_32` / `winhttp`
+P/Invoke). The reason is stated plainly in the README: the IP ownership lookup is real networking
+that the app performs itself, and pretending otherwise would make the audit worthless.
 
 Those 16 native calls are the complete set of non-managed functions the program can reach:
 

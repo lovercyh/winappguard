@@ -1,7 +1,10 @@
+using System.Diagnostics;
+using System.Net;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using WinAppGuard.Core;
 using WinAppGuard.Models;
 
@@ -13,9 +16,10 @@ namespace WinAppGuard.SelfCheck;
 /// 这是一个**开发期工具**，不是产品的一部分，不会被发布到最终 exe 里。
 /// 它的作用是让「程序对系统做了什么」可以被亲眼验证，而不是只能相信代码注释。
 ///
-/// 覆盖两块：
-///   防火墙  —— 规则的创建 / 查询 / 删除，以及 17 项安全护栏；
-///   开机自启 —— 计划任务的创建 / 查询 / 删除，以及任务内容的逐项核对。
+/// 覆盖三块：
+///   防火墙   —— 规则的创建 / 查询 / 删除，以及 17 项安全护栏；
+///   开机自启 —— 计划任务的创建 / 查询 / 删除，以及任务内容的逐项核对；
+///   IP 归属  —— 联网查询是否正常、私有地址是否真的没被发出去。
 ///
 /// 用法：
 ///   WinAppGuard.SelfCheck.exe                    防火墙：完整自动化测试，结束后自动清理
@@ -25,14 +29,19 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --autostart-status  自启：只读，打印任务状态和原始 XML
 ///   WinAppGuard.SelfCheck.exe --autostart-test    自启：完整测试（建 → 逐项核对 → 删）
 ///   WinAppGuard.SelfCheck.exe --autostart-disable 自启：删除 WinAppGuard 自启任务
-///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零网络代码 / 零第三方库
+///   WinAppGuard.SelfCheck.exe --ownership-test    IP 归属：**会联网**，核对查询结果与地址过滤
+///   WinAppGuard.SelfCheck.exe --ownership-core-test  IP 归属：离线，核对缓存 / 淘汰 / 开关 / 设置持久化
+///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
 ///
 /// 安全说明：
 ///   1. 防火墙部分只创建/删除以 AppGuard_ 开头的规则，从不修改全局防火墙策略；
 ///   2. 自启部分只创建/删除名为 WinAppGuard 的计划任务，绝不碰其他人的任务；
 ///   3. 两种完整测试模式无论中途是否出错，最后都会强制清理自己创建的东西；
-///   4. 审计模式是纯只读的，只是读一个文件。
+///   4. 审计模式是纯只读的，只是读一个文件；
+///   5. 只有 --ownership-test 会主动联网（连 whois.cymru.com:43），行为与产品完全一致，
+///      用的是产品里同一个 Core/IpOwnershipLookup.cs，不是另写一套；
+///      --ownership-core-test 用不联网的替身 + 临时文件，纯离线断言。
 /// </summary>
 internal static class Program
 {
@@ -47,9 +56,14 @@ internal static class Program
 
         var noPause = args.Contains("--no-pause", StringComparer.OrdinalIgnoreCase);
 
-        // 只有 --audit 是纯只读的（只读一个文件的元数据），不需要管理员权限。
-        // 这样它在 CI（无法弹 UAC）里也能跑起来。
-        var needsAdmin = !args.Contains("--audit", StringComparer.OrdinalIgnoreCase);
+        // 只有 --audit / --ownership-test / --ownership-core-test 不需要管理员权限：
+        //   --audit 只读一个文件的元数据；
+        //   --ownership-test 只是发网络请求，不碰系统状态；
+        //   --ownership-core-test 是纯离线逻辑断言。
+        // 这样它们都能在 CI（无法弹 UAC）里跑起来。
+        var needsAdmin = !args.Contains("--audit", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ownership-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ownership-core-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -99,6 +113,14 @@ internal static class Program
             else if (args.Contains("--audit", StringComparer.OrdinalIgnoreCase))
             {
                 RunAudit(args);
+            }
+            else if (args.Contains("--ownership-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunOwnershipTest();
+            }
+            else if (args.Contains("--ownership-core-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunOwnershipCoreTest();
             }
             else
             {
@@ -669,6 +691,395 @@ internal static class Program
     }
 
     /// <summary>
+    /// IP 归属查询自检（**会联网**）。
+    ///
+    /// 这是唯一一个主动联网的自检模式。它用的是产品里同一个 Core/IpOwnershipLookup.cs，
+    /// 所以跑通了就等于证明产品的联网路径是好的；
+    /// 同时用私有 / 回环地址验证「这些地址根本不会被发出去」。
+    ///
+    /// 为什么需要它：审计只能证明「引用了哪些类型」，证明不了「行为对不对」。
+    /// 联网行为的正确性只能靠真实跑一遍。
+    /// </summary>
+    private static void RunOwnershipTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   IP 归属查询自检（会联网：whois.cymru.com:43）                #");
+        W("################################################################");
+        W();
+
+        // 公网地址用来验证「查得到」，私有地址用来验证「发不出去」。
+        var publicAddresses = new[]
+        {
+            IPAddress.Parse("8.8.8.8"),                 // IPv4，公认稳定
+            IPAddress.Parse("1.1.1.1"),                 // IPv4
+            IPAddress.Parse("2001:4860:4860::8888"),    // IPv6
+        };
+
+        var localAddresses = new[]
+        {
+            IPAddress.Parse("192.168.1.1"),
+            IPAddress.Parse("10.0.0.1"),
+            IPAddress.Parse("172.16.0.1"),
+            IPAddress.Parse("169.254.1.1"),
+            IPAddress.Parse("127.0.0.1"),
+            IPAddress.Parse("::1"),
+        };
+
+        var all = localAddresses.Concat(publicAddresses).ToArray();
+
+        W("===== 1. 地址是否值得查询（本地判断，不发送）=====");
+        foreach (var address in all)
+        {
+            W($"    {(IpOwnershipLookup.IsQueryable(address) ? "会发送  " : "本地拦截")}  {address}");
+        }
+
+        W();
+
+        results.Add(("私有 / 回环 / 链路本地地址不会被发出去查询",
+            localAddresses.All(a => !IpOwnershipLookup.IsQueryable(a))));
+
+        results.Add(("公网 IPv4 / IPv6 地址会被查询",
+            publicAddresses.All(IpOwnershipLookup.IsQueryable)));
+
+        W();
+        W("===== 2. 实际查询结果（Team Cymru WHOIS）=====");
+
+        var lookup = IpOwnershipLookup.Query(all);
+
+        foreach (var address in all)
+        {
+            var key = address.ToString();
+            var info = lookup.TryGetValue(key, out var found) ? found : IpOwnershipInfo.None;
+
+            var country = string.IsNullOrEmpty(info.CountryCode) ? "-" : info.CountryCode;
+            var asn = string.IsNullOrEmpty(info.Asn) ? "-" : "AS" + info.Asn;
+            var extra = string.IsNullOrEmpty(info.Detail)
+                ? string.Join(" / ", new[] { info.Prefix, info.AsName }.Where(s => !string.IsNullOrEmpty(s)))
+                : info.Detail;
+
+            W($"    {key,-26} {info.State,-11} {country,-3} {asn,-9} {extra}");
+        }
+
+        W();
+
+        results.Add(("本机 / 局域网地址的结果是 LocalOnly，说明从未发出",
+            localAddresses.All(a =>
+                lookup.TryGetValue(a.ToString(), out var info) && info.State == IpOwnershipState.LocalOnly)));
+
+        results.Add(("公网 IPv4 / IPv6 都能查到归属（需能访问 whois.cymru.com）",
+            publicAddresses.All(a =>
+                lookup.TryGetValue(a.ToString(), out var info) && info.State == IpOwnershipState.Known)));
+
+        results.Add(("返回字段完整：AS 号非空、国家码为两位",
+            lookup.TryGetValue("8.8.8.8", out var google)
+            && google.State == IpOwnershipState.Known
+            && google.Asn.Length > 0
+            && google.CountryCode.Length == 2));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// IP 归属的核心逻辑自检（**不联网**）。
+    ///
+    /// 用不联网的替身替换真实查询实现，把「缓存命中 / 有效期过期 / 容量淘汰 /
+    /// 开关关闭时零流量 / 私有地址不进队列 / 调用方不被阻塞 / 关闭后不崩 /
+    /// 设置持久化能记住用户的关闭」这些纯逻辑离线验证清楚 ——
+    /// 它们不该依赖网络通不通。
+    /// </summary>
+    private static void RunOwnershipCoreTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   IP 归属：缓存与调度自检（不联网）                            #");
+        W("################################################################");
+        W();
+
+        // ---------- 1. 同一批地址只查一次 ----------
+        {
+            var calls = 0;
+            using var service = NewOwnershipService(
+                TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1), 100,
+                onQuery: _ => Interlocked.Increment(ref calls));
+
+            service.IsEnabled = true;
+            var batch = new[] { IPAddress.Parse("8.8.8.8"), IPAddress.Parse("1.1.1.1") };
+
+            service.Request(batch);
+            var arrived = WaitUntil(() => service.CachedCount >= 2);
+
+            service.Request(batch);      // 再请求一次，应当全部命中缓存
+            Thread.Sleep(300);
+
+            W($"    查询调用次数 = {calls}（预期 1：第二次应命中缓存）");
+            results.Add(("同一批地址只查询一次，重复请求命中缓存", arrived && calls == 1));
+        }
+
+        // ---------- 2. 有效期过后会重新查询 ----------
+        {
+            var calls = 0;
+            using var service = NewOwnershipService(
+                TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(100), 100,
+                onQuery: _ => Interlocked.Increment(ref calls));
+
+            service.IsEnabled = true;
+            var one = new[] { IPAddress.Parse("9.9.9.9") };
+
+            service.Request(one);
+            var first = WaitUntil(() => calls >= 1);
+
+            Thread.Sleep(700);           // 等有效期过去
+            service.Request(one);
+            var second = WaitUntil(() => calls >= 2);
+
+            W($"    查询调用次数 = {calls}（预期 2：有效期 400ms，等待 700ms 后应重查）");
+            results.Add(("结果过期后会重新查询", first && second && calls == 2));
+        }
+
+        // ---------- 3. 失败结果用更短的有效期 ----------
+        {
+            var calls = 0;
+            using var service = NewOwnershipService(
+                successTtl: TimeSpan.FromHours(1),      // 成功要 1 小时
+                failureTtl: TimeSpan.FromMilliseconds(300),  // 失败只等 300ms
+                capacity: 100,
+                onQuery: _ => Interlocked.Increment(ref calls),
+                fail: true);
+
+            service.IsEnabled = true;
+            var one = new[] { IPAddress.Parse("7.7.7.7") };
+
+            service.Request(one);
+            WaitUntil(() => calls >= 1);
+
+            Thread.Sleep(600);
+            service.Request(one);
+            var retried = WaitUntil(() => calls >= 2);
+
+            W($"    查询调用次数 = {calls}（预期 2：失败结果的短有效期应允许尽快重试）");
+            results.Add(("查询失败会用更短的有效期，避免长时间压住重试", retried && calls == 2));
+
+            var failedText = service.TryGet("7.7.7.7", out var info) ? info.TooltipText : "";
+            results.Add(("失败结果的悬停提示会写明原因", failedText.Contains("查询失败")));
+        }
+
+        // ---------- 4. 容量上限淘汰 ----------
+        {
+            var cache = new IpOwnershipCache(
+                TimeSpan.FromHours(1), TimeSpan.FromHours(1), capacity: 5);
+
+            for (var i = 0; i < 20; i++)
+            {
+                cache.Set($"10.0.0.{i}", new IpOwnershipInfo(IpOwnershipState.Known, "1", "X", "ZZ"));
+            }
+
+            W($"    写入 20 条、容量 5 → 实际保留 {cache.Count} 条");
+            results.Add(("缓存条数不会超过容量上限", cache.Count <= 5));
+
+            var evicted = !cache.TryGet("10.0.0.0", out _);
+            var kept = cache.TryGet("10.0.0.19", out _);
+            results.Add(("超出容量时淘汰最旧的、保留最新的", evicted && kept));
+        }
+
+        // ---------- 5. 关闭时零流量 ----------
+        {
+            var calls = 0;
+            using var service = NewOwnershipService(
+                TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1), 100,
+                onQuery: _ => Interlocked.Increment(ref calls));
+
+            // 默认就是关闭状态
+            service.Request(new[] { IPAddress.Parse("8.8.8.8") });
+            Thread.Sleep(300);
+            var silentWhileOff = calls == 0;
+
+            service.IsEnabled = true;
+            service.Request(new[] { IPAddress.Parse("8.8.8.8") });
+            var worksWhenOn = WaitUntil(() => calls >= 1);
+
+            W($"    关闭时查询调用次数 = 0 → {(silentWhileOff ? "是" : "否")}；开启后是否查询 → {worksWhenOn}");
+            results.Add(("功能关闭时不会发出任何查询", silentWhileOff));
+            results.Add(("功能开启后才开始查询", worksWhenOn));
+        }
+
+        // ---------- 6. 私有 / 回环地址不进队列 ----------
+        {
+            var calls = 0;
+            using var service = NewOwnershipService(
+                TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1), 100,
+                onQuery: _ => Interlocked.Increment(ref calls));
+
+            service.IsEnabled = true;
+            service.Request(new[]
+            {
+                IPAddress.Parse("192.168.1.1"),
+                IPAddress.Parse("10.0.0.1"),
+                IPAddress.Parse("172.16.5.5"),
+                IPAddress.Parse("169.254.9.9"),
+                IPAddress.Parse("127.0.0.1"),
+                IPAddress.Parse("::1"),
+            });
+            Thread.Sleep(300);
+
+            W($"    查询调用次数 = {calls}（预期 0），缓存条数 = {service.CachedCount}（预期 0）");
+            results.Add(("私有 / 回环地址根本不会进入查询队列", calls == 0 && service.CachedCount == 0));
+        }
+
+        // ---------- 7. 请求不阻塞调用方 ----------
+        {
+            var calls = 0;
+            using var service = NewOwnershipService(
+                TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1), 100,
+                onQuery: _ => Interlocked.Increment(ref calls),
+                delayMs: 1200);                       // 故意让查询很慢
+
+            service.IsEnabled = true;
+
+            var sw = Stopwatch.StartNew();
+            service.Request(new[] { IPAddress.Parse("8.8.8.8") });
+            sw.Stop();
+
+            W($"    Request 返回耗时 = {sw.ElapsedMilliseconds} ms（查询本身要 1200ms）");
+            results.Add(("Request 立即返回，不在调用方线程上做网络 IO", sw.ElapsedMilliseconds < 300));
+
+            results.Add(("慢查询最终仍能拿到结果", WaitUntil(() => calls >= 1, 5000)));
+        }
+
+        // ---------- 8. 关闭调度器后不崩、不再查询 ----------
+        {
+            var calls = 0;
+            var service = NewOwnershipService(
+                TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1), 100,
+                onQuery: _ => Interlocked.Increment(ref calls));
+
+            service.IsEnabled = true;
+            service.Dispose();
+
+            var threw = false;
+            try
+            {
+                service.Request(new[] { IPAddress.Parse("8.8.8.8") });
+            }
+            catch (Exception)
+            {
+                threw = true;
+            }
+
+            Thread.Sleep(300);
+            W($"    关闭后再次请求：抛异常 = {threw}，查询调用次数 = {calls}（预期 0）");
+            results.Add(("关闭调度器后再次请求不抛异常、也不再查询", !threw && calls == 0));
+        }
+
+        // ---------- 9. 设置持久化：用户的「关闭」必须记得住 ----------
+        {
+            var temp = Path.Combine(Path.GetTempPath(), $"winappguard-settings-{Guid.NewGuid():N}.json");
+
+            try
+            {
+                // 9.1 文件不存在 → 默认开启
+                var fresh = AppSettings.Load(temp);
+                results.Add(("设置文件缺失时按默认值处理（IP 归属默认开启）", fresh.IpOwnershipEnabled));
+
+                // 9.2 关闭后保存 → 重新读出仍然是关闭（本阶段最关键的一条）
+                fresh.IpOwnershipEnabled = false;
+                fresh.IpOwnershipNoticeShown = true;
+                fresh.Save(temp);
+
+                var reloaded = AppSettings.Load(temp);
+                W($"    写入 IpOwnershipEnabled=false 后读回 = {reloaded.IpOwnershipEnabled}（预期 False）");
+                results.Add(("关闭 IP 归属后保存，重新读取仍然是关闭（关得掉，也记得住）",
+                    !reloaded.IpOwnershipEnabled && reloaded.IpOwnershipNoticeShown));
+
+                // 9.3 文件里只允许有开关布尔值，不许夹带 IP / 路径
+                var text = File.ReadAllText(temp, Encoding.UTF8);
+                using var document = JsonDocument.Parse(text);
+                var properties = document.RootElement.EnumerateObject().ToList();
+                var onlyBooleans = properties.All(p =>
+                    p.Value.ValueKind == JsonValueKind.True || p.Value.ValueKind == JsonValueKind.False);
+
+                W($"    设置文件属性个数 = {properties.Count}，全部是布尔值 = {onlyBooleans}");
+                results.Add(("设置文件里只存开关布尔值，不存任何 IP / 路径",
+                    onlyBooleans && properties.Count > 0 && !text.Contains("8.8.8.8")));
+
+                // 9.4 原子写入不残留 .tmp
+                results.Add(("保存后不残留 .tmp 临时文件", !File.Exists(temp + ".tmp")));
+
+                // 9.5 文件损坏 → 回落默认，不抛异常
+                File.WriteAllText(temp, "{ 这不是合法 JSON ", Encoding.UTF8);
+                var broken = AppSettings.Load(temp);
+                results.Add(("设置文件损坏时回落到默认值，不抛异常", broken.IpOwnershipEnabled));
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temp)) File.Delete(temp);
+                    if (File.Exists(temp + ".tmp")) File.Delete(temp + ".tmp");
+                }
+                catch (Exception)
+                {
+                    // 临时文件删不掉不影响结论。
+                }
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>构造一个使用不联网替身查询的调度器，供缓存/调度自检使用。</summary>
+    private static IpOwnershipService NewOwnershipService(
+        TimeSpan successTtl,
+        TimeSpan failureTtl,
+        int capacity,
+        Action<IReadOnlyList<IPAddress>>? onQuery = null,
+        bool fail = false,
+        int delayMs = 0)
+    {
+        var cache = new IpOwnershipCache(successTtl, failureTtl, capacity);
+
+        return new IpOwnershipService(cache, addresses =>
+        {
+            onQuery?.Invoke(addresses);
+
+            if (delayMs > 0)
+            {
+                Thread.Sleep(delayMs);
+            }
+
+            var map = new Dictionary<string, IpOwnershipInfo>(StringComparer.Ordinal);
+            foreach (var address in addresses)
+            {
+                map[IpOwnershipLookup.ToKey(address)] = fail
+                    ? IpOwnershipInfo.Failed("自检用失败")
+                    : new IpOwnershipInfo(
+                        IpOwnershipState.Known, "64500", "SELFCHECK-AS", "ZZ", "0.0.0.0/0", "test", "2026-01-01");
+            }
+
+            return map;
+        });
+    }
+
+    /// <summary>轮询等待条件成立。比依赖事件时序更稳，避免自检出现偶发失败。</summary>
+    private static bool WaitUntil(Func<bool> condition, int timeoutMs = 4000)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(20);
+        }
+
+        return condition();
+    }
+
+    /// <summary>
     /// 出厂审计：直接读**编译出来的程序集**的元数据，而不是靠搜源码。
     ///
     /// 搜源码只能证明「我没写」，读元数据能证明「编出来的东西里确实没有」——
@@ -707,8 +1118,9 @@ internal static class Program
         AuditNetworking(metadata, results);
         AuditNativeImports(metadata);
         AuditSensitiveApis(metadata);
+        AuditNativeNetworkImports(metadata, results);
 
-        PrintSummary(results);
+        PrintSummary(results, showFirewallResidue: false);
 
         W();
         W("说明：单文件发布出来的 WinAppGuard.exe 就是把上面这个程序集打包进去的，");
@@ -804,17 +1216,26 @@ internal static class Program
     }
 
     /// <summary>
-    /// 有没有引用「会发起网络行为」的类型 —— 用来证明程序运行期不联网。
+    /// 列出程序里「能发起网络行为」的类型 —— 这是联网能力的完整清单。
     ///
-    /// 注意区分：System.Net.IPAddress / IPEndPoint / AddressFamily 这类是**纯数据类型**，
+    /// 从 1.2 起本程序会查询 IP 归属（Team Cymru WHOIS），所以**确实**引用了联网类型。
+    /// 这一项因此不再要求「零网络代码」，而是要求「全部落在预期清单内」：
+    /// 一旦出现预期之外的类型（HttpClient / Dns / SslStream 之类），
+    /// 就说明有人在别处新增了联网路径，必须解释清楚才能放行。
+    ///
+    /// 预期清单里的类型只允许出现在 Core/IpOwnershipLookup.cs —— 这是设计约定。
+    /// 元数据本身看不出「哪个文件用了它」，所以这里只报事实，
+    /// 由 --ownership-test 和资源监视器交叉验证「联网只发生在一处」。
+    ///
+    /// 注意：System.Net.IPAddress / IPEndPoint / AddressFamily 这类是**纯数据类型**，
     /// 只用来把连接表里的字节格式化成可读地址，本身不会发起任何连接。
     /// </summary>
     private static void AuditNetworking(MetadataReader metadata, List<(string, bool)> results)
     {
-        W("===== 2. 网络相关类型引用（用来证明运行期不联网）=====");
+        W("===== 2. 网络相关类型引用（联网能力清单）=====");
 
         // 纯数据类型，允许出现
-        var allowedTypes = new HashSet<string>(StringComparer.Ordinal)
+        var allowedDataTypes = new HashSet<string>(StringComparer.Ordinal)
         {
             "System.Net.IPAddress",
             "System.Net.IPEndPoint",
@@ -823,7 +1244,15 @@ internal static class Program
             "System.Net.Sockets.SocketException",
         };
 
-        // 只要出现就说明程序有能力联网
+        // 预期中的联网类型：IP 归属查询（Core/IpOwnershipLookup.cs）需要它们。
+        var expectedNetworkTypes = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "System.Net.Sockets.TcpClient",
+            "System.Net.Sockets.NetworkStream",
+            "System.Net.Sockets.Socket",
+        };
+
+        // 只要出现就说明程序有能力联网（含预期内的那些，逐个核对）
         var dangerousNames = new HashSet<string>(StringComparer.Ordinal)
         {
             "HttpClient", "HttpMessageHandler", "HttpContent", "HttpRequestMessage", "HttpResponseMessage",
@@ -842,7 +1271,7 @@ internal static class Program
             var name = metadata.GetString(typeRef.Name);
             var full = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
 
-            if (allowedTypes.Contains(full))
+            if (allowedDataTypes.Contains(full))
             {
                 continue;
             }
@@ -864,16 +1293,87 @@ internal static class Program
         {
             foreach (var hit in hits)
             {
+                // 预期内的标为普通缩进，预期外的加叹号 —— 一眼能看出有没有越界。
+                var mark = expectedNetworkTypes.Contains(hit) ? "  " : "！";
+                W($"    {mark}{hit}");
+            }
+        }
+
+        var unexpected = hits.Where(h => !expectedNetworkTypes.Contains(h)).ToList();
+
+        W();
+        W("    预期清单（IP 归属查询所需，只允许出现在 Core/IpOwnershipLookup.cs）：");
+        W("      System.Net.Sockets.TcpClient / NetworkStream / Socket");
+        W();
+        W("    已排除的纯数据类型：System.Net.IPAddress / IPEndPoint / AddressFamily /");
+        W("      SocketError / SocketException（只格式化地址，不建立任何连接）");
+        W();
+        W("    补充说明：按主机名连接时，.NET 运行时会自己发起一次 whois.cymru.com 的");
+        W("      DNS 解析。我们没有引用 System.Net.Dns，所以这一步在托管元数据里看不到。");
+        W();
+
+        results.Add(("联网边界受控：引用的网络类型全部在预期清单内", unexpected.Count == 0));
+
+        if (unexpected.Count > 0)
+        {
+            W($"    发现预期之外的网络类型：{string.Join(", ", unexpected)}");
+            W("    请解释用途，并确认它是否同样集中在唯一联网出口里。");
+        }
+    }
+
+    /// <summary>
+    /// 有没有用 P/Invoke 直接调用网络 API。
+    ///
+    /// 这一项是**防绕过检查**：第 2 项只看托管类型，如果有人用 ws2_32 / winhttp / wininet
+    /// 绕开 TcpClient，第 2 项会显示得很干净，但程序照样能联网 —— 那审计就成了假报告。
+    /// 所以单独把网络相关的原生模块也查一遍。
+    /// </summary>
+    private static void AuditNativeNetworkImports(MetadataReader metadata, List<(string, bool)> results)
+    {
+        W("===== 5. 网络相关原生调用（防绕过检查）=====");
+
+        var networkModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ws2_32.dll", "wsock32.dll", "winhttp.dll", "wininet.dll",
+            "dnsapi.dll", "urlmon.dll", "httpapi.dll", "mswsock.dll",
+        };
+
+        var hits = new List<string>();
+        foreach (var handle in metadata.MethodDefinitions)
+        {
+            var method = metadata.GetMethodDefinition(handle);
+            var import = method.GetImport();
+
+            if (import.Module.IsNil)
+            {
+                continue;
+            }
+
+            var dll = metadata.GetString(metadata.GetModuleReference(import.Module).Name);
+            if (networkModules.Contains(dll))
+            {
+                hits.Add($"{dll}!{metadata.GetString(import.Name)}");
+            }
+        }
+
+        hits.Sort(StringComparer.OrdinalIgnoreCase);
+
+        if (hits.Count == 0)
+        {
+            W("    没有直接调用任何网络相关的原生 API。");
+            W("    （本程序的联网走托管 TcpClient，所以原生调用清单保持 16 个不变。）");
+        }
+        else
+        {
+            W("    ！发现直接用 P/Invoke 调网络 API，托管检查会被绕过，必须解释清楚：");
+            foreach (var hit in hits)
+            {
                 W($"    ！{hit}");
             }
         }
 
         W();
-        W("    （已排除的纯数据类型：System.Net.IPAddress / IPEndPoint / AddressFamily ——");
-        W("      它们只是把连接表里的字节转成可读地址，不会建立任何连接。）");
-        W();
-
-        results.Add(("零网络代码：没有引用任何会发起网络行为的类型", hits.Count == 0));
+        results.Add(("无绕过：没有直接用 P/Invoke 调网络 API", hits.Count == 0));
     }
 
     /// <summary>列出全部 P/Invoke —— 这是程序能碰到的原生 API 的完整清单，供人工审计。</summary>
@@ -919,8 +1419,10 @@ internal static class Program
         {
             ("System.Diagnostics.Process", "Start", "启动外部进程：提权重启自身、打开日志目录"),
             ("System.IO.File", "AppendAllText", "写文件：只用于日志"),
-            ("System.IO.File", "WriteAllText", "写文件：只用于日志"),
-            ("System.IO.Directory", "CreateDirectory", "建目录：只用于日志目录"),
+            ("System.IO.File", "WriteAllText", "写文件：日志由 AppendAllText，此项用于设置文件的原子替换"),
+            ("System.IO.File", "Move", "写文件：设置文件先写 .tmp 再改名，避免半截文件"),
+            ("System.IO.Directory", "CreateDirectory", "建目录：日志目录 + 设置目录"),
+            ("System.Net.Sockets.TcpClient", "*", "唯一的联网动作：连 whois.cymru.com:43 查 IP 归属"),
             ("Microsoft.Win32.Registry", "*", "读写注册表（预期：不应出现）"),
         };
 
@@ -981,7 +1483,12 @@ internal static class Program
         => $"{action}（{(action == FirewallAction.Block ? "阻止" : "允许")}）";
 
     /// <summary>打印总结，并明确列出所有失败的检查项。</summary>
-    private static void PrintSummary(List<(string Title, bool Passed)> results)
+    /// <param name="results">检查项与结论。</param>
+    /// <param name="showFirewallResidue">
+    /// 是否打印「残留 AppGuard 规则」这一行。只有防火墙相关模式需要它，
+    /// 审计和 IP 归属自检打这行是噪音，所以做成开关。
+    /// </param>
+    private static void PrintSummary(List<(string Title, bool Passed)> results, bool showFirewallResidue = true)
     {
         W();
         W("################################################################");
@@ -1010,7 +1517,10 @@ internal static class Program
         }
 
         W();
-        W($"收尾后残留的 AppGuard 规则 = {FirewallManager.GetAppGuardRules().Count} 条（应为 0）");
+        if (showFirewallResidue)
+        {
+            W($"收尾后残留的 AppGuard 规则 = {FirewallManager.GetAppGuardRules().Count} 条（应为 0）");
+        }
     }
 
     /// <summary>同时输出到控制台和报告缓冲。</summary>

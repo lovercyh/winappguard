@@ -13,7 +13,7 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
-[![.NET](https://img.shields.io/badge/.NET-8%2B-512BD4.svg)](#build-from-source)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](#build-from-source)
 [![Release](https://img.shields.io/github/v/release/lovercyh/winappguard)](https://github.com/lovercyh/winappguard/releases/latest)
 [![Build](https://github.com/lovercyh/winappguard/actions/workflows/build.yml/badge.svg)](https://github.com/lovercyh/winappguard/actions/workflows/build.yml)
 
@@ -25,6 +25,8 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
 
 - **Lists live TCP connections** with program name, full path, PID, local port, remote IP,
   remote port, state, protocol (IPv4/IPv6) and **the program's digital signature**.
+- **Tells you who a connection belongs to** — hover a remote IP to see its country and
+  network operator (autonomous system).
 - **Blocks a program** — writes a single outbound Windows Firewall rule (TCP **and** UDP) for
   that executable.
 - **Unblocks it** — deletes the rules it created for that program.
@@ -43,25 +45,43 @@ Being explicit about this matters, because the tool needs administrator rights.
 - ❌ It does **not** touch firewall rules created by anything else. Deletion is hard-limited to
   rules whose name starts with `AppGuard_`.
 - ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …).
-- ❌ It does **not** send anything anywhere. No telemetry, no analytics, no update check.
-- ⚠️ **But it does reach the network by default** — see the honest note below.
+- ⚠️ It **does** reach the network by default, for two specific purposes (see below).
+  It sends **no telemetry, no analytics, no usage data**, and there is no update check.
 
 ### About "no network" — the honest version
 
-WinAppGuard's own code contains **zero networking APIs**. That part is verifiable with `--audit`.
+**WinAppGuard is not a zero-network program, and these docs no longer pretend otherwise.**
+Up to 1.1 it *was* — the app's own code contained zero networking APIs. 1.2 added the IP ownership
+lookup, so that claim was **retired** rather than kept alive with careful wording.
 
-However, the **digital signature column** checks certificate revocation status by default. That makes
-Windows' certificate services (Crypt32) contact CA servers on the tool's behalf. You will see
-`WinAppGuard.exe` making outbound connections in Resource Monitor.
+There are exactly **two** things that touch the network. Both are on by default, and **both can be
+switched off** in *Settings → Data & privacy*:
 
-- **This is a deliberate trade-off**: checking revocation gives a more accurate answer about whether a
-  certificate has been revoked.
-- **You can turn it off**: *Settings → Data & privacy* → uncheck "check certificate revocation status".
-  The tool then reads only the local revocation cache and makes **no network traffic at all**.
-- It is always **Windows' certificate service** doing the fetching, never application code, and nothing
-  about you or your machine is ever sent — it is a standard CRL/OCSP lookup.
+| | Who initiates it | What is sent | Where it goes |
+|---|---|---|---|
+| **IP ownership lookup** | WinAppGuard's own code | the **remote IP** only | `whois.cymru.com:43` |
+| **Certificate revocation check** | Windows' certificate service (Crypt32) | a CRL/OCSP lookup | that certificate's CA |
 
-- ❌ It does **not** use the registry for persistence. Auto-start uses Task Scheduler only.
+Turn both off and WinAppGuard makes **no network traffic at all**.
+
+**About the IP ownership lookup** (new in 1.2). It resolves each connection's remote IP to a country
+and an autonomous system, so the connection list answers *"who am I talking to?"* and not just
+*"which IP?"*:
+
+- Only the **remote IP** is sent — never the process name, path, PID, port, or anything else local.
+- LAN / loopback / link-local addresses are **filtered out before sending**; they never leave the machine.
+- Connecting by hostname means the .NET runtime performs one DNS lookup for `whois.cymru.com`.
+  That is not an HTTP request, but it is a real name resolution, so it is stated rather than hidden.
+- Switching it off is **persistent** (stored in `settings.json`) — it will not silently come back
+  on the next launch.
+- The very first launch shows a one-time notice explaining the above.
+
+**About the revocation check**: it is always **Windows' certificate service** doing the fetching,
+never application code, and nothing about you or your machine is sent — it is a standard CRL/OCSP
+lookup. Turn it off and the tool reads only the local revocation cache.
+
+- ❌ It does **not** use the registry for persistence. Auto-start uses Task Scheduler; settings go to
+  a plain JSON file under `%LOCALAPPDATA%`.
 
 ## Why another firewall tool?
 
@@ -113,6 +133,7 @@ its full path, the scope of the change, and the rule that is about to be created
 | Process path lookup | `QueryFullProcessImageNameW` (no `System.Diagnostics.Process` objects, so no handle leak while refreshing) |
 | Auto-start | One Task Scheduler task named `WinAppGuard`, logon trigger, highest privileges, no execution time limit |
 | Single instance | Named mutex + a broadcast window message, so launching it twice focuses the existing window |
+| IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the app's **only** outbound endpoint, batched and cached in memory, on by default, switchable off |
 
 ## Verifiable trust
 
@@ -126,11 +147,20 @@ This does **not** grep the source. It reads the **metadata of the compiled assem
 indirect references and anything the framework drags in — and reports:
 
 ```
-Referenced assemblies        22, all from the .NET framework    → no third-party libraries
-Networking types referenced  0                                   → no networking code in the app
-Native API calls (P/Invoke)  16
-Registry access              none
+Referenced assemblies         25, all from the .NET framework   → no third-party libraries
+Networking types referenced   2 — TcpClient / NetworkStream     → the IP ownership lookup only
+Native API calls (P/Invoke)   16
+Network-related native calls  none                              → nothing bypasses the managed check
+Registry access               none
 ```
+
+Two notes on that output:
+
+- Since 1.2 the audit **no longer demands "zero networking types"**. It demands that every
+  networking type is **on an expected list**, and it adds a check that nobody bypassed the managed
+  types by calling `ws2_32` / `winhttp` / `wininet` through P/Invoke. An audit that stays green
+  while a network path hides behind it would be worse than no audit at all.
+- `--audit` needs no administrator rights, so it runs in CI too.
 
 Those 16 native calls are the complete set of unmanaged functions the program can reach:
 

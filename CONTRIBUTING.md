@@ -48,11 +48,15 @@
 2. **绝不修改全局防火墙策略** —— 不要新增任何写入 `FirewallEnabled` /
    `DefaultInboundAction` / `DefaultOutboundAction` 的代码
 3. **关键进程保护做在防火墙底层**，不能只做界面置灰
-4. **不引入任何网络代码** —— 没有遥测、没有更新检查、没有统计
-5. **不用注册表做持久化**
-6. **日志只写本机**，不上传任何内容
+4. **联网只能从 `Core/IpOwnershipLookup.cs` 一个出口走**，且只连
+   `AppConstants.OwnershipLookupHost:OwnershipLookupPort` 这一个固定地址。
+   私有 / 回环 / 链路本地地址必须在**发送前**过滤掉
+5. **没有遥测、没有更新检查、没有统计**；唯一会发出去的是远程 IP（第 4 条，可关闭）
+6. **不用注册表做持久化**（自启用计划任务，设置写 `%LOCALAPPDATA%` 下的 JSON）
+7. **日志只写本机**，不上传任何内容；设置文件只存布尔值
 
-`tools/SelfCheck` 的 `--audit` 模式会检查第 4、5 条，CI 每次都会跑。
+`tools/SelfCheck` 的 `--audit` 模式会检查第 4、5、6 条（含一项防 P/Invoke 绕过的检查），
+CI 每次都会跑。
 
 ---
 

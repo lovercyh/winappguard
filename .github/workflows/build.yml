@@ -49,7 +49,8 @@ jobs:
       # 审计是纯只读的，刻意设计成不需要管理员权限，
       # 所以它能在 CI 里跑起来（runner 无法弹 UAC）。
       #
-      # 它会检查：零第三方库、零网络代码、P/Invoke 清单、没有注册表访问。
+      # 它会检查：零第三方库、联网边界受控（网络类型全在预期清单内）、
+      # P/Invoke 清单、没有注册表访问、没有绕过托管检查直接用网络 API。
       # 任意一项不符，进程会返回非零退出码，这一步就会失败。
       - name: 审计编译产物
         run: dotnet run --project tools/SelfCheck/SelfCheck.csproj -c Debug --no-build -- --audit --no-pause

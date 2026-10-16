@@ -9,7 +9,7 @@
     <AssemblyName>WinAppGuard</AssemblyName>
     <RootNamespace>WinAppGuard</RootNamespace>
 
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <AssemblyTitle>WinAppGuard</AssemblyTitle>
     <Product>WinAppGuard — Windows 程序联网控制工具</Product>
     <Description>通过管理 Windows 防火墙规则来阻止或允许指定程序联网。本程序自身不拦截任何流量、不访问网络、不上传任何数据。</Description>

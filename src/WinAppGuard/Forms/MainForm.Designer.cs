@@ -84,6 +84,9 @@ partial class MainForm
     private Label _logPathLabel = null!;
     private Button _openLogFolderButton = null!;
     private CheckBox _checkRevocationCheckBox = null!;
+    private CheckBox _checkIpOwnershipCheckBox = null!;
+    private Panel _privacyScrollHost = null!;
+    private Panel _privacyBottomPanel = null!;
 
     // ---------- 其它 ----------
     private Button _exitButton = null!;
@@ -111,6 +114,11 @@ partial class MainForm
     {
         if (disposing)
         {
+            // 先停掉归属查询的后台调度，再释放控件。
+            // Dispose 不等待正在飞的查询 —— 那会让退出卡住；
+            // 后台线程是线程池线程，不会阻止进程退出。
+            _ipOwnershipService.Dispose();
+
             components?.Dispose();
         }
 
@@ -170,6 +178,9 @@ partial class MainForm
         _logPathLabel = new Label();
         _openLogFolderButton = new Button();
         _checkRevocationCheckBox = new CheckBox();
+        _checkIpOwnershipCheckBox = new CheckBox();
+        _privacyScrollHost = new Panel();
+        _privacyBottomPanel = new Panel();
         _exitButton = new Button();
         _statusStrip = new StatusStrip();
         _adminStatusLabel = new ToolStripStatusLabel();
@@ -198,6 +209,8 @@ partial class MainForm
         _autostartButtons.SuspendLayout();
         _taskXmlPanel.SuspendLayout();
         _privacyPanel.SuspendLayout();
+        _privacyScrollHost.SuspendLayout();
+        _privacyBottomPanel.SuspendLayout();
         _toolPanel.SuspendLayout();
         _rulesToolPanel.SuspendLayout();
         _gridContextMenu.SuspendLayout();
@@ -236,12 +249,11 @@ partial class MainForm
         _safetyNoticeLabel.Size = new Size(1120, 20);
         _safetyNoticeLabel.TabIndex = 2;
         // ⚠️ 这里的措辞必须和实际行为一致。
-        // 证书吊销检查默认开启，Windows 证书服务会代表本程序联网 —— 所以
-        // 不能写「本程序不访问网络」，那是在骗用户。
-        // 能说、也说得住的是「自身不含网络代码」。
+        // 现在有两处会联网：IP 归属查询（本程序自己的代码）和证书吊销检查
+        // （Windows 证书服务代表程序发起）。不能写「本程序不访问网络」，那是在骗用户。
         _safetyNoticeLabel.Text =
             "安全约定：只创建和删除以 AppGuard_ 开头的防火墙规则，从不修改全局防火墙策略；" +
-            "本程序自身不含网络代码，但默认会联网查询证书吊销状态（可在「设置」页关闭）。";
+            "默认会联网查询 IP 归属与证书吊销状态，两者都可在「设置」页关闭。";
 
         // ==================================================================
         // 标签页容器
@@ -634,7 +646,7 @@ partial class MainForm
 
         // 直接把任务计划程序里的原始定义摆出来给用户看，这是最彻底的透明。
         _taskXmlPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        _taskXmlPanel.Location = new Point(6, 564);
+        _taskXmlPanel.Location = new Point(6, 630);
         _taskXmlPanel.Name = "_taskXmlPanel";
         _taskXmlPanel.Size = new Size(1060, 220);
         _taskXmlPanel.TabIndex = 3;
@@ -653,41 +665,69 @@ partial class MainForm
 
         // ---------- 数据与隐私 ----------
         // 单独做一块，是为了正面回答「这工具会不会偷偷把我的数据传出去」。
+        //
+        // 排版说明（踩过坑的，见 docs 里的「界面布局铁律」）：
+        //   这块上面的说明文字比较长，而下面那两行开关是固定高度。
+        //   以前用「AutoSize 标签 + 绝对坐标 + 固定高度容器」，文字一长就会压住下面的控件。
+        //   现在改成停靠布局：文字区 Dock=Fill 且开 AutoScroll（装不下就出滚动条，不会溢出去），
+        //   日志和开关一起钉在底部（Dock=Bottom）。从结构上不可能重叠。
         _privacyPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
         _privacyPanel.Location = new Point(6, 342);
         _privacyPanel.Name = "_privacyPanel";
-        _privacyPanel.Size = new Size(1060, 214);
+        _privacyPanel.Size = new Size(1060, 280);
         _privacyPanel.TabIndex = 2;
         _privacyPanel.Text = "数据与隐私";
 
-        // 注意这里的措辞必须是「本程序自身不含网络代码」而不是「本程序不联网」——
-        // 因为证书吊销检查默认开启，Windows 证书服务会代表程序去查 CA 服务器，
-        // 在资源监视器里确实能看到 WinAppGuard.exe 有对外连接。
-        // 写含糊了就是在骗用户。
+        // 先加 Fill 的、再加 Bottom 的：停靠顺序是从后往前解析，
+        // 所以后加的 Bottom 先拿走底部，先加的 Fill 拿剩下中间的区域。
+        _privacyPanel.Controls.Add(_privacyScrollHost);
+        _privacyPanel.Controls.Add(_privacyBottomPanel);
+
+        _privacyScrollHost.AutoScroll = true;
+        _privacyScrollHost.Dock = DockStyle.Fill;
+        _privacyScrollHost.Name = "_privacyScrollHost";
+        _privacyScrollHost.TabIndex = 0;
+        _privacyScrollHost.Controls.Add(_privacyLabel);
+
+        // ⚠️ 措辞必须和实际行为一致：现在有两处会联网，不能再写「本程序不含网络代码」。
+        // 一处是本程序自己的代码（IP 归属查询），一处是 Windows 证书服务代表程序发起的
+        // （证书吊销检查）。写含糊了就是在骗用户。
         _privacyLabel.AutoSize = true;
-        _privacyLabel.Location = new Point(14, 24);
-        _privacyLabel.MaximumSize = new Size(1030, 0);
+        _privacyLabel.Location = new Point(14, 8);
+        _privacyLabel.MaximumSize = new Size(1010, 0);
         _privacyLabel.Name = "_privacyLabel";
         _privacyLabel.Size = new Size(600, 60);
         _privacyLabel.TabIndex = 0;
         _privacyLabel.Text =
-            "本程序自身不含任何网络代码：不上传数据、没有遥测、没有更新检查。" +
-            "但下面的「证书吊销检查」默认开启，此时 Windows 的证书服务会代表本程序去查询 CA 服务器，" +
-            "在资源监视器里会看到 WinAppGuard.exe 有对外连接。关掉它即可恢复完全零网络。\r\n" +
+            "本程序有且只有两处会联网，两者都可以关掉：\r\n" +
+            "· IP 归属查询（默认开启）：把连接的远程 IP 发送到 whois.cymru.com 查询归属，" +
+            "用来判断「这个连接在跟谁通信」。只发远程 IP，不发进程名、路径、端口或任何其它本机信息；" +
+            "局域网和本机地址根本不会发出去。\r\n" +
+            "· 证书吊销检查（默认开启）：Windows 的证书服务会代表本程序去查询 CA 服务器。\r\n" +
+            "两处都关掉之后，本程序不再产生任何网络流量。\r\n" +
             "日志只写在本机下面这一个目录里，不会发送到任何地方，你可以随时查看或删除：";
+
+        _privacyBottomPanel.Dock = DockStyle.Bottom;
+        _privacyBottomPanel.Height = 138;
+        _privacyBottomPanel.Name = "_privacyBottomPanel";
+        _privacyBottomPanel.TabIndex = 1;
+        _privacyBottomPanel.Controls.Add(_logPathLabel);
+        _privacyBottomPanel.Controls.Add(_openLogFolderButton);
+        _privacyBottomPanel.Controls.Add(_checkRevocationCheckBox);
+        _privacyBottomPanel.Controls.Add(_checkIpOwnershipCheckBox);
 
         _logPathLabel.AutoSize = true;
         _logPathLabel.ForeColor = SystemColors.GrayText;
-        _logPathLabel.Location = new Point(14, 92);
+        _logPathLabel.Location = new Point(14, 4);
         _logPathLabel.Name = "_logPathLabel";
         _logPathLabel.Size = new Size(600, 17);
-        _logPathLabel.TabIndex = 1;
+        _logPathLabel.TabIndex = 0;
         _logPathLabel.Text = "";
 
-        _openLogFolderButton.Location = new Point(14, 114);
+        _openLogFolderButton.Location = new Point(14, 26);
         _openLogFolderButton.Name = "_openLogFolderButton";
         _openLogFolderButton.Size = new Size(160, 30);
-        _openLogFolderButton.TabIndex = 2;
+        _openLogFolderButton.TabIndex = 1;
         _openLogFolderButton.Text = "打开日志目录";
         _openLogFolderButton.UseVisualStyleBackColor = true;
         _openLogFolderButton.Click += OnOpenLogFolderClick;
@@ -696,18 +736,28 @@ partial class MainForm
         _checkRevocationCheckBox.AutoSize = true;
         _checkRevocationCheckBox.Checked = true;
         _checkRevocationCheckBox.CheckState = CheckState.Checked;
-        _checkRevocationCheckBox.Location = new Point(16, 156);
+        _checkRevocationCheckBox.Location = new Point(16, 66);
         _checkRevocationCheckBox.Name = "_checkRevocationCheckBox";
         _checkRevocationCheckBox.Size = new Size(400, 21);
-        _checkRevocationCheckBox.TabIndex = 3;
+        _checkRevocationCheckBox.TabIndex = 2;
         _checkRevocationCheckBox.Text = "检查证书吊销状态（会联网查询 CA 服务器，取消勾选则完全零网络）";
         _checkRevocationCheckBox.UseVisualStyleBackColor = true;
         _checkRevocationCheckBox.CheckedChanged += OnRevocationModeChanged;
 
-        _privacyPanel.Controls.Add(_privacyLabel);
-        _privacyPanel.Controls.Add(_logPathLabel);
-        _privacyPanel.Controls.Add(_openLogFolderButton);
-        _privacyPanel.Controls.Add(_checkRevocationCheckBox);
+        // IP 归属查询开关。
+        // 这里先把默认值摆上（默认开启），真实值随后由 settings.json 覆盖（见 MainForm.cs）。
+        // 文案必须写清楚「会把远程 IP 发到哪里」，只写「查询归属」是不够的。
+        _checkIpOwnershipCheckBox.AutoSize = true;
+        _checkIpOwnershipCheckBox.Checked = true;
+        _checkIpOwnershipCheckBox.CheckState = CheckState.Checked;
+        _checkIpOwnershipCheckBox.Location = new Point(16, 96);
+        _checkIpOwnershipCheckBox.Name = "_checkIpOwnershipCheckBox";
+        _checkIpOwnershipCheckBox.Size = new Size(400, 21);
+        _checkIpOwnershipCheckBox.TabIndex = 3;
+        _checkIpOwnershipCheckBox.Text =
+            "查询 IP 归属（会把远程 IP 发送到 whois.cymru.com，取消勾选则完全不发）";
+        _checkIpOwnershipCheckBox.UseVisualStyleBackColor = true;
+        _checkIpOwnershipCheckBox.CheckedChanged += OnIpOwnershipChanged;
 
         _tabSettings.Controls.Add(_taskXmlPanel);
         _tabSettings.Controls.Add(_privacyPanel);
@@ -858,6 +908,10 @@ partial class MainForm
         _taskXmlPanel.PerformLayout();
         _privacyPanel.ResumeLayout(false);
         _privacyPanel.PerformLayout();
+        _privacyScrollHost.ResumeLayout(false);
+        _privacyScrollHost.PerformLayout();
+        _privacyBottomPanel.ResumeLayout(false);
+        _privacyBottomPanel.PerformLayout();
         _toolPanel.ResumeLayout(false);
         _toolPanel.PerformLayout();
         _rulesToolPanel.ResumeLayout(false);

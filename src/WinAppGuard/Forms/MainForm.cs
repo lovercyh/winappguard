@@ -158,6 +158,30 @@ public partial class MainForm : Form
     /// </summary>
     private bool _isCheckingSignatures;
 
+    // ---------- IP 归属查询 ----------
+
+    /// <summary>
+    /// 本机设置。默认 IP 归属查询是**开启**的（见 <see cref="AppSettings"/>）。
+    /// 这个文件只写本机，不参与任何联网。
+    /// </summary>
+    private readonly AppSettings _settings = AppSettings.Load();
+
+    /// <summary>
+    /// IP 归属查询的调度器。
+    /// 联网动作全在它内部的 <see cref="IpOwnershipLookup"/> 里 ——
+    /// 界面这一层只负责「要查哪些地址」和「把结果挂到表格上」，不直接碰网络。
+    /// </summary>
+    private readonly IpOwnershipService _ipOwnershipService = new();
+
+    /// <summary>
+    /// 是否正在把设置里的值填到界面控件上。
+    ///
+    /// 为什么需要：给 CheckBox.Checked 赋值会触发 CheckedChanged，
+    /// 那本来代表「用户切换了开关」。不加这个标志的话，启动时的一次填充
+    /// 会被当成用户操作，白白写一次设置文件、还记一条日志。
+    /// </summary>
+    private bool _loadingSettings;
+
     /// <summary>供设计器/调试使用的默认构造函数。</summary>
     public MainForm() : this(isAutostart: false)
     {
@@ -173,6 +197,18 @@ public partial class MainForm : Form
         _autoRefreshTimer.Interval = AutoRefreshIntervalMs;
         SetupConnectionGrid();
         SetupRulesGrid();
+
+        // IP 归属查询：把后台结果接回界面，并按设置决定要不要开启。
+        // 开启只是「允许查询」，真正的网络请求要等扫描完成后才会发起。
+        _ipOwnershipService.ResultsUpdated += OnOwnershipResultsUpdated;
+        _ipOwnershipService.IsEnabled = _settings.IpOwnershipEnabled;
+
+        // 把设置里的开关状态填到界面上。
+        // 用 _loadingSettings 挡住 CheckedChanged —— 那是给「用户操作」用的，
+        // 启动时的一次填充不该写文件、也不该记日志。
+        _loadingSettings = true;
+        _checkIpOwnershipCheckBox.Checked = _settings.IpOwnershipEnabled;
+        _loadingSettings = false;
     }
 
     /// <summary>
@@ -244,6 +280,13 @@ public partial class MainForm : Form
             ShowTrayBalloon(
                 "WinAppGuard 已随开机启动",
                 "程序正在后台运行，托盘图标就是它。双击图标可以打开主界面，右键可以退出。");
+        }
+        else
+        {
+            // IP 归属查询默认开启，也就是第一次运行就会联网，必须主动告知一次。
+            // 用 BeginInvoke 延后到窗口画完之后再弹，避免对话框出现在还没画完的窗口前面。
+            // （开机自启那条路不在这里弹，会在用户真正打开窗口时弹 —— 见 ShowMainWindow。）
+            BeginInvoke(ShowIpOwnershipNoticeIfNeeded);
         }
     }
 
@@ -490,6 +533,7 @@ public partial class MainForm : Form
         try
         {
             ApplyBlockedState();
+            ApplyOwnership();
             _connectionSource.ResetBindings(metadataChanged: false);
         }
         finally
@@ -552,6 +596,9 @@ public partial class MainForm : Form
                 row.Cells[signatureColumnIndex].ToolTipText = item.SignatureTooltip;
             }
         }
+
+        // 归属信息挂在「远程 IP」列上，和签名提示一样只在有内容时才显示。
+        RefreshOwnershipTooltips();
     }
 
     /// <summary>按优先级决定一行的底色；不需要特殊着色时返回 null。</summary>
@@ -836,6 +883,9 @@ public partial class MainForm : Form
             // 列表已经显示出来了，签名在后台慢慢补。
             // 放最后调用是为了不让它拖慢"列表出现"这件事。
             _ = CheckSignaturesAsync();
+
+            // 归属信息同样在后台补：Request 立即返回，不阻塞界面。
+            RequestOwnershipForVisibleConnections();
         }
         catch (Exception ex)
         {
@@ -944,6 +994,204 @@ public partial class MainForm : Form
 
         _ = CheckSignaturesAsync();
     }
+
+    // ==================================================================
+    // IP 归属查询
+    //
+    // 界面这一层的分工很明确：
+    //   它只负责「要查哪些地址」和「把结果挂到表格上」；
+    //   真正的联网在 Core/IpOwnershipLookup.cs（唯一联网出口），
+    //   排队/缓存/后台调度在 Core/IpOwnershipService.cs。
+    // 这里绝不直接碰网络 —— 这样「程序会不会偷偷联网」只需要审那两个文件。
+    // ==================================================================
+
+    /// <summary>
+    /// 把缓存里已有的归属信息填到连接项上。
+    ///
+    /// 只在界面线程调用，而且只读内存缓存 —— 不联网、不阻塞。
+    /// 真正确立结论的后台查询在 <see cref="IpOwnershipService"/> 里。
+    /// </summary>
+    private void ApplyOwnership()
+    {
+        var enabled = _ipOwnershipService.IsEnabled;
+
+        foreach (var item in _connections)
+        {
+            if (!enabled)
+            {
+                // 功能关闭时一律不显示归属 —— 让「关闭」这件事在观感上也是干净的。
+                item.IpOwnership = IpOwnershipInfo.None;
+                continue;
+            }
+
+            if (!IpOwnershipLookup.IsQueryable(item.RemoteAddress))
+            {
+                // 私有 / 回环地址：明确告诉用户「没有往外查」，
+                // 而不是留一片空白让人以为功能坏了。
+                item.IpOwnership = IpOwnershipInfo.LocalOnly;
+                continue;
+            }
+
+            var key = IpOwnershipLookup.ToKey(item.RemoteAddress);
+            item.IpOwnership = _ipOwnershipService.TryGet(key, out var info)
+                ? info
+                : IpOwnershipInfo.None;
+        }
+    }
+
+    /// <summary>
+    /// 把归属提示挂到「远程 IP」列上。
+    /// 空字符串会让单元格不显示提示，所以不需要额外清除逻辑。
+    /// </summary>
+    private void RefreshOwnershipTooltips()
+    {
+        // 用列名定位而不是硬编码索引，列顺序变了也不会挂错格子。
+        var columnIndex = _connectionGrid.Columns[nameof(TcpConnectionItem.RemoteAddressText)]?.Index ?? -1;
+        if (columnIndex < 0)
+        {
+            return;
+        }
+
+        foreach (DataGridViewRow row in _connectionGrid.Rows)
+        {
+            if (row.DataBoundItem is not TcpConnectionItem item)
+            {
+                continue;
+            }
+
+            row.Cells[columnIndex].ToolTipText = item.IpOwnershipTooltip;
+        }
+    }
+
+    /// <summary>
+    /// 请后台把当前列表里的远程地址查一遍归属。
+    /// 入参在这里就做成快照 —— 后台线程绝不能去遍历界面线程每 3 秒就会改一次的集合。
+    /// </summary>
+    private void RequestOwnershipForVisibleConnections()
+    {
+        if (!_ipOwnershipService.IsEnabled)
+        {
+            return;
+        }
+
+        var addresses = _connections.Select(item => item.RemoteAddress).ToArray();
+        _ipOwnershipService.Request(addresses);
+    }
+
+    /// <summary>
+    /// 后台查完一批归属后的回调。
+    ///
+    /// 注意：**这个方法在后台线程上被调用**，所以第一件事就是切回界面线程，
+    /// 绝不能在这里直接碰控件。
+    /// </summary>
+    private void OnOwnershipResultsUpdated(IReadOnlyDictionary<string, IpOwnershipInfo> results)
+    {
+        if (IsDisposed || Disposing || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (IsDisposed || Disposing)
+                {
+                    return;
+                }
+
+                ApplyOwnership();
+
+                // 只重挂悬停提示，不做整表重绑 ——
+                // 归属信息不影响行底色，重绑反而会让用户的选中闪一下。
+                RefreshOwnershipTooltips();
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            // 窗口正在销毁、句柄已失效。丢掉这一次刷新即可，不需要报错。
+        }
+    }
+
+    /// <summary>
+    /// 用户切换了「查询 IP 归属」。
+    ///
+    /// 三件事缺一不可：
+    ///   1. 落盘 —— 否则重启后用户的「关闭」会被静默回滚（这正是加 settings.json 的原因）；
+    ///   2. 立刻作用于调度器 —— 关闭之后不能再有任何网络请求；
+    ///   3. 刷新界面 —— 关闭时清掉已显示的归属，开启时立刻补查。
+    /// </summary>
+    private void OnIpOwnershipChanged(object? sender, EventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            // 启动时把设置填到控件上，不是用户操作。
+            return;
+        }
+
+        var enabled = _checkIpOwnershipCheckBox.Checked;
+
+        _settings.IpOwnershipEnabled = enabled;
+        _settings.Save();
+
+        _ipOwnershipService.IsEnabled = enabled;
+
+        LocalLog.Info(enabled
+            ? $"已开启 IP 归属查询：会把远程 IP 发送到 {AppConstants.OwnershipLookupHost}:{AppConstants.OwnershipLookupPort} 查询归属。"
+            : "已关闭 IP 归属查询：此后不再产生任何相关网络请求。");
+
+        ApplyOwnership();
+        RefreshOwnershipTooltips();
+
+        if (enabled)
+        {
+            // 先讲清楚会发生什么，再开始查。
+            ShowIpOwnershipNoticeIfNeeded();
+            RequestOwnershipForVisibleConnections();
+        }
+    }
+
+    /// <summary>
+    /// IP 归属查询的一次性告知。
+    ///
+    /// 为什么要有它：这个功能**默认开启**，也就是第一次运行就会把远程 IP 发到外部服务。
+    /// 项目对「会对外通信的行为」要求透明可见，所以必须主动说一次，
+    /// 而不是把说明埋在设置页里让用户自己去发现。
+    /// 告知过就记进 settings.json，不再重复打扰。
+    /// </summary>
+    private void ShowIpOwnershipNoticeIfNeeded()
+    {
+        // 功能关闭时不弹 —— 那时「默认会联网」这句话对用户来说是错的。
+        if (_settings.IpOwnershipNoticeShown || !_ipOwnershipService.IsEnabled)
+        {
+            return;
+        }
+
+        _settings.IpOwnershipNoticeShown = true;
+        _settings.Save();
+
+        MessageBox.Show(
+            DialogOwner,
+            BuildIpOwnershipNoticeText(),
+            AppConstants.AppName,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    /// <summary>
+    /// 一次性告知的正文。
+    ///
+    /// 单独抽成一个方法，是为了让这段文案**可以被断言**：
+    /// 模态对话框在无头环境里没法自动点掉，但「它到底说了什么」必须能验。
+    /// </summary>
+    private static string BuildIpOwnershipNoticeText()
+        // 注意：MessageBox 不解析 Markdown，不要写 ** 之类的标记，会原样显示。
+        => "WinAppGuard 会查询每条连接的目标归属，让你一眼看出「这个连接在跟谁通信」。\n\n" +
+           $"为此它会把远程 IP 发送到外部服务 {AppConstants.OwnershipLookupHost}" +
+           $"（端口 {AppConstants.OwnershipLookupPort}）。\n\n" +
+           "只会发送远程 IP：不会发送进程名、程序路径、端口，也不会发送局域网和本机地址。\n\n" +
+           "不想要的话，可以在「设置 → 数据与隐私」里取消勾选「查询 IP 归属」，" +
+           "之后不会有任何相关网络请求。";
 
     // ==================================================================
     // 阻止 / 允许
@@ -1667,6 +1915,9 @@ public partial class MainForm : Form
 
         Activate();
         BringToFront();
+
+        // 开机自启起来的实例，一次性告知会推迟到用户第一次打开窗口时再弹。
+        BeginInvoke(ShowIpOwnershipNoticeIfNeeded);
     }
 
     /// <summary>弹一个托盘气泡。系统通知被关掉时它不显示，但不影响功能，所以不用管返回值。</summary>
@@ -1764,6 +2015,11 @@ public partial class MainForm : Form
             // 太窄时不再压缩，交给横向滚动条处理，总比把内容挤成一列强。
             width = 600;
         }
+
+        // 说明类文字要跟着可视宽度重新换行。
+        // 不设的话，窗口变窄时这些文字会一直保持旧宽度，右边被裁掉。
+        _settingsNoticeLabel.MaximumSize = new Size(width - 20, 0);
+        _privacyLabel.MaximumSize = new Size(width - 60, 0);
 
         _autostartPanel.Width = width;
         _privacyPanel.Width = width;

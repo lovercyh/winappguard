@@ -55,6 +55,13 @@ public sealed class TcpConnectionItem
     public SignatureInfo Signature { get; set; } = SignatureInfo.None;
 
     /// <summary>
+    /// 该连接远程地址的归属信息（国家/地区、运营商 AS）。
+    /// 由界面在后台查好后填充，扫描器本身不设置这个值。
+    /// 功能关闭时保持 <see cref="IpOwnershipInfo.None"/>，界面据此完全不显示归属。
+    /// </summary>
+    public IpOwnershipInfo IpOwnership { get; set; } = IpOwnershipInfo.None;
+
+    /// <summary>
     /// 阻止状态的显示文本。
     /// 拿不到路径的连接无法被阻止，显示为破折号而不是「未阻止」，避免误导。
     /// </summary>
@@ -84,6 +91,14 @@ public sealed class TcpConnectionItem
 
     /// <summary>数字签名列的悬停提示，显示完整结论。</summary>
     public string SignatureTooltip => Signature.Detail;
+
+    /// <summary>
+    /// 「远程 IP」列的悬停提示，显示该地址的归属（国家/地区、运营商 AS）。
+    ///
+    /// 没有归属信息时返回空字符串，界面据此完全不挂提示 ——
+    /// 这样「还没查」和「查了没数据」在观感上是分得开的。
+    /// </summary>
+    public string IpOwnershipTooltip => IpOwnership.TooltipText;
 
     // ------------------------------------------------------------------
     // 以下为界面显示用属性

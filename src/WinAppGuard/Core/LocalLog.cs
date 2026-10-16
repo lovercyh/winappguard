@@ -7,9 +7,12 @@ namespace WinAppGuard.Core;
 /// 本机日志。
 ///
 /// ============================ 隐私约定 ============================
-/// 日志**只写在本机**，绝不发送到任何地方 —— 本程序没有任何网络代码。
+/// 日志**只写在本机**，绝不发送到任何地方。
 /// 目录固定为 %LOCALAPPDATA%\WinAppGuard\logs，用户可以随时查看、复制或删除，
 /// 界面上也提供了「打开日志目录」按钮，不需要去猜日志藏在哪。
+///
+/// 注意：本程序确实含有一处联网代码（IP 归属查询，见 Core/IpOwnershipLookup.cs），
+/// 但**日志与它无关**：日志里的内容从不参与联网，也从不被发送出去。
 /// ==================================================================
 ///
 /// 设计原则：
@@ -76,7 +79,7 @@ public static class LocalLog
     {
         var path = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WinAppGuard",
+            AppConstants.AppDataFolderName,
             "logs");
 
         try

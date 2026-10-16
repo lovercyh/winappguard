@@ -53,8 +53,10 @@ This tool deliberately modifies system state, so the boundary matters.
   changing default inbound/outbound actions).
 - Any code path that registers persistence other than the single scheduled task
   named `WinAppGuard` (for example a registry `Run` key).
-- Any outbound network traffic initiated by the application. **It is designed to make none.**
-  See "Verifying the claims" below.
+- Any network traffic that goes to a destination **other than a certificate authority's CRL/OCSP
+  endpoint**, or that carries any data about the user or their machine. The default certificate
+  revocation lookup is intended and documented; anything beyond it is a vulnerability.
+- Sending any user data anywhere, ever.
 - Any path traversal / argument injection that makes the tool operate on something
   other than the executable path the user selected.
 - Privilege escalation beyond the administrator rights the tool already requests.
@@ -73,24 +75,37 @@ The expected result for a released build:
 
 ```
 Referenced assemblies        22, all from the .NET framework   → no third-party libraries
-Networking types referenced  0                                  → no networking code
-Native API calls (P/Invoke)  6
+Networking types referenced  0                                  → no networking code in the app
+Native API calls (P/Invoke)  16
 Registry access              none
 ```
 
-Those 6 native calls are the complete set of non-managed functions the program can reach:
+Those 16 native calls are the complete set of non-managed functions the program can reach:
 
 ```
-iphlpapi.dll!GetExtendedTcpTable          read the TCP connection table
-kernel32.dll!OpenProcess                  open a process (to resolve its path)
-kernel32.dll!QueryFullProcessImageNameW   query a process's executable path
-kernel32.dll!CloseHandle                  close a handle
-user32.dll!RegisterWindowMessageW         register the single-instance window message
-user32.dll!PostMessageW                   broadcast the single-instance window message
+iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table
+kernel32.dll!OpenProcess                            open a process (to resolve its path)
+kernel32.dll!QueryFullProcessImageNameW             query a process's executable path
+kernel32.dll!CloseHandle                            close a handle
+user32.dll!RegisterWindowMessageW                   register the single-instance window message
+user32.dll!PostMessageW                             broadcast the single-instance window message
+wintrust.dll!WinVerifyTrust                         verify an embedded Authenticode signature
+wintrust.dll!CryptCATAdminAcquireContext2           open a catalog-signature context
+wintrust.dll!CryptCATAdminCalcHashFromFileHandle2   hash a file (to look it up in a catalog)
+wintrust.dll!CryptCATAdminEnumCatalogFromHash       find the catalog containing that hash
+wintrust.dll!CryptCATCatalogInfoFromContext         read the catalog file path
+wintrust.dll!CryptCATAdminReleaseCatalogContext     release the catalog context
+wintrust.dll!CryptCATAdminReleaseContext            release the catalog admin context
+wintrust.dll!WTHelperProvDataFromStateData          read data from a verification state
+wintrust.dll!WTHelperGetProvSignerFromChain         read the signer
+wintrust.dll!WTHelperGetProvCertFromChain           read the signer's certificate
 ```
 
-You can also watch the process while it runs: open **Resource Monitor → Network** and look
-for `WinAppGuard.exe`. It should never appear. Detailed per-claim verification steps are in
+You can also watch the process while it runs: open **Resource Monitor → Network** and look for
+`WinAppGuard.exe`. If certificate revocation checking is **off** (Settings → Data & privacy) it should
+never appear. With it **on** (the default) you will see CA lookups — that is expected, and is Windows'
+certificate service, not application code.
+Detailed per-claim verification steps are in
 [`docs/安全说明.md`](docs/安全说明.md) (Chinese; each claim has a copy-pasteable check).
 
 ## Release integrity

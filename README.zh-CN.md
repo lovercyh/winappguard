@@ -20,7 +20,7 @@ WinAppGuard 是一个 Windows 防火墙规则管理工具，但它和多数同�
 
 ## 它做什么
 
-- **列出正在联网的 TCP 连接**：程序名、完整路径、PID、本地端口、远程 IP、远程端口、状态、协议（IPv4/IPv6）
+- **列出正在联网的 TCP 连接**：程序名、完整路径、PID、本地端口、远程 IP、远程端口、状态、协议（IPv4/IPv6）、**以及该程序的数字签名**
 - **阻止某个程序联网**：为该可执行文件写一条出站防火墙规则（TCP 和 UDP 一起管）
 - **允许它重新联网**：删掉自己为它创建的规则
 - **有一页专门管理自己建的规则**，所以程序就算已经不运行了，也随时能恢复
@@ -35,7 +35,21 @@ WinAppGuard 是一个 Windows 防火墙规则管理工具，但它和多数同�
 - ❌ **不**修改全局防火墙策略：从不禁用防火墙，从不改默认入站/出站动作
 - ❌ **不**碰别人创建的防火墙规则 —— 删除被硬性限制在 `AppGuard_` 前缀之内
 - ❌ **不**阻止系统关键进程（`lsass.exe`、`svchost.exe`、它自己……）
-- ❌ **不**访问网络：没有遥测、没有更新检查、没有任何统计
+- ❌ **不**发送任何数据出去：没有遥测、没有更新检查、没有任何统计
+- ⚠️ **但默认会联网查询证书吊销状态** —— 下方「关于不联网，说实话」一节有完整说明
+
+### 关于「不联网」，说实话
+
+本程序**自身不含任何网络代码**（这一点可以用 `--audit` 验证）。
+
+但「数字签名」这一列默认会检查证书吊销状态，此时 **Windows 的证书服务（Crypt32）会代表本程序
+去联系 CA 服务器**。在资源监视器里能看到 `WinAppGuard.exe` 有对外连接。
+
+- **这是刻意的取舍**：查吊销才能知道一张证书是否已被吊销，结论更准。
+- **可以关掉**：「设置 → 数据与隐私」里取消勾选「检查证书吊销状态」。
+  关掉之后只读本地缓存，本程序**完全不留任何网络流量**。
+- 发起请求的始终是 **Windows 的证书服务**，不是本程序的代码；
+  过程中不会送出任何关于你或你机器的信息，就是一次标准的 CRL/OCSP 查询。
 - ❌ **不**用注册表做持久化 —— 开机自启只用任务计划程序
 
 ## 界面
@@ -89,23 +103,33 @@ WinAppGuard.SelfCheck.exe --audit
 
 ```
 引用的程序集          22 个，全部来自 .NET 框架     → 零第三方库
-会发起网络行为的类型   0 个                          → 零网络代码
-原生 API 调用（P/Invoke）  6 个
+会发起网络行为的类型   0 个                          → 程序自身零网络代码
+原生 API 调用（P/Invoke）  16 个
 注册表访问             无
 ```
 
-那 6 个原生调用就是程序能碰到的**全部**非托管函数：
+那 16 个原生调用就是程序能碰到的**全部**非托管函数：
 
 ```
-iphlpapi.dll!GetExtendedTcpTable          读 TCP 连接表
-kernel32.dll!OpenProcess                  打开进程（查路径用）
-kernel32.dll!QueryFullProcessImageNameW   查进程可执行文件路径
-kernel32.dll!CloseHandle                  关句柄
-user32.dll!RegisterWindowMessageW         注册单实例用的自定义消息
-user32.dll!PostMessageW                   广播单实例消息
+iphlpapi.dll!GetExtendedTcpTable                    读 TCP 连接表
+kernel32.dll!OpenProcess                            打开进程（查路径用）
+kernel32.dll!QueryFullProcessImageNameW             查进程可执行文件路径
+kernel32.dll!CloseHandle                            关句柄
+user32.dll!RegisterWindowMessageW                   注册单实例用的自定义消息
+user32.dll!PostMessageW                             广播单实例消息
+wintrust.dll!WinVerifyTrust                         验证内嵌数字签名
+wintrust.dll!CryptCATAdminAcquireContext2           打开目录签名上下文
+wintrust.dll!CryptCATAdminCalcHashFromFileHandle2   算文件哈希
+wintrust.dll!CryptCATAdminEnumCatalogFromHash       按哈希找所属目录
+wintrust.dll!CryptCATCatalogInfoFromContext         取目录文件路径
+wintrust.dll!CryptCATAdminReleaseCatalogContext     释放目录上下文
+wintrust.dll!CryptCATAdminReleaseContext            释放目录管理上下文
+wintrust.dll!WTHelperProvDataFromStateData          从验证状态取数据
+wintrust.dll!WTHelperGetProvSignerFromChain         取签名者
+wintrust.dll!WTHelperGetProvCertFromChain           取签名者证书
 ```
 
-**6 个，除此之外它碰不到任何东西。**
+**16 个，除此之外它碰不到任何东西。**
 
 ## 安全护栏
 

@@ -45,15 +45,22 @@
 以下几条属于**安全边界**，改动它们需要特别说明理由：
 
 1. **只创建和删除 `AppGuard_` 前缀的规则** —— 删除前有硬性校验，不要把校验挪到界面层
-2. **绝不修改全局防火墙策略** —— 不要新增任何写入 `FirewallEnabled` /
-   `DefaultInboundAction` / `DefaultOutboundAction` 的代码
-3. **关键进程保护做在防火墙底层**，不能只做界面置灰
+2. **不修改全局防火墙策略 —— 唯一例外是严格模式**：`FirewallManager.SetOutboundDefaultAllowed`
+   是**全项目唯一**会写全局策略的方法，只被 `Core/StrictModeManager.cs` 调用。
+   如果你想动它，必须先保证：**先落盘意图再动系统**、**三条还原路径齐备**
+   （正常退出 / 启动兜底 / `--cleanup` 与「删除全部规则」）、
+   **原值不是「三套全允许」就拒绝开启**。
+   `FirewallEnabled` 与 `DefaultInboundAction` **仍然只读**
+3. **关键进程保护做在防火墙底层**，不能只做界面置灰。
+   ⚠️ 它**只限制「阻止」，不限制「允许」**（`ValidateProgramPath` 的 `forBlocking` 参数）
 4. **联网只能从 `Core/IpOwnershipLookup.cs` 一个出口走**，且只连
    `AppConstants.OwnershipLookupHost:OwnershipLookupPort` 这一个固定地址。
    私有 / 回环 / 链路本地地址必须在**发送前**过滤掉
 5. **没有遥测、没有更新检查、没有统计**；唯一会发出去的是远程 IP（第 4 条，可关闭）
 6. **不用注册表做持久化**（自启用计划任务，设置写 `%LOCALAPPDATA%` 下的 JSON）
 7. **日志只写本机**，不上传任何内容；设置文件只存布尔值
+8. **界面字符串里不要写 Markdown 强调符（`**`）**：WinForms 会原样显示给用户。
+   自检会扫一遍整个控件树来守着这条
 
 `tools/SelfCheck` 的 `--audit` 模式会检查第 4、5、6 条（含一项防 P/Invoke 绕过的检查），
 CI 每次都会跑。

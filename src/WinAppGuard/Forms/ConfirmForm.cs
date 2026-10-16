@@ -1,3 +1,6 @@
+using WinAppGuard.Core;
+using WinAppGuard.Models;
+
 namespace WinAppGuard.Forms;
 
 /// <summary>
@@ -29,12 +32,21 @@ public sealed class ConfirmForm : Form
 
     private readonly Button _confirmButton;
 
+    // ---- 「阻断时长」这一组控件（只在阻止联网时才创建）----
+
+    private readonly RadioButton? _permanentRadio;
+    private readonly RadioButton? _thirtyMinutesRadio;
+    private readonly RadioButton? _twoHoursRadio;
+    private readonly RadioButton? _nextBootRadio;
+    private readonly Label? _durationHint;
+
     private ConfirmForm(
         string title,
         string question,
         IReadOnlyList<KeyValuePair<string, string>> details,
         IReadOnlyList<string> warnings,
-        string confirmText)
+        string confirmText,
+        bool offerDuration = false)
     {
         // ---------------- 窗体本身 ----------------
         Text = title;
@@ -141,7 +153,74 @@ public sealed class ConfirmForm : Form
             row++;
         }
 
-        // ---------------- 第四行：风险与注意事项 ----------------
+        // ---------------- 第四行：阻断时长（只对「阻止联网」显示）----------------
+        //
+        // 为什么要有这一行：临时阻断到期时规则会被**自动删除**，而
+        // 「所有会改系统状态的操作必须弹确认框」是项目的硬性安全约定。
+        // 自动删除没法再弹一次框（弹了后台程序就永远解不开），
+        // 所以在**创建时**就把「什么时候会自动解除」摆出来让用户事先同意。
+        if (offerDuration)
+        {
+            var durationPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 14, 0, 0),
+            };
+
+            durationPanel.Controls.Add(new Label
+            {
+                Text = "阻断时长（决定这条规则什么时候自动解除）：",
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 6),
+            });
+
+            var choices = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0),
+            };
+
+            // 同一个容器里的单选按钮会自动成为一组，不需要额外的 GroupBox。
+            // 默认选「永久」：不改动老用户已经习惯的行为。
+            _permanentRadio = CreateDurationRadio("永久（手动解除）", isChecked: true);
+            _thirtyMinutesRadio = CreateDurationRadio("30 分钟", isChecked: false);
+            _twoHoursRadio = CreateDurationRadio("2 小时", isChecked: false);
+            _nextBootRadio = CreateDurationRadio("直到下次重启", isChecked: false);
+
+            choices.Controls.Add(_permanentRadio);
+            choices.Controls.Add(_thirtyMinutesRadio);
+            choices.Controls.Add(_twoHoursRadio);
+            choices.Controls.Add(_nextBootRadio);
+            durationPanel.Controls.Add(choices);
+
+            _durationHint = new Label
+            {
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText,
+                MaximumSize = new Size(ContentWidth, 0),
+                Margin = new Padding(0, 8, 0, 0),
+            };
+            durationPanel.Controls.Add(_durationHint);
+
+            foreach (var radio in new[] { _permanentRadio, _thirtyMinutesRadio, _twoHoursRadio, _nextBootRadio })
+            {
+                radio.CheckedChanged += (_, _) => UpdateDurationHint();
+            }
+
+            UpdateDurationHint();
+
+            root.Controls.Add(durationPanel, 0, row);
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            row++;
+        }
+
+        // ---------------- 第五行：风险与注意事项 ----------------
         if (warnings.Count > 0)
         {
             root.Controls.Add(new Label
@@ -156,7 +235,7 @@ public sealed class ConfirmForm : Form
             row++;
         }
 
-        // ---------------- 第五行：按钮 ----------------
+        // ---------------- 第六行：按钮 ----------------
         // 从左到右依次是「确认」「取消」，与 Windows 对话框的习惯一致。
         var buttons = new FlowLayoutPanel
         {
@@ -205,6 +284,73 @@ public sealed class ConfirmForm : Form
     }
 
     /// <summary>
+    /// 用户选的到期方式（按单选按钮的当前状态算出来）。
+    ///
+    /// 限时是**在这里现算**的（而不是勾选时就固定），这样「30 分钟」是从
+    /// 用户真正点确认那一刻开始算，操作慢了也不会白扣时间。
+    /// </summary>
+    public RuleExpiry ChosenExpiry
+    {
+        get
+        {
+            if (_thirtyMinutesRadio?.Checked == true)
+            {
+                return RuleExpiry.At(DateTime.UtcNow.AddMinutes(30));
+            }
+
+            if (_twoHoursRadio?.Checked == true)
+            {
+                return RuleExpiry.At(DateTime.UtcNow.AddHours(2));
+            }
+
+            if (_nextBootRadio?.Checked == true)
+            {
+                return RuleExpiry.OnNextBoot(SystemUptime.BootTimeUtc);
+            }
+
+            return RuleExpiry.Never;
+        }
+    }
+
+    private static RadioButton CreateDurationRadio(string text, bool isChecked) => new()
+    {
+        Text = text,
+        Checked = isChecked,
+        AutoSize = true,
+        Margin = new Padding(0, 0, 18, 0),
+    };
+
+    /// <summary>把当前选择翻译成一句人话，让用户在点确认之前就知道会发生什么。</summary>
+    private void UpdateDurationHint()
+    {
+        if (_durationHint is null)
+        {
+            return;
+        }
+
+        var expiry = ChosenExpiry;
+
+        if (expiry.IsPermanent)
+        {
+            _durationHint.Text = "永久：这条规则一直生效，直到你自己在「规则」页解除。";
+            return;
+        }
+
+        if (expiry.Kind == RuleExpiryKind.OnNextBoot)
+        {
+            _durationHint.Text =
+                "直到下次重启：重启（或重新登录）之后这条规则会自动解除，该程序恢复联网。" +
+                "本程序由登录触发的开机自启跑起来时才会清理它。";
+            return;
+        }
+
+        var local = (expiry.ExpiresAtUtc ?? DateTime.UtcNow).ToLocalTime();
+        _durationHint.Text =
+            $"限时：规则会在 {local:HH:mm} 自动解除，届时该程序恢复联网。" +
+            "注意：本程序退出后就不会再自动清理了，需要重新打开它。";
+    }
+
+    /// <summary>
     /// 弹出确认框。
     /// </summary>
     /// <param name="owner">
@@ -224,8 +370,30 @@ public sealed class ConfirmForm : Form
         IReadOnlyList<KeyValuePair<string, string>> details,
         IReadOnlyList<string> warnings,
         string confirmText)
+        => Show(owner, title, question, details, warnings, confirmText, offerDuration: false, out _);
+
+    /// <summary>
+    /// 弹出确认框，并让用户选择**阻断时长**（只在阻止联网时用）。
+    /// </summary>
+    /// <param name="offerDuration">是否显示「阻断时长」这一组单选按钮。</param>
+    /// <param name="chosenExpiry">
+    /// 带回用户选的到期方式。用户取消时是 <see cref="RuleExpiry.Never"/>。
+    /// </param>
+    /// <returns>用户点了确认返回 true；点取消或按 Esc 返回 false。</returns>
+    public static bool Show(
+        IWin32Window? owner,
+        string title,
+        string question,
+        IReadOnlyList<KeyValuePair<string, string>> details,
+        IReadOnlyList<string> warnings,
+        string confirmText,
+        bool offerDuration,
+        out RuleExpiry chosenExpiry)
     {
-        using var form = new ConfirmForm(title, question, details, warnings, confirmText);
-        return form.ShowDialog(owner) == DialogResult.OK;
+        using var form = new ConfirmForm(title, question, details, warnings, confirmText, offerDuration);
+
+        var confirmed = form.ShowDialog(owner) == DialogResult.OK;
+        chosenExpiry = confirmed ? form.ChosenExpiry : RuleExpiry.Never;
+        return confirmed;
     }
 }

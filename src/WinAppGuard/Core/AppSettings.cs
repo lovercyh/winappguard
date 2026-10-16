@@ -11,7 +11,7 @@ namespace WinAppGuard.Core;
 ///   他对隐私做出的选择被静默回滚。这不是取舍问题，是缺陷。
 ///
 /// 隐私约定：
-///   **这个文件里只存开关布尔值，绝不存任何 IP、进程名、路径或时间戳。**
+///   **这个文件里只存布尔值**（开关状态与少量状态标志），绝不存任何 IP、进程名、路径或时间戳。
 ///   它是设置，不是历史记录。自检工具会用 JSON 解析断言这一点。
 ///
 /// 健壮性：
@@ -36,6 +36,26 @@ public sealed class AppSettings
     /// 只负责「不再重复弹」；回落到默认值 false 只会多弹一次，不会漏提示。
     /// </summary>
     public bool IpOwnershipNoticeShown { get; set; }
+
+    /// <summary>
+    /// 「严格模式」上一次开启之后**没有正常还原**（程序崩溃 / 被强杀 / 机器断电）。
+    ///
+    /// 它的唯一用途：下次启动时据此把「默认出站动作」还原成「允许」。
+    /// 正常开启严格模式期间它也是 true —— 正常关闭（或启动兜底）时会写回 false。
+    ///
+    /// 为什么必须落盘：默认动作**不随本程序退出而恢复**。一旦漏掉还原，
+    /// 用户开机后直接上不了网 —— 而他很可能正是不敢碰 `wf.msc` 的那类人。
+    /// </summary>
+    public bool StrictModeLeftOn { get; set; }
+
+    /// <summary>
+    /// 严格模式下那条「放行本程序自己」的允许规则，**是不是本程序建的**。
+    ///
+    /// 是的话，还原时把它删掉；不是（用户自己加的）就留着不动。
+    /// 之所以要记：光看规则名分不出「我们建的」和「用户建的」，
+    /// 而删掉用户自己加的白名单是不可接受的。
+    /// </summary>
+    public bool StrictModeSelfAllowCreated { get; set; }
 
     /// <summary>设置文件的默认路径。界面上会显示它，让用户知道文件在哪、能不能删。</summary>
     public static string SettingsFilePath => Path.Combine(

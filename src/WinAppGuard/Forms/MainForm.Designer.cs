@@ -30,6 +30,12 @@ partial class MainForm
     private TabPage _tabConnections = null!;
 
     private Panel _toolPanel = null!;
+    private FlowLayoutPanel _toolRowFilters = null!;
+    private FlowLayoutPanel _toolRowActions = null!;
+    private FlowLayoutPanel _toolRowSearch = null!;
+    private Label _searchLabel = null!;
+    private TextBox _searchBox = null!;
+    private Button _clearSearchButton = null!;
     private Button _refreshButton = null!;
     private CheckBox _autoRefreshCheckBox = null!;
     private CheckBox _showListenCheckBox = null!;
@@ -38,6 +44,7 @@ partial class MainForm
     private CheckBox _hideLoopbackCheckBox = null!;
     private Button _blockButton = null!;
     private Button _allowButton = null!;
+    private Button _whitelistButton = null!;
     private Button _refreshRulesButton = null!;
     private Label _selectionHintLabel = null!;
 
@@ -48,8 +55,10 @@ partial class MainForm
     private ToolStripMenuItem _menuAllow = null!;
     private ToolStripSeparator _menuSeparator = null!;
     private ToolStripMenuItem _menuCopyPath = null!;
+    private ToolStripMenuItem _menuWhitelistAdd = null!;
+    private ToolStripMenuItem _menuWhitelistRemove = null!;
 
-    // ---------- 页二：已阻止的程序（规则管理）----------
+    // ---------- 页二：规则（本工具建的防火墙规则）----------
     private TabPage _tabRules = null!;
 
     private Label _rulesNoticeLabel = null!;
@@ -88,6 +97,14 @@ partial class MainForm
     private Panel _privacyScrollHost = null!;
     private Panel _privacyBottomPanel = null!;
 
+    // ---------- 严格模式（高级）----------
+    private GroupBox _strictModePanel = null!;
+    private Label _strictModeStatusLabel = null!;
+    private Label _strictModeDetailLabel = null!;
+    private Panel _strictModeButtons = null!;
+    private Button _strictModeToggleButton = null!;
+    private Button _refreshStrictModeButton = null!;
+
     // ---------- 其它 ----------
     private Button _exitButton = null!;
 
@@ -100,6 +117,14 @@ partial class MainForm
     private ToolStripStatusLabel _versionLabel = null!;
 
     private System.Windows.Forms.Timer _autoRefreshTimer = null!;
+
+    /// <summary>
+    /// 检查「临时阻断」是否到期的独立定时器。
+    ///
+    /// 刻意**不**复用上面那个自动刷新定时器：自动刷新的开关默认是关的，
+    /// 复用的话没勾开关的用户就永远等不到临时阻断自动解除。
+    /// </summary>
+    private System.Windows.Forms.Timer _expiryTimer = null!;
     private ToolTip _toolTip = null!;
 
     // ---------- 系统托盘 ----------
@@ -136,6 +161,12 @@ partial class MainForm
         _tabConnections = new TabPage();
         _tabRules = new TabPage();
         _toolPanel = new Panel();
+        _toolRowFilters = new FlowLayoutPanel();
+        _toolRowActions = new FlowLayoutPanel();
+        _toolRowSearch = new FlowLayoutPanel();
+        _searchLabel = new Label();
+        _searchBox = new TextBox();
+        _clearSearchButton = new Button();
         _refreshButton = new Button();
         _autoRefreshCheckBox = new CheckBox();
         _showListenCheckBox = new CheckBox();
@@ -144,6 +175,7 @@ partial class MainForm
         _hideLoopbackCheckBox = new CheckBox();
         _blockButton = new Button();
         _allowButton = new Button();
+        _whitelistButton = new Button();
         _refreshRulesButton = new Button();
         _selectionHintLabel = new Label();
         _connectionGrid = new DataGridViewBuffered();
@@ -152,6 +184,8 @@ partial class MainForm
         _menuAllow = new ToolStripMenuItem();
         _menuSeparator = new ToolStripSeparator();
         _menuCopyPath = new ToolStripMenuItem();
+        _menuWhitelistAdd = new ToolStripMenuItem();
+        _menuWhitelistRemove = new ToolStripMenuItem();
         _rulesNoticeLabel = new Label();
         _rulesToolPanel = new Panel();
         _rulesRefreshButton = new Button();
@@ -181,6 +215,12 @@ partial class MainForm
         _checkIpOwnershipCheckBox = new CheckBox();
         _privacyScrollHost = new Panel();
         _privacyBottomPanel = new Panel();
+        _strictModePanel = new GroupBox();
+        _strictModeStatusLabel = new Label();
+        _strictModeDetailLabel = new Label();
+        _strictModeButtons = new Panel();
+        _strictModeToggleButton = new Button();
+        _refreshStrictModeButton = new Button();
         _exitButton = new Button();
         _statusStrip = new StatusStrip();
         _adminStatusLabel = new ToolStripStatusLabel();
@@ -190,6 +230,7 @@ partial class MainForm
         _summaryLabel = new ToolStripStatusLabel();
         _versionLabel = new ToolStripStatusLabel();
         _autoRefreshTimer = new System.Windows.Forms.Timer(components);
+        _expiryTimer = new System.Windows.Forms.Timer(components);
         _toolTip = new ToolTip(components);
         _trayIcon = new NotifyIcon(components);
         _trayMenu = new ContextMenuStrip(components);
@@ -211,7 +252,12 @@ partial class MainForm
         _privacyPanel.SuspendLayout();
         _privacyScrollHost.SuspendLayout();
         _privacyBottomPanel.SuspendLayout();
+        _strictModePanel.SuspendLayout();
+        _strictModeButtons.SuspendLayout();
         _toolPanel.SuspendLayout();
+        _toolRowFilters.SuspendLayout();
+        _toolRowActions.SuspendLayout();
+        _toolRowSearch.SuspendLayout();
         _rulesToolPanel.SuspendLayout();
         _gridContextMenu.SuspendLayout();
         _statusStrip.SuspendLayout();
@@ -249,11 +295,19 @@ partial class MainForm
         _safetyNoticeLabel.Size = new Size(1120, 20);
         _safetyNoticeLabel.TabIndex = 2;
         // ⚠️ 这里的措辞必须和实际行为一致。
-        // 现在有两处会联网：IP 归属查询（本程序自己的代码）和证书吊销检查
+        // 有两处会联网：IP 归属查询（本程序自己的代码）和证书吊销检查
         // （Windows 证书服务代表程序发起）。不能写「本程序不访问网络」，那是在骗用户。
+        //
+        // 「从不修改全局防火墙策略」这句在加入严格模式后也不再成立 ——
+        // 严格模式做的就是改「默认出站动作」。所以写成「除严格模式外」，
+        // 把例外摆在明处，而不是让用户自己发现。
+        //
+        // ⚠️ 这个标签是**固定宽高、不换行**的（AutoSize=false, 1120×20），
+        // 所以文案**必须放得下** —— 加长之后后半句会被直接裁掉，而且不报错。
+        // 自检里有一条断言专门量它（--ui-check 的「顶部安全横幅放得下」）。
         _safetyNoticeLabel.Text =
-            "安全约定：只创建和删除以 AppGuard_ 开头的防火墙规则，从不修改全局防火墙策略；" +
-            "默认会联网查询 IP 归属与证书吊销状态，两者都可在「设置」页关闭。";
+            "安全约定：只创建和删除以 AppGuard_ 开头的规则；除「严格模式」外不改全局防火墙策略" +
+            "（退出即自动还原）；默认会联网查 IP 归属与证书吊销，都能在「设置」页关闭。";
 
         // ==================================================================
         // 标签页容器
@@ -278,21 +332,65 @@ partial class MainForm
         _tabConnections.UseVisualStyleBackColor = true;
 
         // 工具条第一行：过滤
+        // ---------- 工具栏 ----------
+        //
+        // 排版原则（踩过坑，见 docs 里的「界面布局铁律」）：
+        //   这里以前是「绝对坐标 + 固定高度 76」，每个控件写死 Location。
+        //   结果窗口一缩到最小尺寸，第一行最右边的「隐藏本机回环连接」就被裁掉 ——
+        //   实测该开关右边界 902 > 工具栏宽度 890，被 SelfCheck --ui-check 抓了出来。
+        //
+        //   现在改成「三层流式布局」：控件从左往右排，装不下自动换行，
+        //   整块工具栏的高度跟着内容长。结构上不可能被裁掉。
+        _toolPanel.AutoSize = true;
+        _toolPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _toolPanel.Dock = DockStyle.Top;
-        _toolPanel.Height = 76;
         _toolPanel.Name = "_toolPanel";
-        _toolPanel.Controls.Add(_refreshButton);
-        _toolPanel.Controls.Add(_autoRefreshCheckBox);
-        _toolPanel.Controls.Add(_showListenCheckBox);
-        _toolPanel.Controls.Add(_showClosedCheckBox);
-        _toolPanel.Controls.Add(_showOwnerlessCheckBox);
-        _toolPanel.Controls.Add(_hideLoopbackCheckBox);
-        _toolPanel.Controls.Add(_blockButton);
-        _toolPanel.Controls.Add(_allowButton);
-        _toolPanel.Controls.Add(_refreshRulesButton);
-        _toolPanel.Controls.Add(_selectionHintLabel);
 
-        _refreshButton.Location = new Point(0, 4);
+        // 停靠顺序是从后往前解析的：最后加的排最上面。
+        // 所以按「搜索行 → 操作行 → 筛选行」加入，显示出来就是「筛选 / 操作 / 搜索」三行。
+        _toolPanel.Controls.Add(_toolRowSearch);
+        _toolPanel.Controls.Add(_toolRowActions);
+        _toolPanel.Controls.Add(_toolRowFilters);
+
+        // 每一行都是一个流式布局：从左往右排，装不下自动换行。
+        _toolRowFilters.AutoSize = true;
+        _toolRowFilters.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _toolRowFilters.Dock = DockStyle.Top;
+        _toolRowFilters.FlowDirection = FlowDirection.LeftToRight;
+        _toolRowFilters.Name = "_toolRowFilters";
+        _toolRowFilters.Padding = new Padding(0, 2, 0, 2);
+
+        _toolRowActions.AutoSize = true;
+        _toolRowActions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _toolRowActions.Dock = DockStyle.Top;
+        _toolRowActions.FlowDirection = FlowDirection.LeftToRight;
+        _toolRowActions.Name = "_toolRowActions";
+        _toolRowActions.Padding = new Padding(0, 2, 0, 2);
+
+        _toolRowSearch.AutoSize = true;
+        _toolRowSearch.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _toolRowSearch.Dock = DockStyle.Top;
+        _toolRowSearch.FlowDirection = FlowDirection.LeftToRight;
+        _toolRowSearch.Name = "_toolRowSearch";
+        _toolRowSearch.Padding = new Padding(0, 2, 0, 4);
+
+        _toolRowFilters.Controls.Add(_refreshButton);
+        _toolRowFilters.Controls.Add(_autoRefreshCheckBox);
+        _toolRowFilters.Controls.Add(_showListenCheckBox);
+        _toolRowFilters.Controls.Add(_showClosedCheckBox);
+        _toolRowFilters.Controls.Add(_showOwnerlessCheckBox);
+        _toolRowFilters.Controls.Add(_hideLoopbackCheckBox);
+
+        _toolRowActions.Controls.Add(_blockButton);
+        _toolRowActions.Controls.Add(_allowButton);
+        _toolRowActions.Controls.Add(_whitelistButton);
+        _toolRowActions.Controls.Add(_refreshRulesButton);
+        _toolRowActions.Controls.Add(_selectionHintLabel);
+
+        _toolRowSearch.Controls.Add(_searchLabel);
+        _toolRowSearch.Controls.Add(_searchBox);
+        _toolRowSearch.Controls.Add(_clearSearchButton);
+
         _refreshButton.Name = "_refreshButton";
         _refreshButton.Size = new Size(90, 28);
         _refreshButton.TabIndex = 0;
@@ -300,37 +398,31 @@ partial class MainForm
         _refreshButton.UseVisualStyleBackColor = true;
         _refreshButton.Click += OnRefreshButtonClick;
 
+        // 注意：下面这些控件都开了 AutoSize，所以**不再写死 Size** ——
+        // 写了也会被忽略（原来的代码里写了 Size，实际宽度却由文字决定，很容易误判）。
         _autoRefreshCheckBox.AutoSize = true;
-        _autoRefreshCheckBox.Location = new Point(104, 10);
         _autoRefreshCheckBox.Name = "_autoRefreshCheckBox";
-        _autoRefreshCheckBox.Size = new Size(130, 21);
         _autoRefreshCheckBox.TabIndex = 1;
         _autoRefreshCheckBox.Text = "每 3 秒自动刷新";
         _autoRefreshCheckBox.UseVisualStyleBackColor = true;
         _autoRefreshCheckBox.CheckedChanged += OnAutoRefreshCheckedChanged;
 
         _showListenCheckBox.AutoSize = true;
-        _showListenCheckBox.Location = new Point(250, 10);
         _showListenCheckBox.Name = "_showListenCheckBox";
-        _showListenCheckBox.Size = new Size(150, 21);
         _showListenCheckBox.TabIndex = 2;
         _showListenCheckBox.Text = "显示监听中(LISTEN)";
         _showListenCheckBox.UseVisualStyleBackColor = true;
         _showListenCheckBox.CheckedChanged += OnScanOptionChanged;
 
         _showClosedCheckBox.AutoSize = true;
-        _showClosedCheckBox.Location = new Point(412, 10);
         _showClosedCheckBox.Name = "_showClosedCheckBox";
-        _showClosedCheckBox.Size = new Size(170, 21);
         _showClosedCheckBox.TabIndex = 3;
         _showClosedCheckBox.Text = "显示已结束(TIME_WAIT 等)";
         _showClosedCheckBox.UseVisualStyleBackColor = true;
         _showClosedCheckBox.CheckedChanged += OnScanOptionChanged;
 
         _showOwnerlessCheckBox.AutoSize = true;
-        _showOwnerlessCheckBox.Location = new Point(596, 10);
         _showOwnerlessCheckBox.Name = "_showOwnerlessCheckBox";
-        _showOwnerlessCheckBox.Size = new Size(170, 21);
         _showOwnerlessCheckBox.TabIndex = 4;
         _showOwnerlessCheckBox.Text = "显示无进程归属的连接";
         _showOwnerlessCheckBox.UseVisualStyleBackColor = true;
@@ -339,16 +431,13 @@ partial class MainForm
         _hideLoopbackCheckBox.AutoSize = true;
         _hideLoopbackCheckBox.Checked = true;
         _hideLoopbackCheckBox.CheckState = CheckState.Checked;
-        _hideLoopbackCheckBox.Location = new Point(780, 10);
         _hideLoopbackCheckBox.Name = "_hideLoopbackCheckBox";
-        _hideLoopbackCheckBox.Size = new Size(150, 21);
         _hideLoopbackCheckBox.TabIndex = 5;
         _hideLoopbackCheckBox.Text = "隐藏本机回环连接";
         _hideLoopbackCheckBox.UseVisualStyleBackColor = true;
         _hideLoopbackCheckBox.CheckedChanged += OnScanOptionChanged;
 
         _blockButton.Enabled = false;
-        _blockButton.Location = new Point(0, 42);
         _blockButton.Name = "_blockButton";
         _blockButton.Size = new Size(160, 28);
         _blockButton.TabIndex = 10;
@@ -357,7 +446,6 @@ partial class MainForm
         _blockButton.Click += OnBlockButtonClick;
 
         _allowButton.Enabled = false;
-        _allowButton.Location = new Point(168, 42);
         _allowButton.Name = "_allowButton";
         _allowButton.Size = new Size(160, 28);
         _allowButton.TabIndex = 11;
@@ -365,7 +453,15 @@ partial class MainForm
         _allowButton.UseVisualStyleBackColor = true;
         _allowButton.Click += OnAllowButtonClick;
 
-        _refreshRulesButton.Location = new Point(336, 42);
+        // 白名单按钮的文字会**跟着选中行变化**（加入 / 移出），所以这里只给个初值。
+        _whitelistButton.Enabled = false;
+        _whitelistButton.Name = "_whitelistButton";
+        _whitelistButton.Size = new Size(120, 28);
+        _whitelistButton.TabIndex = 12;
+        _whitelistButton.Text = "加入白名单";
+        _whitelistButton.UseVisualStyleBackColor = true;
+        _whitelistButton.Click += OnWhitelistButtonClick;
+
         _refreshRulesButton.Name = "_refreshRulesButton";
         _refreshRulesButton.Size = new Size(130, 28);
         _refreshRulesButton.TabIndex = 12;
@@ -375,15 +471,40 @@ partial class MainForm
 
         _selectionHintLabel.AutoSize = true;
         _selectionHintLabel.ForeColor = SystemColors.GrayText;
-        _selectionHintLabel.Location = new Point(480, 47);
         _selectionHintLabel.Name = "_selectionHintLabel";
-        _selectionHintLabel.Size = new Size(300, 17);
         _selectionHintLabel.TabIndex = 13;
         _selectionHintLabel.Text = "未选中任何连接";
+
+        // 搜索框。
+        //
+        // 刻意**不做 placeholder**：那要调 user32 的 EM_SETCUEBANNER，
+        // 会新增一个 P/Invoke，把「16 个原生调用」变成 17 个，还要改审计和文档。
+        // 不值当 —— 用左边这个标签把用途写清楚就够了。
+        _searchLabel.AutoSize = true;
+        _searchLabel.ForeColor = SystemColors.GrayText;
+        _searchLabel.Margin = new Padding(0, 7, 4, 0);
+        _searchLabel.Name = "_searchLabel";
+        _searchLabel.Text = "搜索（程序名 / PID / 远程 IP / 远程端口）：";
+
+        _searchBox.Name = "_searchBox";
+        _searchBox.Size = new Size(220, 23);
+        _searchBox.TabIndex = 20;
+        _searchBox.TextChanged += OnSearchTextChanged;
+        _searchBox.KeyDown += OnSearchBoxKeyDown;
+
+        _clearSearchButton.Name = "_clearSearchButton";
+        _clearSearchButton.Size = new Size(70, 26);
+        _clearSearchButton.TabIndex = 21;
+        _clearSearchButton.Text = "清除";
+        _clearSearchButton.UseVisualStyleBackColor = true;
+        _clearSearchButton.Click += OnClearSearchClick;
 
         _connectionGrid.Dock = DockStyle.Fill;
         _connectionGrid.AllowUserToAddRows = false;
         _connectionGrid.AllowUserToDeleteRows = false;
+        // 关掉自带的「实时改列宽」：它每移动一次鼠标就把整表重画一遍，慢机器上明显卡。
+        // 改用 GridColumnResizer 的「预览线」方式（见那个类的说明）。
+        _connectionGrid.AllowUserToResizeColumns = false;
         _connectionGrid.AllowUserToResizeRows = false;
         _connectionGrid.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle
         {
@@ -403,6 +524,7 @@ partial class MainForm
         _connectionGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _connectionGrid.TabIndex = 1;
         _connectionGrid.CellMouseDown += OnGridCellMouseDown;
+        _connectionGrid.ColumnHeaderMouseClick += OnConnectionGridColumnHeaderMouseClick;
         _connectionGrid.KeyDown += OnGridKeyDown;
         _connectionGrid.SelectionChanged += OnGridSelectionChanged;
 
@@ -411,9 +533,9 @@ partial class MainForm
         _tabConnections.Controls.Add(_toolPanel);
 
         // ---------- 右键菜单 ----------
-        _gridContextMenu.Items.AddRange(new ToolStripItem[] { _menuBlock, _menuAllow, _menuSeparator, _menuCopyPath });
+        _gridContextMenu.Items.AddRange(new ToolStripItem[] { _menuBlock, _menuAllow, _menuWhitelistAdd, _menuWhitelistRemove, _menuSeparator, _menuCopyPath });
         _gridContextMenu.Name = "_gridContextMenu";
-        _gridContextMenu.Size = new Size(220, 76);
+        _gridContextMenu.Size = new Size(220, 120);
 
         _menuBlock.Name = "_menuBlock";
         _menuBlock.Size = new Size(219, 22);
@@ -428,17 +550,27 @@ partial class MainForm
         _menuSeparator.Name = "_menuSeparator";
         _menuSeparator.Size = new Size(216, 6);
 
+        _menuWhitelistAdd.Name = "_menuWhitelistAdd";
+        _menuWhitelistAdd.Size = new Size(219, 22);
+        _menuWhitelistAdd.Text = "加入白名单";
+        _menuWhitelistAdd.Click += OnWhitelistAddClick;
+
+        _menuWhitelistRemove.Name = "_menuWhitelistRemove";
+        _menuWhitelistRemove.Size = new Size(219, 22);
+        _menuWhitelistRemove.Text = "移出白名单";
+        _menuWhitelistRemove.Click += OnWhitelistRemoveClick;
+
         _menuCopyPath.Name = "_menuCopyPath";
         _menuCopyPath.Size = new Size(219, 22);
         _menuCopyPath.Text = "复制程序路径";
         _menuCopyPath.Click += OnCopyPathClick;
 
         // ==================================================================
-        // 页二：已阻止的程序（规则管理）
+        // 页二：规则（本工具建的防火墙规则 —— 阻止规则和允许规则都在这里）
         // ==================================================================
         _tabRules.Padding = new Padding(9);
         _tabRules.Name = "_tabRules";
-        _tabRules.Text = "已阻止的程序";
+        _tabRules.Text = "规则";
         _tabRules.UseVisualStyleBackColor = true;
 
         // 这一段说明是专门为了回答「我阻止了 chrome，为什么列表里找不到它了」。
@@ -646,7 +778,57 @@ partial class MainForm
 
         // 直接把任务计划程序里的原始定义摆出来给用户看，这是最彻底的透明。
         _taskXmlPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        _taskXmlPanel.Location = new Point(6, 630);
+        // ---------- 严格模式（高级）----------
+        //
+        // 刻意**不用复选框**当开关：复选框一点就生效，而这个开关会把「默认出站动作」
+        // 改成「阻止」—— 误触的代价是整台机器上不了网。按钮点击天然会走到确认框。
+        _strictModePanel.Location = new Point(6, 630);
+        _strictModePanel.Name = "_strictModePanel";
+        _strictModePanel.Size = new Size(1060, 230);
+        _strictModePanel.TabIndex = 4;
+        _strictModePanel.TabStop = false;
+        _strictModePanel.Text = "严格模式（高级）";
+        _strictModePanel.Controls.Add(_strictModeDetailLabel);
+        _strictModePanel.Controls.Add(_strictModeStatusLabel);
+        _strictModePanel.Controls.Add(_strictModeButtons);
+
+        _strictModeStatusLabel.Dock = DockStyle.Top;
+        _strictModeStatusLabel.Name = "_strictModeStatusLabel";
+        _strictModeStatusLabel.Size = new Size(1054, 22);
+        _strictModeStatusLabel.TabIndex = 0;
+        _strictModeStatusLabel.Text = "当前状态：检测中…";
+
+        _strictModeDetailLabel.Dock = DockStyle.Fill;
+        _strictModeDetailLabel.Name = "_strictModeDetailLabel";
+        _strictModeDetailLabel.Padding = new Padding(8, 4, 8, 0);
+        _strictModeDetailLabel.Size = new Size(1054, 160);
+        _strictModeDetailLabel.TabIndex = 1;
+
+        _strictModeButtons.Dock = DockStyle.Bottom;
+        _strictModeButtons.Name = "_strictModeButtons";
+        _strictModeButtons.Size = new Size(1054, 44);
+        _strictModeButtons.TabIndex = 2;
+        _strictModeButtons.Controls.Add(_strictModeToggleButton);
+        _strictModeButtons.Controls.Add(_refreshStrictModeButton);
+
+        _strictModeToggleButton.Location = new Point(14, 8);
+        _strictModeToggleButton.Name = "_strictModeToggleButton";
+        _strictModeToggleButton.Size = new Size(200, 32);
+        _strictModeToggleButton.TabIndex = 0;
+        _strictModeToggleButton.Text = "开启严格模式…";
+        _strictModeToggleButton.UseVisualStyleBackColor = true;
+        _strictModeToggleButton.Click += OnStrictModeToggleClick;
+
+        _refreshStrictModeButton.Location = new Point(224, 8);
+        _refreshStrictModeButton.Name = "_refreshStrictModeButton";
+        _refreshStrictModeButton.Size = new Size(150, 32);
+        _refreshStrictModeButton.TabIndex = 1;
+        _refreshStrictModeButton.Text = "重新读取状态";
+        _refreshStrictModeButton.UseVisualStyleBackColor = true;
+        _refreshStrictModeButton.Click += OnRefreshStrictModeClick;
+
+        // 因为上面插了一整块，任务定义面板整体往下挪。
+        _taskXmlPanel.Location = new Point(6, 872);
         _taskXmlPanel.Name = "_taskXmlPanel";
         _taskXmlPanel.Size = new Size(1060, 220);
         _taskXmlPanel.TabIndex = 3;
@@ -760,6 +942,7 @@ partial class MainForm
         _checkIpOwnershipCheckBox.CheckedChanged += OnIpOwnershipChanged;
 
         _tabSettings.Controls.Add(_taskXmlPanel);
+        _tabSettings.Controls.Add(_strictModePanel);
         _tabSettings.Controls.Add(_privacyPanel);
         _tabSettings.Controls.Add(_autostartPanel);
         _tabSettings.Controls.Add(_settingsNoticeLabel);
@@ -813,6 +996,7 @@ partial class MainForm
         // ---------- 自动刷新定时器 ----------
         // 间隔在 MainForm 构造函数中统一设置，避免同一个数值出现在两个文件里。
         _autoRefreshTimer.Tick += OnAutoRefreshTick;
+        _expiryTimer.Tick += OnExpiryTimerTick;
 
         // ---------- 系统托盘 ----------
         // 托盘是本工具「一直可用」的保障：用户点 X 只是收起来，规则仍在生效，
@@ -862,7 +1046,7 @@ partial class MainForm
         _toolTip.SetToolTip(_connectionGrid,
             "默认只显示「有归属进程、还活着、且不是本机回环」的连接。\n" +
             "在行上点右键可以直接阻止或允许该程序联网。\n" +
-            "注意：被阻止的程序连不上网，所以不会出现在这里 —— 去「已阻止的程序」页恢复它。\n" +
+            "注意：被阻止的程序连不上网，所以不会出现在这里 —— 去「规则」页恢复它。\n" +
             "\n" +
             "行底色的含义（按优先级）：\n" +
             "  淡红 = 签名被篡改 / 证书异常 / 证书链不受信任（真有问题）\n" +
@@ -911,9 +1095,17 @@ partial class MainForm
         _privacyScrollHost.ResumeLayout(false);
         _privacyScrollHost.PerformLayout();
         _privacyBottomPanel.ResumeLayout(false);
+        _strictModePanel.ResumeLayout(false);
+        _strictModeButtons.ResumeLayout(false);
         _privacyBottomPanel.PerformLayout();
         _toolPanel.ResumeLayout(false);
         _toolPanel.PerformLayout();
+        _toolRowFilters.ResumeLayout(false);
+        _toolRowFilters.PerformLayout();
+        _toolRowActions.ResumeLayout(false);
+        _toolRowActions.PerformLayout();
+        _toolRowSearch.ResumeLayout(false);
+        _toolRowSearch.PerformLayout();
         _rulesToolPanel.ResumeLayout(false);
         _rulesToolPanel.PerformLayout();
         _gridContextMenu.ResumeLayout(false);

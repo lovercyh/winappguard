@@ -25,8 +25,20 @@ public partial class MainForm : Form
     /// <summary>自动刷新间隔（毫秒）。</summary>
     private const int AutoRefreshIntervalMs = 3000;
 
-    /// <summary>被阻止的行用淡红色底，扫一眼就能看出来。</summary>
-    private static readonly Color BlockedRowColor = Color.FromArgb(255, 236, 236);
+    /// <summary>
+    /// 签名有严重问题的行底色：签名被篡改、证书已过期/被吊销、证书链不受信任。
+    /// 这些都是「真有问题」，用红色。
+    /// </summary>
+    private static readonly Color SignatureProblemRowColor = Color.FromArgb(255, 212, 212);
+
+    /// <summary>
+    /// 未签名程序的行底色：黄色。
+    /// 黄色表示「需要留意」，不是「有错误」—— 很多正经的免费/开源工具都没买签名证书。
+    /// </summary>
+    private static readonly Color UnsignedRowColor = Color.FromArgb(255, 240, 184);
+
+    /// <summary>已被本工具阻止的行底色。蓝色表示「你的操作」，不是风险。</summary>
+    private static readonly Color BlockedRowColor = Color.FromArgb(221, 234, 251);
 
     /// <summary>
     /// 本次启动是否由「开机自启」拉起（命令行带 --autostart）。
@@ -128,6 +140,23 @@ public partial class MainForm : Form
     /// 窗口隐藏时传 null：否则对话框会以一个看不见的窗口为基准去居中，位置会很奇怪。
     /// </summary>
     private IWin32Window? DialogOwner => Visible ? this : null;
+
+    /// <summary>
+    /// 证书吊销检查方式。
+    ///
+    /// 默认 <see cref="RevocationMode.Online"/>：吊销状态查得准。
+    /// 代价是 **Windows 的证书服务会代表本程序去查询 CA 服务器**，
+    /// 在资源监视器里会看到 WinAppGuard.exe 有对外连接。
+    /// 用户可以在「设置」页取消勾选，那样就完全不留网络流量。
+    /// </summary>
+    private RevocationMode _revocationMode = RevocationMode.Online;
+
+    /// <summary>
+    /// 是否正在后台检查数字签名。
+    /// 检查很慢（目录签名要哈希整个文件、还要验证证书链），
+    /// 用这个标志保证同一时刻只跑一轮，否则每 3 秒刷新一次会堆积任务。
+    /// </summary>
+    private bool _isCheckingSignatures;
 
     /// <summary>供设计器/调试使用的默认构造函数。</summary>
     public MainForm() : this(isAutostart: false)
@@ -251,15 +280,18 @@ public partial class MainForm : Form
     /// </summary>
     private void SetupConnectionGrid()
     {
-        AddConnectionColumn("程序名", nameof(TcpConnectionItem.ProcessName), 150);
-        AddConnectionColumn("程序路径", nameof(TcpConnectionItem.ProcessPathText), 300, fill: true);
-        AddConnectionColumn("PID", nameof(TcpConnectionItem.Pid), 70);
-        AddConnectionColumn("本地端口", nameof(TcpConnectionItem.LocalPortText), 90);
-        AddConnectionColumn("远程 IP", nameof(TcpConnectionItem.RemoteAddressText), 170);
-        AddConnectionColumn("远程端口", nameof(TcpConnectionItem.RemotePortText), 90);
-        AddConnectionColumn("状态", nameof(TcpConnectionItem.StateText), 100);
-        AddConnectionColumn("协议", nameof(TcpConnectionItem.Protocol), 70);
-        AddConnectionColumn("阻止状态", nameof(TcpConnectionItem.BlockStateText), 90);
+        // 列变多了（加了「数字签名」），所以每一列都适当收窄了一点，
+        // 否则 1180 宽的窗口里会出现横向滚动条。
+        AddConnectionColumn("程序名", nameof(TcpConnectionItem.ProcessName), 140);
+        AddConnectionColumn("程序路径", nameof(TcpConnectionItem.ProcessPathText), 260, fill: true);
+        AddConnectionColumn("PID", nameof(TcpConnectionItem.Pid), 60);
+        AddConnectionColumn("本地端口", nameof(TcpConnectionItem.LocalPortText), 80);
+        AddConnectionColumn("远程 IP", nameof(TcpConnectionItem.RemoteAddressText), 160);
+        AddConnectionColumn("远程端口", nameof(TcpConnectionItem.RemotePortText), 80);
+        AddConnectionColumn("状态", nameof(TcpConnectionItem.StateText), 90);
+        AddConnectionColumn("协议", nameof(TcpConnectionItem.Protocol), 60);
+        AddConnectionColumn("阻止状态", nameof(TcpConnectionItem.BlockStateText), 80);
+        AddConnectionColumn("数字签名", nameof(TcpConnectionItem.SignatureText), 130);
 
         _connectionSource.DataSource = _connections;
         _connectionGrid.DataSource = _connectionSource;
@@ -324,7 +356,7 @@ public partial class MainForm : Form
     /// <summary>把运行期才能确定的信息填到界面上。</summary>
     private void ShowRuntimeStatus()
     {
-        _versionLabel.Text = $"版本 v{Application.ProductVersion}";
+        _versionLabel.Text = $"版本 v{BuildVersionText()}";
 
         _startModeLabel.Text = _isAutostart
             ? $"启动模式：开机自启（{AppConstants.AutostartArgument}）"
@@ -335,6 +367,35 @@ public partial class MainForm : Form
             ? "管理员权限：已获得"
             : "管理员权限：未获得（防火墙功能不可用）";
         _adminStatusLabel.ForeColor = isAdmin ? Color.FromArgb(0, 120, 0) : Color.Firebrick;
+    }
+
+    /// <summary>
+    /// 状态栏上显示的版本文字。
+    ///
+    /// .NET SDK 会把 git 提交号附加在版本后面（形如 1.1.0+5a7219c22e75…），
+    /// 这是标准行为，而且对排查问题很有用 —— 用户报 bug 时能定位到具体那次提交。
+    /// 但完整 SHA 太长，所以这里截成短号显示成「1.1.0 · 5a7219c」。
+    /// </summary>
+    private static string BuildVersionText()
+    {
+        var version = Application.ProductVersion;
+
+        var plusIndex = version.IndexOf('+');
+        if (plusIndex <= 0)
+        {
+            // 不在 git 仓库里构建时就没有提交号后缀，直接用版本号。
+            return version;
+        }
+
+        var number = version[..plusIndex];
+        var revision = version[(plusIndex + 1)..];
+
+        if (revision.Length > 7)
+        {
+            revision = revision[..7];
+        }
+
+        return $"{number} · {revision}";
     }
 
     // ==================================================================
@@ -448,19 +509,67 @@ public partial class MainForm : Form
             _connectionSelectionConfirmed = false;
         }
 
-        ShadeBlockedRows();
+        ColorizeRows();
         UpdateActionState();
     }
 
-    /// <summary>给被阻止的行刷上底色。</summary>
-    private void ShadeBlockedRows()
+    /// <summary>
+    /// 给每一行上色，并给签名列挂上悬停提示。
+    ///
+    /// 行底色的优先级（高到低）：
+    ///   1. 签名被篡改 / 证书异常 / 证书链不受信任 → 淡红
+    ///   2. 未签名                                  → 淡黄
+    ///   3. 已阻止                                  → 淡蓝
+    ///
+    /// 为什么把签名风险排在「已阻止」前面：
+    ///   签名问题是你**还不知道、需要被提醒**的信息；
+    ///   而「已阻止」是你自己刚才做的操作，状态在专门的列里写着，不必再用行底色重复强调。
+    ///   两者冲突时让「新信息」胜出。
+    ///   另外被阻止的程序连不上网，会从连接列表里消失，所以这里的「已阻止」行本来就很少，
+    ///   把行底色让给签名信息损失很小。
+    /// </summary>
+    private void ColorizeRows()
     {
+        // 签名列的列名，用于定位单元格。用列名而不是硬编码索引，列顺序变了也不会错。
+        var signatureColumnIndex = _connectionGrid.Columns[nameof(TcpConnectionItem.SignatureText)]?.Index ?? -1;
+
         foreach (DataGridViewRow row in _connectionGrid.Rows)
         {
-            if (row.DataBoundItem is TcpConnectionItem { IsBlocked: true })
+            if (row.DataBoundItem is not TcpConnectionItem item)
             {
-                row.DefaultCellStyle.BackColor = BlockedRowColor;
+                continue;
             }
+
+            var background = GetRowColor(item);
+            if (background is { } color)
+            {
+                row.DefaultCellStyle.BackColor = color;
+            }
+
+            // 签名列只显示短名字，完整结论（含签名来源和错误码）放悬停提示里。
+            if (signatureColumnIndex >= 0 && !string.IsNullOrEmpty(item.SignatureTooltip))
+            {
+                row.Cells[signatureColumnIndex].ToolTipText = item.SignatureTooltip;
+            }
+        }
+    }
+
+    /// <summary>按优先级决定一行的底色；不需要特殊着色时返回 null。</summary>
+    private static Color? GetRowColor(TcpConnectionItem item)
+    {
+        switch (item.Signature.State)
+        {
+            case SignatureState.Tampered:
+            case SignatureState.CertificateProblem:
+            case SignatureState.Untrusted:
+                return SignatureProblemRowColor;
+
+            case SignatureState.Unsigned:
+                return UnsignedRowColor;
+
+            default:
+                // 签名正常（或者还没查出来）时，才轮到「已阻止」占用行底色。
+                return item.IsBlocked ? BlockedRowColor : null;
         }
     }
 
@@ -658,7 +767,10 @@ public partial class MainForm : Form
         var connectionCount = _connections.Count(c => PathsEqual(c.ProcessPath, item.ProcessPath));
         var state = isBlocked ? "已阻止" : "未阻止";
 
-        return $"已选中 {item.ProcessName}（共 {connectionCount} 条连接）—— 当前状态：{state}";
+        // 签名是「按程序」的属性，放在这里显示比在每一行重复一列更省地方。
+        var signature = string.IsNullOrEmpty(item.SignatureText) ? "" : $"　签名：{item.SignatureText}";
+
+        return $"已选中 {item.ProcessName}（共 {connectionCount} 条连接）—— 当前状态：{state}{signature}";
     }
 
     // ==================================================================
@@ -720,6 +832,10 @@ public partial class MainForm : Form
             RebindGrid(selectedKey);
 
             _summaryLabel.Text = $"最后刷新：{DateTime.Now:HH:mm:ss}    共 {connections.Count} 条";
+
+            // 列表已经显示出来了，签名在后台慢慢补。
+            // 放最后调用是为了不让它拖慢"列表出现"这件事。
+            _ = CheckSignaturesAsync();
         }
         catch (Exception ex)
         {
@@ -740,6 +856,93 @@ public partial class MainForm : Form
             _isScanning = false;
             _refreshButton.Enabled = true;
         }
+    }
+
+    // ==================================================================
+    // 数字签名
+    // ==================================================================
+
+    /// <summary>
+    /// 在后台把当前这批连接的签名补齐，补完再刷新一次表格。
+    ///
+    /// 为什么不跟扫描放在同一步：目录签名验证要把**整个文件哈希一遍**，
+    /// 实测首次要 87 ms（加上证书链验证），几十个程序加起来界面会明显卡住。
+    /// 所以列表先出来（签名列暂时是空的），结果随后补上。
+    /// </summary>
+    private async Task CheckSignaturesAsync()
+    {
+        if (_isCheckingSignatures)
+        {
+            return;
+        }
+
+        _isCheckingSignatures = true;
+
+        try
+        {
+            var mode = _revocationMode;
+
+            // 选中状态要在界面线程上先抓下来 —— 重绑表格会清空选中，
+            // 抓晚了（比如 await 之后）用户的选择就丢了。
+            var selectedKey = CaptureSelection();
+
+            // 在界面线程上先做快照。
+            // 不能在后台线程里直接遍历 _connections —— 界面线程每 3 秒就会
+            // Clear + AddRange 一次，两个线程同时动同一个 List 会出问题。
+            var items = _connections
+                .Where(item => !string.IsNullOrEmpty(item.ProcessPath))
+                .ToArray();
+
+            if (items.Length == 0)
+            {
+                return;
+            }
+
+            await Task.Run(() =>
+            {
+                foreach (var item in items)
+                {
+                    // Check 内部有缓存，所以只有「第一次见到的程序」才会真的去验证。
+                    item.Signature = DigitalSignature.Check(item.ProcessPath, mode);
+                }
+            });
+
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            RebindGrid(selectedKey);
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Error("检查数字签名失败", ex);
+        }
+        finally
+        {
+            _isCheckingSignatures = false;
+        }
+    }
+
+    /// <summary>
+    /// 用户切换了「检查证书吊销状态」。
+    ///
+    /// 切换后必须清空缓存重新判定 —— 两种模式下「证书是否被吊销」的结论可能不一样，
+    /// 不清缓存就会把上一轮的结论继续显示出来，等于开关没生效。
+    /// </summary>
+    private void OnRevocationModeChanged(object? sender, EventArgs e)
+    {
+        _revocationMode = _checkRevocationCheckBox.Checked
+            ? RevocationMode.Online
+            : RevocationMode.CacheOnly;
+
+        DigitalSignature.ClearCache();
+
+        LocalLog.Info(_revocationMode == RevocationMode.Online
+            ? "已开启证书吊销检查：Windows 证书服务会联网查询 CA 服务器。"
+            : "已关闭证书吊销检查：只读本地缓存，本程序完全不留网络流量。");
+
+        _ = CheckSignaturesAsync();
     }
 
     // ==================================================================

@@ -24,7 +24,7 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
 ## What it does
 
 - **Lists live TCP connections** with program name, full path, PID, local port, remote IP,
-  remote port, state and protocol (IPv4/IPv6).
+  remote port, state, protocol (IPv4/IPv6) and **the program's digital signature**.
 - **Blocks a program** — writes a single outbound Windows Firewall rule (TCP **and** UDP) for
   that executable.
 - **Unblocks it** — deletes the rules it created for that program.
@@ -43,7 +43,24 @@ Being explicit about this matters, because the tool needs administrator rights.
 - ❌ It does **not** touch firewall rules created by anything else. Deletion is hard-limited to
   rules whose name starts with `AppGuard_`.
 - ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …).
-- ❌ It does **not** access the network. No telemetry, no update check, no analytics.
+- ❌ It does **not** send anything anywhere. No telemetry, no analytics, no update check.
+- ⚠️ **But it does reach the network by default** — see the honest note below.
+
+### About "no network" — the honest version
+
+WinAppGuard's own code contains **zero networking APIs**. That part is verifiable with `--audit`.
+
+However, the **digital signature column** checks certificate revocation status by default. That makes
+Windows' certificate services (Crypt32) contact CA servers on the tool's behalf. You will see
+`WinAppGuard.exe` making outbound connections in Resource Monitor.
+
+- **This is a deliberate trade-off**: checking revocation gives a more accurate answer about whether a
+  certificate has been revoked.
+- **You can turn it off**: *Settings → Data & privacy* → uncheck "check certificate revocation status".
+  The tool then reads only the local revocation cache and makes **no network traffic at all**.
+- It is always **Windows' certificate service** doing the fetching, never application code, and nothing
+  about you or your machine is ever sent — it is a standard CRL/OCSP lookup.
+
 - ❌ It does **not** use the registry for persistence. Auto-start uses Task Scheduler only.
 
 ## Why another firewall tool?
@@ -110,23 +127,33 @@ indirect references and anything the framework drags in — and reports:
 
 ```
 Referenced assemblies        22, all from the .NET framework    → no third-party libraries
-Networking types referenced  0                                   → no networking code
-Native API calls (P/Invoke)  6
+Networking types referenced  0                                   → no networking code in the app
+Native API calls (P/Invoke)  16
 Registry access              none
 ```
 
-Those 6 native calls are the complete set of unmanaged functions the program can reach:
+Those 16 native calls are the complete set of unmanaged functions the program can reach:
 
 ```
-iphlpapi.dll!GetExtendedTcpTable          read the TCP connection table
-kernel32.dll!OpenProcess                  open a process (to resolve its path)
-kernel32.dll!QueryFullProcessImageNameW   query a process's executable path
-kernel32.dll!CloseHandle                  close a handle
-user32.dll!RegisterWindowMessageW         register the single-instance window message
-user32.dll!PostMessageW                   broadcast the single-instance window message
+iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table
+kernel32.dll!OpenProcess                            open a process (to resolve its path)
+kernel32.dll!QueryFullProcessImageNameW             query a process's executable path
+kernel32.dll!CloseHandle                            close a handle
+user32.dll!RegisterWindowMessageW                   register the single-instance window message
+user32.dll!PostMessageW                             broadcast the single-instance window message
+wintrust.dll!WinVerifyTrust                         verify an embedded Authenticode signature
+wintrust.dll!CryptCATAdminAcquireContext2           open a catalog-signature context
+wintrust.dll!CryptCATAdminCalcHashFromFileHandle2   hash a file (to look it up in a catalog)
+wintrust.dll!CryptCATAdminEnumCatalogFromHash       find the catalog containing that hash
+wintrust.dll!CryptCATCatalogInfoFromContext         read the catalog file path
+wintrust.dll!CryptCATAdminReleaseCatalogContext     release the catalog context
+wintrust.dll!CryptCATAdminReleaseContext            release the catalog admin context
+wintrust.dll!WTHelperProvDataFromStateData          read data from a verification state
+wintrust.dll!WTHelperGetProvSignerFromChain         read the signer
+wintrust.dll!WTHelperGetProvCertFromChain           read the signer's certificate
 ```
 
-Six. It cannot reach anything else below the .NET runtime.
+16. It cannot reach anything else below the .NET runtime.
 
 ## Safety guards
 

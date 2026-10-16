@@ -1,222 +1,191 @@
 # WinAppGuard
 
-**See what's using your network, and block it in two clicks.**
+**看清谁在联网，两次点击把它拦掉。**
 
-English · [简体中文](README.zh-CN.md)
+简体中文 · [English](README.en.md)
 
-WinAppGuard is a Windows firewall rule manager that works the other way round from most tools.
-Instead of browsing a list of executables, it shows you **live TCP connections** — so you start
-from *"what is talking to the internet right now?"* and end with *"blocked"*.
+WinAppGuard 是一个 Windows 防火墙规则管理工具，但它和多数同类工具的入手方向相反：
+它不让你去翻程序列表，而是直接展示**当前正在联网的 TCP 连接** ——
+从「现在是哪个程序在联网」出发，到「已阻止」结束。
 
-> WinAppGuard does not filter any traffic itself. All blocking is done by **Windows Firewall**.
-> WinAppGuard only creates and cleans up the rules for you.
+> WinAppGuard 本身不拦截任何流量。真正生效的是 **Windows 防火墙**。
+> WinAppGuard 只负责按你的选择创建和清理这些规则。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
-[![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](#build-from-source)
-[![Release](https://img.shields.io/github/v/release/lovercyh/winappguard)](https://github.com/lovercyh/winappguard/releases/latest)
-[![Build](https://github.com/lovercyh/winappguard/actions/workflows/build.yml/badge.svg)](https://github.com/lovercyh/winappguard/actions/workflows/build.yml)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
 
-![Connections tab](docs/screenshots/01-connections.png)
+![联网连接页](docs/screenshots/01-connections.png)
 
 ---
 
-## What it does
+## 它做什么
 
-- **Lists live TCP connections** with program name, full path, PID, local port, remote IP,
-  remote port, state, protocol (IPv4/IPv6) and **the program's digital signature**.
-- **Tells you who a connection belongs to** — hover a remote IP to see its country and
-  network operator (autonomous system).
-- **Search and sort the list** — filter by process name, PID, remote IP or remote port;
-  click a column header to sort (ports and IPs sort **numerically**, not as text).
-- **Blocks a program** — writes a single outbound Windows Firewall rule (TCP **and** UDP) for
-  that executable. You can choose for **how long**: permanently, 30 minutes, 2 hours,
-  or until the next restart — a timed block removes itself when it expires.
-- **Unblocks it** — deletes the rules it created for that program.
-- **Strict mode (off by default, advanced)** — sets Windows' *default outbound action* to **block**,
-  so only whitelisted programs can reach the network. The whitelist is what you add via
-  *Add to whitelist*. It is **session-scoped**: quitting the app (or the next launch after a crash)
-  restores the default action to *allow* automatically. It never touches other programs' rules —
-  which is why built-in Windows rules and rules created by other software still let their
-  programs through, and why the **Release** column shows that fact in three distinct states
-  instead of a vague "allowed".
-- **Keeps a list of everything it manages**, so you can always undo — even if the program
-  is not running any more.
-- **Optionally auto-starts at logon**, to the system tray.
-- **Every rule it creates is named `AppGuard_*`** so you can find them in `wf.msc` yourself.
+- **列出正在联网的 TCP 连接**：程序名、完整路径、PID、本地端口、远程 IP、远程端口、状态、协议（IPv4/IPv6）、**以及该程序的数字签名**
+- **告诉你这个连接在跟谁通信**：鼠标停在远程 IP 上，就能看到它的国家/地区和运营商（自治系统）
+- **搜索与排序**：按 进程名 / PID / 远程 IP / 远程端口 过滤；点表头排序（端口和 IP 按**数值**排，不是按字符串）
+- **阻止某个程序联网**：为该可执行文件写一条出站防火墙规则（TCP 和 UDP 一起管），
+  并且可以选择**阻止多久** —— 永久 / 30 分钟 / 2 小时 / 直到下次重启；
+  限时阻断到期后会**自己解除**
+- **允许它重新联网**：删掉自己为它创建的规则
+- **严格模式（默认关闭，高级功能）**：把 Windows 的默认出站动作改成「阻止」，
+  于是**只有白名单里的程序能上网**。白名单就是你在界面上点「加入白名单」的那些程序。
+  它是**会话级**的：程序正常退出、或崩溃后下次启动，都会自动把它还原成「允许」。
+  它**不碰别人的规则** —— 所以 Windows 自带、以及别的软件建的允许规则仍然会放行；
+  连接列表的「放行」列会把这件事**分三档**显示出来，而不是含糊成一句"已放行"。
+- **有一页专门管理自己建的规则**，所以程序就算已经不运行了，也随时能恢复
+- **可选开机自启**，启动后直接进系统托盘
+- **所有规则名都以 `AppGuard_` 开头**，你自己打开 `wf.msc` 也能一眼认出来
 
-## What it does **not** do
+## 它**不**做什么
 
-Being explicit about this matters, because the tool needs administrator rights.
+这一点必须说清楚，因为它需要管理员权限。
 
-- ❌ It does **not** filter, inspect, or route any traffic. Windows Firewall does all of that.
-- ❌ It does **not** change global firewall policy — **the one exception is strict mode**
-  (off by default, must be turned on explicitly, and reverts automatically when the app exits).
-  Apart from that it never enables/disables the firewall and never touches the default inbound action.
-- ❌ It does **not** touch firewall rules created by anything else. Deletion is hard-limited to
-  rules whose name starts with `AppGuard_`.
-- ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …).
-- ⚠️ It **does** reach the network by default, for two specific purposes (see below).
-  It sends **no telemetry, no analytics, no usage data**, and there is no update check.
+- ❌ **不**过滤、检查或转发任何流量 —— 那全是 Windows 防火墙在做
+- ❌ **不**修改全局防火墙策略 —— **唯一的例外是严格模式**（默认关闭、必须显式开启、
+  程序退出即自动还原）。除此之外它从不禁用防火墙，也从不修改默认入站动作
+- ❌ **不**碰别人创建的防火墙规则 —— 删除被硬性限制在 `AppGuard_` 前缀之内
+- ❌ **不**阻止系统关键进程（`lsass.exe`、`svchost.exe`、它自己……）——
+  这道护栏只管「阻止」，不管「允许」（放行永远不会把谁锁在外面）
+- ⚠️ 它**默认会联网**，但只有两个明确用途（见下）。**没有遥测、没有统计、没有更新检查**
 
-### About "no network" — the honest version
+### 关于「不联网」，说实话
 
-**WinAppGuard is not a zero-network program, and these docs no longer pretend otherwise.**
-Up to 1.1 it *was* — the app's own code contained zero networking APIs. 1.2 added the IP ownership
-lookup, so that claim was **retired** rather than kept alive with careful wording.
+**WinAppGuard 不是零联网程序，文档也不再用含糊的说法掩盖这一点。**
+1.1 及更早的版本确实做到了「自身不含任何网络代码」；1.2 加入 IP 归属查询之后，
+这个说法**被正式作废**，而不是靠措辞继续维持。
 
-There are exactly **two** things that touch the network. Both are on by default, and **both can be
-switched off** in *Settings → Data & privacy*:
+会碰网络的只有**两处**，**两者默认都开启，也都能在「设置 → 数据与隐私」里关掉**：
 
-| | Who initiates it | What is sent | Where it goes |
+| | 联网由谁发起 | 发什么 | 发给谁 |
 |---|---|---|---|
-| **IP ownership lookup** | WinAppGuard's own code | the **remote IP** only | `whois.cymru.com:43` |
-| **Certificate revocation check** | Windows' certificate service (Crypt32) | a CRL/OCSP lookup | that certificate's CA |
+| **IP 归属查询** | 本程序自己的代码 | 只发**远程 IP** | `whois.cymru.com:43` |
+| **证书吊销检查** | Windows 的证书服务（Crypt32） | CRL / OCSP 查询 | 该证书的 CA |
 
-Turn both off and WinAppGuard makes **no network traffic at all**.
+两处都关掉之后，本程序**不产生任何网络流量**。
 
-**About the IP ownership lookup** (new in 1.2). It resolves each connection's remote IP to a country
-and an autonomous system, so the connection list answers *"who am I talking to?"* and not just
-*"which IP?"*:
+**关于 IP 归属查询**（1.2 新增）：它把每条连接的远程 IP 解析成国家/地区和运营商（自治系统），
+让连接列表能回答「我在跟谁通信」，而不只是「是哪个 IP」：
 
-- Only the **remote IP** is sent — never the process name, path, PID, port, or anything else local.
-- LAN / loopback / link-local addresses are **filtered out before sending**; they never leave the machine.
-- Connecting by hostname means the .NET runtime performs one DNS lookup for `whois.cymru.com`.
-  That is not an HTTP request, but it is a real name resolution, so it is stated rather than hidden.
-- Switching it off is **persistent** (stored in `settings.json`) — it will not silently come back
-  on the next launch.
-- The very first launch shows a one-time notice explaining the above.
+- 只发送**远程 IP** —— 不发进程名、程序路径、PID、端口，或任何其它本机信息；
+- 局域网 / 回环 / 链路本地地址**在发送之前就被过滤掉**，根本不出本机；
+- 按主机名连接意味着 .NET 运行时会先对 `whois.cymru.com` 做一次 DNS 解析。
+  这不是 HTTP 请求，但确实是一次域名解析，所以我们写出来而不是藏着；
+- 关掉是**持久生效**的（记在 `settings.json`），重启不会自己打开；
+- **第一次运行**会弹一次说明，把上面这些讲清楚。
 
-**About the revocation check**: it is always **Windows' certificate service** doing the fetching,
-never application code, and nothing about you or your machine is sent — it is a standard CRL/OCSP
-lookup. Turn it off and the tool reads only the local revocation cache.
+**关于证书吊销检查**：发起请求的始终是 **Windows 的证书服务**，不是本程序的代码；
+过程中不会送出任何关于你或你机器的信息，就是一次标准的 CRL/OCSP 查询。
+关掉之后只读本地缓存。
 
-- ❌ It does **not** use the registry for persistence. Auto-start uses Task Scheduler; settings go to
-  a plain JSON file under `%LOCALAPPDATA%`.
+- ❌ **不**用注册表做持久化 —— 开机自启只用任务计划程序，设置只写 `%LOCALAPPDATA%` 下的文件
 
-## Why another firewall tool?
+## 界面
 
-Most firewall GUIs start from a list of installed programs. That is fine when you already know
-what you want to block.
+| 规则 | 设置 |
+|---|---|
+| ![规则页](docs/screenshots/02-rules.png) | ![设置页](docs/screenshots/03-settings.png) |
 
-WinAppGuard starts from **live connections**. That is the right starting point when you don't:
-you notice traffic, you want to know which program is responsible, and you want it gone.
-The recovery path is designed around the same idea — blocked programs disappear from the
-connection list (they can't connect any more), so there is a dedicated
-**"Rules"** tab that lists your rules instead of your connections.
+![阻止确认框](docs/screenshots/04-confirm-block.png)
 
-## Download
+所有会改动系统状态的操作都要先过确认框。确认框里会写明：程序名、**完整路径**、
+影响范围、**即将创建或删除的规则名**。
 
-Grab `WinAppGuard.exe` from the [latest release](https://github.com/lovercyh/winappguard/releases/latest).
+## 下载与使用
 
-- Single self-contained file, ~49 MB. No .NET installation required.
-- Verify your download against the SHA-256 listed in the release notes:
+从 [最新 Release](https://github.com/lovercyh/winappguard/releases/latest) 下载 `WinAppGuard.exe`。
+
+- 单文件自包含，约 49 MB，**目标机器不需要安装 .NET**
+- 可用发布说明里的 SHA-256 校验下载是否被篡改：
   ```powershell
   Get-FileHash .\WinAppGuard.exe -Algorithm SHA256
   ```
-- **The exe is not code-signed**, so SmartScreen will warn about an unknown publisher.
-  This is expected — see the [FAQ](#faq).
+- **exe 没有代码签名**，SmartScreen 会提示「未知发布者」，这属于预期情况，见下方常见问题
 
-## Requirements
+## 环境要求
 
-- Windows 10 or Windows 11, x64
-- Administrator rights (it edits firewall rules and Task Scheduler)
+- Windows 10 / 11 x64
+- 管理员权限（它要改防火墙规则和任务计划程序）
 
-## Screenshots
+## 工作原理
 
-| Rules | Settings |
+| 环节 | 实现 |
 |---|---|
-| ![Rules tab](docs/screenshots/02-rules.png) | ![Settings tab](docs/screenshots/03-settings.png) |
+| 拦截 | 每个可执行文件路径一条出站防火墙规则，协议「任意」（TCP + UDP），所有网络配置文件 |
+| 规则命名 | `AppGuard_Block_<程序名>_<路径哈希前 8 位>` —— 确定性命名，重复阻止是幂等的 |
+| 访问防火墙 | Windows 防火墙 COM 接口（`HNetCfg.FwPolicy2`），无需任何第三方库 |
+| 读取连接表 | `iphlpapi.dll` 的 `GetExtendedTcpTable` |
+| 反查程序路径 | `QueryFullProcessImageNameW`（不创建 `Process` 对象，所以每 3 秒刷新也不会泄漏句柄） |
+| 开机自启 | 一条名为 `WinAppGuard` 的计划任务，登录时触发，最高权限，**不限执行时长** |
+| 单实例 | 命名互斥体 + 广播窗口消息，重复启动会把已有窗口叫到前台 |
+| IP 归属 | Team Cymru WHOIS，走普通 TCP 连 `whois.cymru.com:43` —— 本程序**唯一**的对外端点；批量查询 + 内存缓存；默认开启，可关闭 |
+| 严格模式 | 把三套网络配置文件的「默认出站动作」改成「阻止」，配合本工具建的 `AppGuard_Allow_*` 白名单规则。**会话级**：退出即还原，崩溃后下次启动兜底还原；只在三套原本全是「允许」时才允许开启 |
+| 限时阻断 | 到期时间存在**防火墙规则自己的说明字段**里（`自动解除=…`），所以 `wf.msc` 里能直接看到、重启也不会丢。后台 30 秒定时器负责清理到期规则并弹托盘提示 |
 
-![Block confirmation](docs/screenshots/04-confirm-block.png)
+## 可验证的信任
 
-Every state-changing action goes through a confirmation dialog that names the exact program,
-its full path, the scope of the change, and the rule that is about to be created or deleted.
-
-## How it works
-
-| Concern | Implementation |
-|---|---|
-| Blocking | One outbound Windows Firewall rule per executable path, protocol *any* (TCP + UDP), all profiles |
-| Rule naming | `AppGuard_Block_<exe name>_<8 hex chars of the path>` — deterministic, so re-blocking is idempotent |
-| Firewall access | Windows Firewall COM API (`HNetCfg.FwPolicy2`) — no third-party library |
-| Connection listing | `GetExtendedTcpTable` via `iphlpapi.dll` |
-| Process path lookup | `QueryFullProcessImageNameW` (no `System.Diagnostics.Process` objects, so no handle leak while refreshing) |
-| Auto-start | One Task Scheduler task named `WinAppGuard`, logon trigger, highest privileges, no execution time limit |
-| Single instance | Named mutex + a broadcast window message, so launching it twice focuses the existing window |
-| IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the app's **only** outbound endpoint, batched and cached in memory, on by default, switchable off |
-| Timed blocks | The expiry is stored **in the firewall rule's own description** (`自动解除=…`), so it is visible in `wf.msc` and survives restarts. A background 30-second timer removes expired rules and shows a tray notification. |
-| Strict mode | Sets the *default outbound action* to block on all three network profiles, combined with the app's own `AppGuard_Allow_*` whitelist rules. **Session-scoped** (reverted on exit, and recovered on the next launch after a crash); it can only be enabled when all three profiles are currently set to allow. |
-
-## Verifiable trust
-
-Most tools ask you to take their word for it. This one ships with the means to check:
+多数工具只能让你「相信它」。这个工具自带验证手段：
 
 ```powershell
 WinAppGuard.SelfCheck.exe --audit
 ```
 
-This does **not** grep the source. It reads the **metadata of the compiled assembly** — including
-indirect references and anything the framework drags in — and reports:
+它**不是搜源码**，而是直接读**编译出来的程序集的元数据** —— 包括间接引用和框架自动带进来的东西：
 
 ```
-Referenced assemblies         25, all from the .NET framework   → no third-party libraries
-Networking types referenced   2 — TcpClient / NetworkStream     → the IP ownership lookup only
-Native API calls (P/Invoke)   16
-Network-related native calls  none                              → nothing bypasses the managed check
-Registry access               none
+引用的程序集            25 个，全部来自 .NET 框架    → 零第三方库
+网络相关类型引用        2 个：TcpClient / NetworkStream
+                        → 都在预期清单内，只属于 IP 归属查询
+原生 API 调用（P/Invoke）  16 个
+网络相关原生调用        无                          → 没有绕过托管检查直接用网络 API
+注册表访问              无
 ```
 
-Two notes on that output:
+关于这份输出，有两句话要说：
 
-- Since 1.2 the audit **no longer demands "zero networking types"**. It demands that every
-  networking type is **on an expected list**, and it adds a check that nobody bypassed the managed
-  types by calling `ws2_32` / `winhttp` / `wininet` through P/Invoke. An audit that stays green
-  while a network path hides behind it would be worse than no audit at all.
-- `--audit` needs no administrator rights, so it runs in CI too.
+- 从 1.2 起，审计**不再要求「网络类型为零」**，而是要求所有网络类型**全部落在预期清单内**，
+  并新增一项检查：不允许有人用 P/Invoke 直接调 `ws2_32` / `winhttp` / `wininet` 绕过去。
+  **一份「绿的但藏着联网路径」的审计，比没有审计更糟。**
+- `--audit` 不需要管理员权限，所以 CI 里也能跑。
 
-Those 16 native calls are the complete set of unmanaged functions the program can reach:
+那 16 个原生调用就是程序能碰到的**全部**非托管函数：
 
 ```
-iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table
-kernel32.dll!OpenProcess                            open a process (to resolve its path)
-kernel32.dll!QueryFullProcessImageNameW             query a process's executable path
-kernel32.dll!CloseHandle                            close a handle
-user32.dll!RegisterWindowMessageW                   register the single-instance window message
-user32.dll!PostMessageW                             broadcast the single-instance window message
-wintrust.dll!WinVerifyTrust                         verify an embedded Authenticode signature
-wintrust.dll!CryptCATAdminAcquireContext2           open a catalog-signature context
-wintrust.dll!CryptCATAdminCalcHashFromFileHandle2   hash a file (to look it up in a catalog)
-wintrust.dll!CryptCATAdminEnumCatalogFromHash       find the catalog containing that hash
-wintrust.dll!CryptCATCatalogInfoFromContext         read the catalog file path
-wintrust.dll!CryptCATAdminReleaseCatalogContext     release the catalog context
-wintrust.dll!CryptCATAdminReleaseContext            release the catalog admin context
-wintrust.dll!WTHelperProvDataFromStateData          read data from a verification state
-wintrust.dll!WTHelperGetProvSignerFromChain         read the signer
-wintrust.dll!WTHelperGetProvCertFromChain           read the signer's certificate
+iphlpapi.dll!GetExtendedTcpTable                    读 TCP 连接表
+kernel32.dll!OpenProcess                            打开进程（查路径用）
+kernel32.dll!QueryFullProcessImageNameW             查进程可执行文件路径
+kernel32.dll!CloseHandle                            关句柄
+user32.dll!RegisterWindowMessageW                   注册单实例用的自定义消息
+user32.dll!PostMessageW                             广播单实例消息
+wintrust.dll!WinVerifyTrust                         验证内嵌数字签名
+wintrust.dll!CryptCATAdminAcquireContext2           打开目录签名上下文
+wintrust.dll!CryptCATAdminCalcHashFromFileHandle2   算文件哈希
+wintrust.dll!CryptCATAdminEnumCatalogFromHash       按哈希找所属目录
+wintrust.dll!CryptCATCatalogInfoFromContext         取目录文件路径
+wintrust.dll!CryptCATAdminReleaseCatalogContext     释放目录上下文
+wintrust.dll!CryptCATAdminReleaseContext            释放目录管理上下文
+wintrust.dll!WTHelperProvDataFromStateData          从验证状态取数据
+wintrust.dll!WTHelperGetProvSignerFromChain         取签名者
+wintrust.dll!WTHelperGetProvCertFromChain           取签名者证书
 ```
 
-16. It cannot reach anything else below the .NET runtime.
+**16 个，除此之外它碰不到任何东西。**
 
-## Safety guards
+## 安全护栏
 
-These are enforced **in the firewall layer**, not in the UI. Getting the UI logic wrong cannot
-bypass them.
+这些检查做在**防火墙底层**，不在界面层 —— 界面逻辑写错也绕不过去。
 
-| Guard | Where |
+| 护栏 | 位置 |
 |---|---|
-| Only rules named `AppGuard_*` may be deleted — everything else is rejected with an exception | `FirewallManager.DeleteRule` |
-| Critical processes are refused before a rule is created | `FirewallManager.ValidateProgramPath` |
-| Missing file, non-`.exe`, or UNC path is refused | same |
-| Existing connections: the firewall blocks new ones; in practice the app drops offline immediately | — |
-| All dangerous actions require confirmation | `Forms/ConfirmForm.cs` |
+| 只允许删除 `AppGuard_` 开头的规则，其余直接抛异常拒绝 | `FirewallManager.DeleteRule` |
+| 创建规则前拒绝系统关键进程 | `FirewallManager.ValidateProgramPath` |
+| 拒绝不存在的文件、非 `.exe`、UNC 网络路径 | 同上 |
+| 所有危险操作都要弹确认框，删除全部规则要**连续确认两次** | `Forms/ConfirmForm.cs` |
 
-Full details, plus copy-pasteable verification steps for each claim:
-[`docs/安全说明.md`](docs/安全说明.md) (Chinese).
+逐条的实现说明和**自查方法**见 [`docs/安全说明.md`](docs/安全说明.md)。
 
-## Build from source
+## 从源码构建
 
-Requires the [.NET SDK 10](https://dotnet.microsoft.com/download) or newer.
+需要 [.NET SDK 10](https://dotnet.microsoft.com/download) 或更高。
 
 ```powershell
 git clone https://github.com/lovercyh/winappguard.git
@@ -224,113 +193,93 @@ cd winappguard
 
 dotnet build WinAppGuard.sln -c Debug
 
-# Produce dist\WinAppGuard.exe (win-x64, self-contained, single file)
+# 产出 dist\WinAppGuard.exe（win-x64、自包含、单文件）
 powershell -ExecutionPolicy Bypass -File .\build\publish.ps1
 ```
 
-The build must produce **0 warnings and 0 errors**. Warnings are treated as defects in this
-project, not as noise.
+构建必须 **0 警告 0 错误**。在这个项目里，警告当作缺陷处理，不当噪音。
 
-### Self-check tool
+## 常见问题
 
-`tools/SelfCheck` is a development tool, not part of the shipped product. It can:
+### 为什么杀毒软件会报毒？
 
-```powershell
-WinAppGuard.SelfCheck.exe                    # firewall: full automated test (creates then cleans up rules)
-WinAppGuard.SelfCheck.exe --status           # firewall: read-only
-WinAppGuard.SelfCheck.exe --leave            # firewall: create one demo rule and keep it, for inspecting in wf.msc
-WinAppGuard.SelfCheck.exe --cleanup          # firewall: delete all AppGuard_ rules
-WinAppGuard.SelfCheck.exe --autostart-test   # auto-start: create → check → delete
-WinAppGuard.SelfCheck.exe --audit            # audit the compiled assembly (no admin needed)
-```
+因为它确实在做这些事：
 
-`--audit` is deliberately the only mode that runs without elevation, so CI can use it.
+- 创建 Windows 防火墙规则；
+- 创建一条**登录时以最高权限运行**的计划任务 —— 这在技术上就是提权持久化；
+- 读取 TCP 连接表并反查进程路径。
 
-## FAQ
+启发式引擎对这套组合很敏感。但它创建的东西全部可见、可删：任务名固定为 `WinAppGuard`
+且**未勾选隐藏**，防火墙规则全部以 `AppGuard_` 开头。
+想核实二进制文件的能力，跑上面那个 `--audit`。
 
-### Why does my antivirus flag this?
+### SmartScreen 提示「未知发布者」
 
-Because of what it legitimately does:
+exe 没有代码签名 —— 代码签名证书要花钱，而这是个免费工具。
+点「更多信息」→「仍要运行」，或者先核对发布说明里的 SHA-256。
 
-- creates Windows Firewall rules,
-- creates a scheduled task that runs **at logon with highest privileges** — which is, technically,
-  privilege persistence,
-- reads the TCP connection table and resolves process paths.
+### 为什么必须管理员权限？
 
-Heuristic engines react to exactly that combination. Everything it creates is visible and
-removable: the task is named `WinAppGuard` and is not hidden, and the firewall rules are all
-prefixed `AppGuard_`. Run `--audit` above if you want to check the binary's capabilities.
+创建防火墙规则和注册计划任务都必须提权。程序在清单里声明了 `requireAdministrator`，
+所以启动时会弹 UAC。
 
-### SmartScreen says "unknown publisher"
+### 我点了关闭，但它还在运行
 
-The exe is not code-signed — a code-signing certificate costs money and this is a free tool.
-Click *More info* → *Run anyway*, or verify the SHA-256 against the release notes first.
+这是刻意设计的。关闭窗口只是收进托盘 —— 如果直接退出，防火墙规则还在生效，
+而用户会以为工具已经关掉了，回头找不到恢复入口。
+要真正退出，请右键托盘图标选「退出」。
 
-### Why does it need administrator rights?
+### 退出程序等于放行吗？
 
-Creating firewall rules and registering a scheduled task both require elevation. The app
-declares `requireAdministrator` in its manifest, so Windows prompts for UAC at launch.
+**不等于。** 退出只结束界面进程，防火墙规则依然生效，被阻止的程序依然上不了网。
+要放行必须用「允许选中程序联网」或「删除全部 AppGuard 规则」。退出时的确认框会明确写这一点。
 
-### I closed the window but it's still running
-
-By design. Closing the window minimises to the tray; quitting outright would leave firewall
-rules active with no visible way to undo them. Use **tray icon → Exit** to really quit.
-
-### Does quitting the app unblock everything?
-
-**No.** Quitting only ends the UI process. The firewall rules stay in force and the blocked
-programs stay blocked. To unblock, use *Allow selected program* or *Delete all AppGuard rules*.
-The exit confirmation says this explicitly.
-
-### How do I get rid of everything?
+### 怎么彻底清理干净？
 
 ```
-1. Open WinAppGuard
-2. "Rules" tab → Delete all AppGuard rules
-3. "Settings" tab → turn off auto-start
-4. Tray icon → Exit
-5. Delete WinAppGuard.exe
-6. (optional) delete %LOCALAPPDATA%\WinAppGuard
+1. 打开 WinAppGuard
+2. 「规则」页 → 删除全部 AppGuard 规则
+3. 「设置」页 → 关闭开机自启
+4. 托盘右键 → 退出
+5. 删除 WinAppGuard.exe
+6. （可选）删除 %LOCALAPPDATA%\WinAppGuard 目录
 ```
 
-Skipping steps 2 and 3 leaves rules and a scheduled task behind. If that happens, search for
-`AppGuard` in `wf.msc` and `WinAppGuard` in `taskschd.msc`.
+第 2、3 步不做就直接删 exe 的话，规则和计划任务会留在系统里继续生效。
+真遇到这种情况：`wf.msc` 搜 `AppGuard` 删规则、`taskschd.msc` 删任务。
 
-### Blocking works on paths, not PIDs
+### 阻止是按路径生效的，不是按 PID
 
-Windows Firewall matches on the executable path, so:
+Windows 防火墙按可执行文件路径匹配，所以：
 
-- all instances of that path are blocked together, regardless of arguments;
-- the same program run from a different directory is **not** affected;
-- if the program updates and moves, the rule stops applying — block it again.
+- 同一个路径的所有实例会被一起拦掉（不看命令行参数）；
+- 同一个程序换到别的目录运行**不受影响**；
+- 程序更新后如果安装路径变了，旧规则会失效，重新拦一次即可。
 
-### Why do blocked programs vanish from the connections list?
+### 为什么被阻止的程序从连接列表里消失了？
 
-Because they can no longer connect, so they have no connections to list. Use the
-**Rules** tab to manage them — that tab is driven by your rules, not by live traffic.
+因为它连不上网，自然就没有连接可列。请去「规则」页管理它
+—— 那一页是基于**你的规则**，不是基于实时流量。
 
-### Where is the log?
+### 日志在哪？
 
-`%LOCALAPPDATA%\WinAppGuard\logs\`, one file per day, last 7 days kept. Local only — nothing is
-ever uploaded. The Settings tab shows the path and has a button to open it.
+`%LOCALAPPDATA%\WinAppGuard\logs\`，按天分文件，保留最近 7 天。
+**只写本机，不会发送到任何地方。** 「设置」页显示这个路径，并提供打开按钮。
 
-## Documentation
+## 文档
 
-All documentation is in Chinese.
-
-| Document | Contents |
+| 文档 | 内容 |
 |---|---|
-| [`docs/安全说明.md`](docs/安全说明.md) | The security model, with a verification method for every claim |
-| [`docs/验收清单.md`](docs/验收清单.md) | Full acceptance checklist (automated results + manual items) |
-| [`docs/测试用例.md`](docs/测试用例.md) | Per-phase test cases and measured results |
-| [`docs/发布手册.md`](docs/发布手册.md) | Build → verify → release workflow |
+| [`docs/安全说明.md`](docs/安全说明.md) | 安全模型，九条约定逐条给出自查方法 |
+| [`docs/验收清单.md`](docs/验收清单.md) | 全量验收清单（自动化结论 + 手动勾选项） |
+| [`docs/测试用例.md`](docs/测试用例.md) | 各阶段测试用例与实测结论 |
+| [`docs/发布手册.md`](docs/发布手册.md) | 从构建、验证到发布的操作流程 |
 
-## Contributing
+## 参与贡献
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Short version: **code comments and commit messages are
-in Chinese**, the build must be warning-free, and behaviour changes should come with an
-assertion that would have caught the bug.
+见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。简短版：**代码注释和提交信息用中文**，
+构建必须零警告，行为改动要配一条能抓住该 bug 的断言。
 
-## License
+## 许可证
 
-[MIT](LICENSE).
+[MIT](LICENSE)。

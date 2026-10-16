@@ -66,9 +66,17 @@ Write-Host "    .\dist-tools\$exeName --autostart-test    自启：完整测试�
 Write-Host "    .\dist-tools\$exeName --autostart-disable 自启：删除 WinAppGuard 自启任务"
 Write-Host "    .\dist-tools\$exeName --ownership-test    IP 归属：**会联网**（whois.cymru.com:43）"
 Write-Host "    .\dist-tools\$exeName --ownership-core-test  IP 归属：离线，缓存 / 开关 / 设置持久化"
+Write-Host "    .\dist-tools\$exeName --connection-filter-test  连接列表：离线，搜索过滤与排序规则"
+Write-Host "    .\dist-tools\$exeName --temp-block-test   临时阻断：离线，到期信息的编码 / 解析 / 判定"
+Write-Host "    .\dist-tools\$exeName --temp-block-status 临时阻断：只读，打印每条规则的到期解析结果"
+Write-Host "    .\dist-tools\$exeName --ui-check          界面：离线，布局与各种接线（会短暂闪一下窗口）"
+Write-Host "    .\dist-tools\$exeName --strict-mode-test  严格模式：**会真改全局出站默认动作**（但一定还原，需管理员）"
+Write-Host "    .\dist-tools\$exeName --strict-mode-lifecycle-test  严格模式：同上，验证开启/关闭/崩溃兜底/拒绝覆盖别人"
+Write-Host "    .\dist-tools\$exeName --render-docs [目录]  生成 README 用的界面截图（离线，不需要管理员）"
 Write-Host "    .\dist-tools\$exeName --audit [dll]       出厂审计：读编译产物元数据"
 Write-Host ''
-Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把两个 IP 归属检查各跑一遍。）"
+Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 5 项离线检查依次跑一遍。）"
+Write-Host "  两个 --strict-mode-* 刻意不在那个启动器里：它们需要管理员、而且会真改全局策略，只适合手动单独跑。"
 
 # 生成一个双击即可运行的启动器，方便在虚拟机里验证。
 #
@@ -93,7 +101,23 @@ if not exist "%EXE%" (
 
 echo.
 echo ============================================================
-echo   [1/2]  offline core check  (no network at all)
+echo   [1/5]  connection filter and sort  (offline, no UI)
+echo          keyword matching / numeric port and IP sorting
+echo ============================================================
+echo.
+"%EXE%" --connection-filter-test --no-pause
+
+echo.
+echo ============================================================
+echo   [2/5]  temporary block expiry  (offline, no system changes)
+echo          encode / parse / expire judgement, incl. truncation
+echo ============================================================
+echo.
+"%EXE%" --temp-block-test --no-pause
+
+echo.
+echo ============================================================
+echo   [3/5]  ownership core check  (offline, no network)
 echo          cache / expiry / capacity / switch / settings
 echo ============================================================
 echo.
@@ -101,11 +125,20 @@ echo.
 
 echo.
 echo ============================================================
-echo   [2/2]  online lookup check
+echo   [4/5]  ownership online lookup check
 echo          NOTE: uses the network, only whois.cymru.com:43
 echo ============================================================
 echo.
 "%EXE%" --ownership-test --no-pause
+
+echo.
+echo ============================================================
+echo   [5/5]  UI layout check
+echo          NOTE: a window will flash briefly, then close
+echo          offline / no admin needed
+echo ============================================================
+echo.
+"%EXE%" --ui-check --no-pause
 
 echo.
 echo ---- done. press any key to close ----

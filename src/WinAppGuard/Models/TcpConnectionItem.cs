@@ -62,6 +62,29 @@ public sealed class TcpConnectionItem
     public IpOwnershipInfo IpOwnership { get; set; } = IpOwnershipInfo.None;
 
     /// <summary>
+    /// 该程序在「严格模式」白名单里的状态。
+    /// 由界面在扫描完成后根据防火墙规则填充，扫描器本身不设置这个值。
+    /// </summary>
+    public WhitelistState Whitelist { get; set; } = WhitelistState.NotApplicable;
+
+    /// <summary>
+    /// 「放行」列的显示文本。
+    ///
+    /// 三档的原因见 <see cref="WhitelistState"/>：严格模式挡不住"别人早就放行过"的程序，
+    /// 所以「已放行」必须区分来源，不能含糊成一句"已放行"。
+    ///
+    /// 文本刻意写短（列宽有限，后面还有一列数字签名），**完整含义放在悬停提示里**
+    /// （见 MainForm 的 BuildWhitelistTooltip）—— 不能因为放不下就省掉信息。
+    /// </summary>
+    public string WhitelistText => Whitelist switch
+    {
+        WhitelistState.Ours => "已放行·本工具",
+        WhitelistState.OtherSource => "已放行·其它来源",
+        WhitelistState.NotWhitelisted => "未放行",
+        _ => "—",
+    };
+
+    /// <summary>
     /// 阻止状态的显示文本。
     /// 拿不到路径的连接无法被阻止，显示为破折号而不是「未阻止」，避免误导。
     /// </summary>

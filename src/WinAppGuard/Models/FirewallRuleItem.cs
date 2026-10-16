@@ -32,9 +32,22 @@ public sealed class FirewallRuleItem
     /// <summary>协议号。256 表示「任意协议」。</summary>
     public required int Protocol { get; init; }
 
+    /// <summary>
+    /// 这条规则的「自动解除」信息。
+    /// 从规则的说明字段里解析出来（见 <see cref="RuleExpiry"/> 的说明）。
+    /// 旧版本创建的规则没有标记，会解析成「永久」。
+    /// </summary>
+    public RuleExpiry Expiry { get; init; } = RuleExpiry.Never;
+
     // ------------------------------------------------------------------
     // 以下为界面显示用属性
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 自动解除方式的显示文本（如「永久」「剩余 12 分钟」「重启后自动解除」）。
+    /// 取的是读取规则那一刻的时间点，属于快照。
+    /// </summary>
+    public string ExpiryText => Expiry.Describe(DateTime.UtcNow);
 
     /// <summary>动作的显示文本。</summary>
     public string ActionText => Action == FirewallAction.Block ? "阻止" : "允许";

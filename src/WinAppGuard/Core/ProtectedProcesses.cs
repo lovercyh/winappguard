@@ -1,13 +1,21 @@
 namespace WinAppGuard.Core;
 
 /// <summary>
-/// 受保护的进程名单。
+/// 受保护的进程名单（**只限制「阻止」，不限制「允许」**）。
 ///
 /// 这是本工具最重要的一道安全护栏：拦住这些进程会让 Windows 本身出问题，
 /// 严重时会导致系统无法正常使用甚至断网。所以**把检查做在防火墙底层**，
 /// 而不是界面层——放在界面层的话，将来任何别的调用路径都能绕过去。
 ///
 /// 名单只包含「拦了会出大事」的进程，不是「不建议拦」的进程。
+///
+/// ⚠ **这道护栏只管「阻止」**：这些进程**可以**被放行。
+/// 理由有两条，缺一不可：
+///   1. 放行永远不会把用户锁在外面 —— 危险只存在于"拦掉"这个方向；
+///   2. 严格模式**必须**能放行本程序自己（否则它自己连 IP 归属都查不了），
+///      也必须能放行用户主动想放行的系统关键进程。
+/// 调用方通过 <c>FirewallManager.ValidateProgramPath</c> 的 <c>forBlocking</c> 参数
+/// 决定要不要执行这道检查。
 /// </summary>
 public static class ProtectedProcesses
 {
@@ -42,11 +50,17 @@ public static class ProtectedProcesses
         "SecurityHealthService.exe",    // Windows 安全中心
     };
 
-    /// <summary>受保护的进程文件名清单（只读），界面可以据此把菜单置灰。</summary>
+    /// <summary>
+    /// 受保护的进程文件名清单（只读）。
+    /// 界面可以据此把**「阻止」**相关的按钮和菜单项置灰 —— 但**不要**把「允许」也置灰。
+    /// </summary>
     public static IReadOnlyCollection<string> ProtectedFileNames => ProtectedNames;
 
     /// <summary>
-    /// 判断某个程序是否受保护、不允许创建防火墙规则。
+    /// 判断某个程序是否**不允许被阻止**。
+    ///
+    /// 注意措辞：这不是「不允许建任何规则」—— 放行这些进程是允许的（见类型注释）。
+    /// 调用方只应在**创建阻止规则**时使用本方法的结果。
     /// </summary>
     /// <param name="programPath">程序的完整路径。</param>
     /// <param name="reason">被拒绝的原因，供界面提示用户。</param>

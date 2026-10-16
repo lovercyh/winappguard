@@ -27,9 +27,19 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
   remote port, state, protocol (IPv4/IPv6) and **the program's digital signature**.
 - **Tells you who a connection belongs to** — hover a remote IP to see its country and
   network operator (autonomous system).
+- **Search and sort the list** — filter by process name, PID, remote IP or remote port;
+  click a column header to sort (ports and IPs sort **numerically**, not as text).
 - **Blocks a program** — writes a single outbound Windows Firewall rule (TCP **and** UDP) for
-  that executable.
+  that executable. You can choose for **how long**: permanently, 30 minutes, 2 hours,
+  or until the next restart — a timed block removes itself when it expires.
 - **Unblocks it** — deletes the rules it created for that program.
+- **Strict mode (off by default, advanced)** — sets Windows' *default outbound action* to **block**,
+  so only whitelisted programs can reach the network. The whitelist is what you add via
+  *Add to whitelist*. It is **session-scoped**: quitting the app (or the next launch after a crash)
+  restores the default action to *allow* automatically. It never touches other programs' rules —
+  which is why built-in Windows rules and rules created by other software still let their
+  programs through, and why the **Release** column shows that fact in three distinct states
+  instead of a vague "allowed".
 - **Keeps a list of everything it manages**, so you can always undo — even if the program
   is not running any more.
 - **Optionally auto-starts at logon**, to the system tray.
@@ -40,8 +50,9 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
 Being explicit about this matters, because the tool needs administrator rights.
 
 - ❌ It does **not** filter, inspect, or route any traffic. Windows Firewall does all of that.
-- ❌ It does **not** change global firewall policy. It never enables/disables the firewall and
-  never touches the default inbound/outbound actions.
+- ❌ It does **not** change global firewall policy — **the one exception is strict mode**
+  (off by default, must be turned on explicitly, and reverts automatically when the app exits).
+  Apart from that it never enables/disables the firewall and never touches the default inbound action.
 - ❌ It does **not** touch firewall rules created by anything else. Deletion is hard-limited to
   rules whose name starts with `AppGuard_`.
 - ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …).
@@ -92,7 +103,7 @@ WinAppGuard starts from **live connections**. That is the right starting point w
 you notice traffic, you want to know which program is responsible, and you want it gone.
 The recovery path is designed around the same idea — blocked programs disappear from the
 connection list (they can't connect any more), so there is a dedicated
-**"Blocked programs"** tab that lists your rules instead of your connections.
+**"Rules"** tab that lists your rules instead of your connections.
 
 ## Download
 
@@ -113,7 +124,7 @@ Grab `WinAppGuard.exe` from the [latest release](https://github.com/lovercyh/win
 
 ## Screenshots
 
-| Blocked programs | Settings |
+| Rules | Settings |
 |---|---|
 | ![Rules tab](docs/screenshots/02-rules.png) | ![Settings tab](docs/screenshots/03-settings.png) |
 
@@ -134,6 +145,8 @@ its full path, the scope of the change, and the rule that is about to be created
 | Auto-start | One Task Scheduler task named `WinAppGuard`, logon trigger, highest privileges, no execution time limit |
 | Single instance | Named mutex + a broadcast window message, so launching it twice focuses the existing window |
 | IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the app's **only** outbound endpoint, batched and cached in memory, on by default, switchable off |
+| Timed blocks | The expiry is stored **in the firewall rule's own description** (`自动解除=…`), so it is visible in `wf.msc` and survives restarts. A background 30-second timer removes expired rules and shows a tray notification. |
+| Strict mode | Sets the *default outbound action* to block on all three network profiles, combined with the app's own `AppGuard_Allow_*` whitelist rules. **Session-scoped** (reverted on exit, and recovered on the next launch after a crash); it can only be enabled when all three profiles are currently set to allow. |
 
 ## Verifiable trust
 
@@ -273,7 +286,7 @@ The exit confirmation says this explicitly.
 
 ```
 1. Open WinAppGuard
-2. "Blocked programs" tab → Delete all AppGuard rules
+2. "Rules" tab → Delete all AppGuard rules
 3. "Settings" tab → turn off auto-start
 4. Tray icon → Exit
 5. Delete WinAppGuard.exe
@@ -294,7 +307,7 @@ Windows Firewall matches on the executable path, so:
 ### Why do blocked programs vanish from the connections list?
 
 Because they can no longer connect, so they have no connections to list. Use the
-**Blocked programs** tab to manage them — that tab is driven by your rules, not by live traffic.
+**Rules** tab to manage them — that tab is driven by your rules, not by live traffic.
 
 ### Where is the log?
 

@@ -41,6 +41,15 @@ public static class AppConstants
     public const int RuleNameMaxLength = 200;
 
     /// <summary>
+    /// 检查「临时阻断」是否到期的间隔（毫秒）。
+    ///
+    /// 刻意**不**搭在「每 3 秒自动刷新」上：那个开关默认是关的，
+    /// 搭上去的话没勾开关的用户就永远等不到自动解除（这是设计上的坑，不是节省）。
+    /// 30 秒一次、每次只是读一遍本工具自己的规则，开销可以忽略。
+    /// </summary>
+    public const int ExpiredRuleCheckIntervalMs = 30_000;
+
+    /// <summary>
     /// 开机自启所使用的计划任务名称。
     /// 固定为 WinAppGuard，便于用户在「任务计划程序」里一眼找到并自行删除。
     /// </summary>

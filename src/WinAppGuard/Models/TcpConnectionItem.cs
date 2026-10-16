@@ -49,11 +49,41 @@ public sealed class TcpConnectionItem
     public bool IsBlocked { get; set; }
 
     /// <summary>
+    /// 该文件的数字签名检查结果。
+    /// 由界面在后台线程填充（检查很慢，要算文件哈希、验证证书链），扫描器本身不设置这个值。
+    /// </summary>
+    public SignatureInfo Signature { get; set; } = SignatureInfo.None;
+
+    /// <summary>
     /// 阻止状态的显示文本。
     /// 拿不到路径的连接无法被阻止，显示为破折号而不是「未阻止」，避免误导。
     /// </summary>
     public string BlockStateText =>
         string.IsNullOrEmpty(ProcessPath) ? "—" : IsBlocked ? "已阻止" : "未阻止";
+
+    /// <summary>
+    /// 数字签名列的显示文本。
+    ///
+    /// 签名的短名字直接显示出来（例如「Google LLC」），这样扫一眼就能看出
+    /// 一个陌生程序到底是谁签的。完整结论放在悬停提示里。
+    /// </summary>
+    public string SignatureText => Signature.State switch
+    {
+        SignatureState.Valid => string.IsNullOrEmpty(Signature.SignerName)
+            ? "已签名"
+            : Signature.SignerName,
+        SignatureState.Unsigned => "未签名",
+        SignatureState.Tampered => "签名无效",
+        SignatureState.Untrusted => "不受信任",
+        SignatureState.CertificateProblem => "证书异常",
+        SignatureState.Error => "检查失败",
+
+        // 还没检查：有路径说明马上会有结果，留空；没路径就永远不会有结果。
+        _ => string.IsNullOrEmpty(ProcessPath) ? "—" : string.Empty,
+    };
+
+    /// <summary>数字签名列的悬停提示，显示完整结论。</summary>
+    public string SignatureTooltip => Signature.Detail;
 
     // ------------------------------------------------------------------
     // 以下为界面显示用属性

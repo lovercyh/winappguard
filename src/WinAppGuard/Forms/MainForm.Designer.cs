@@ -83,6 +83,7 @@ partial class MainForm
     private Label _privacyLabel = null!;
     private Label _logPathLabel = null!;
     private Button _openLogFolderButton = null!;
+    private CheckBox _checkRevocationCheckBox = null!;
 
     // ---------- 其它 ----------
     private Button _exitButton = null!;
@@ -168,6 +169,7 @@ partial class MainForm
         _privacyLabel = new Label();
         _logPathLabel = new Label();
         _openLogFolderButton = new Button();
+        _checkRevocationCheckBox = new CheckBox();
         _exitButton = new Button();
         _statusStrip = new StatusStrip();
         _adminStatusLabel = new ToolStripStatusLabel();
@@ -233,9 +235,13 @@ partial class MainForm
         _safetyNoticeLabel.Name = "_safetyNoticeLabel";
         _safetyNoticeLabel.Size = new Size(1120, 20);
         _safetyNoticeLabel.TabIndex = 2;
+        // ⚠️ 这里的措辞必须和实际行为一致。
+        // 证书吊销检查默认开启，Windows 证书服务会代表本程序联网 —— 所以
+        // 不能写「本程序不访问网络」，那是在骗用户。
+        // 能说、也说得住的是「自身不含网络代码」。
         _safetyNoticeLabel.Text =
             "安全约定：只创建和删除以 AppGuard_ 开头的防火墙规则，从不修改全局防火墙策略；" +
-            "本程序不访问网络、不上传任何数据。";
+            "本程序自身不含网络代码，但默认会联网查询证书吊销状态（可在「设置」页关闭）。";
 
         // ==================================================================
         // 标签页容器
@@ -628,7 +634,7 @@ partial class MainForm
 
         // 直接把任务计划程序里的原始定义摆出来给用户看，这是最彻底的透明。
         _taskXmlPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        _taskXmlPanel.Location = new Point(6, 486);
+        _taskXmlPanel.Location = new Point(6, 564);
         _taskXmlPanel.Name = "_taskXmlPanel";
         _taskXmlPanel.Size = new Size(1060, 220);
         _taskXmlPanel.TabIndex = 3;
@@ -650,29 +656,35 @@ partial class MainForm
         _privacyPanel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
         _privacyPanel.Location = new Point(6, 342);
         _privacyPanel.Name = "_privacyPanel";
-        _privacyPanel.Size = new Size(1060, 132);
+        _privacyPanel.Size = new Size(1060, 214);
         _privacyPanel.TabIndex = 2;
         _privacyPanel.Text = "数据与隐私";
 
+        // 注意这里的措辞必须是「本程序自身不含网络代码」而不是「本程序不联网」——
+        // 因为证书吊销检查默认开启，Windows 证书服务会代表程序去查 CA 服务器，
+        // 在资源监视器里确实能看到 WinAppGuard.exe 有对外连接。
+        // 写含糊了就是在骗用户。
         _privacyLabel.AutoSize = true;
         _privacyLabel.Location = new Point(14, 24);
         _privacyLabel.MaximumSize = new Size(1030, 0);
         _privacyLabel.Name = "_privacyLabel";
-        _privacyLabel.Size = new Size(600, 40);
+        _privacyLabel.Size = new Size(600, 60);
         _privacyLabel.TabIndex = 0;
         _privacyLabel.Text =
-            "本程序运行期间不访问网络、不上传任何数据、不调用任何在线服务。" +
+            "本程序自身不含任何网络代码：不上传数据、没有遥测、没有更新检查。" +
+            "但下面的「证书吊销检查」默认开启，此时 Windows 的证书服务会代表本程序去查询 CA 服务器，" +
+            "在资源监视器里会看到 WinAppGuard.exe 有对外连接。关掉它即可恢复完全零网络。\r\n" +
             "日志只写在本机下面这一个目录里，不会发送到任何地方，你可以随时查看或删除：";
 
         _logPathLabel.AutoSize = true;
         _logPathLabel.ForeColor = SystemColors.GrayText;
-        _logPathLabel.Location = new Point(14, 68);
+        _logPathLabel.Location = new Point(14, 92);
         _logPathLabel.Name = "_logPathLabel";
         _logPathLabel.Size = new Size(600, 17);
         _logPathLabel.TabIndex = 1;
         _logPathLabel.Text = "";
 
-        _openLogFolderButton.Location = new Point(14, 90);
+        _openLogFolderButton.Location = new Point(14, 114);
         _openLogFolderButton.Name = "_openLogFolderButton";
         _openLogFolderButton.Size = new Size(160, 30);
         _openLogFolderButton.TabIndex = 2;
@@ -680,9 +692,22 @@ partial class MainForm
         _openLogFolderButton.UseVisualStyleBackColor = true;
         _openLogFolderButton.Click += OnOpenLogFolderClick;
 
+        // 默认勾选：吊销状态查得准。代价是会有网络流量，界面上已经说清楚了。
+        _checkRevocationCheckBox.AutoSize = true;
+        _checkRevocationCheckBox.Checked = true;
+        _checkRevocationCheckBox.CheckState = CheckState.Checked;
+        _checkRevocationCheckBox.Location = new Point(16, 156);
+        _checkRevocationCheckBox.Name = "_checkRevocationCheckBox";
+        _checkRevocationCheckBox.Size = new Size(400, 21);
+        _checkRevocationCheckBox.TabIndex = 3;
+        _checkRevocationCheckBox.Text = "检查证书吊销状态（会联网查询 CA 服务器，取消勾选则完全零网络）";
+        _checkRevocationCheckBox.UseVisualStyleBackColor = true;
+        _checkRevocationCheckBox.CheckedChanged += OnRevocationModeChanged;
+
         _privacyPanel.Controls.Add(_privacyLabel);
         _privacyPanel.Controls.Add(_logPathLabel);
         _privacyPanel.Controls.Add(_openLogFolderButton);
+        _privacyPanel.Controls.Add(_checkRevocationCheckBox);
 
         _tabSettings.Controls.Add(_taskXmlPanel);
         _tabSettings.Controls.Add(_privacyPanel);
@@ -787,7 +812,15 @@ partial class MainForm
         _toolTip.SetToolTip(_connectionGrid,
             "默认只显示「有归属进程、还活着、且不是本机回环」的连接。\n" +
             "在行上点右键可以直接阻止或允许该程序联网。\n" +
-            "注意：被阻止的程序连不上网，所以不会出现在这里 —— 去「已阻止的程序」页恢复它。");
+            "注意：被阻止的程序连不上网，所以不会出现在这里 —— 去「已阻止的程序」页恢复它。\n" +
+            "\n" +
+            "行底色的含义（按优先级）：\n" +
+            "  淡红 = 签名被篡改 / 证书异常 / 证书链不受信任（真有问题）\n" +
+            "  淡黄 = 该程序没有数字签名（需要留意，但不代表一定有问题，\n" +
+            "         很多正经的免费和开源工具都没买签名证书）\n" +
+            "  淡蓝 = 已被本工具阻止（这是你自己的操作，不是风险）\n" +
+            "\n" +
+            "把鼠标停在「数字签名」那一格上可以看到完整结论。");
         _toolTip.SetToolTip(_refreshRulesButton,
             "重新从 Windows 防火墙读取本工具创建的规则。\n" +
             "如果你在 wf.msc 里手动改过规则，点这里同步。");

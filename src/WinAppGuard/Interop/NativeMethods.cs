@@ -101,6 +101,264 @@ internal static class NativeMethods
         int dwFlags,
         StringBuilder lpExeName,
         ref int lpdwSize);
+
+    // ---------------- 数字签名验证 ----------------
+
+    /// <summary>
+    /// 验证 PE 文件的数字签名（Authenticode）。
+    ///
+    /// 返回值是 HRESULT：0 表示签名有效且受信任，其它值是具体的失败原因
+    /// （没有签名、证书链不受信任、文件被改过、证书过期/被吊销等）。
+    ///
+    /// 注意：这个函数**可能会联网**（去 CA 服务器查证书吊销列表）。
+    /// 是否联网由 WINTRUST_DATA.dwProvFlags 控制，详见 DigitalSignature.cs。
+    /// </summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true)]
+    internal static extern int WinVerifyTrust(IntPtr hwnd, ref Guid pgActionID, ref WinTrustData pWVTData);
+
+    // ---------------- 目录签名（catalog）验证 ----------------
+    //
+    // Windows 有**两套**签名机制：
+    //   内嵌签名 —— 存在 exe 自己的证书表里，主要给第三方软件用；
+    //   目录签名 —— 存在 C:\Windows\System32\CatRoot\ 的 .cat 文件里，
+    //              大量 Windows 系统文件只有这种（exe 里什么都没有）。
+    //
+    // 只查内嵌签名会导致 notepad.exe / cmd.exe 这类系统文件被误报成「未签名」。
+    // 下面这几个函数就是用来补上目录签名这条路径的。
+
+    /// <summary>
+    /// 打开目录签名管理上下文。
+    /// 哈希算法传 "SHA256"（不要用已废弃的 SHA-1 版本）。
+    /// </summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptCATAdminAcquireContext2(
+        out IntPtr phCatAdmin,
+        IntPtr pgSubsystem,
+        string pwszHashAlgorithm,
+        IntPtr pStrongHashPolicy,
+        int dwFlags);
+
+    /// <summary>
+    /// 计算文件的哈希（目录签名靠这个哈希去索引）。
+    /// 第一次传 pbHash = null 拿所需长度，第二次才真正取哈希。
+    /// </summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptCATAdminCalcHashFromFileHandle2(
+        IntPtr hCatAdmin,
+        IntPtr hFile,
+        ref int pcbHash,
+        byte[]? pbHash,
+        int dwFlags);
+
+    /// <summary>
+    /// 按文件哈希找包含它的目录。
+    /// **返回 IntPtr.Zero 表示没有目录收录这个文件**，也就是「没有目录签名」。
+    /// </summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true)]
+    internal static extern IntPtr CryptCATAdminEnumCatalogFromHash(
+        IntPtr hCatAdmin,
+        byte[] pbHash,
+        int cbHash,
+        int dwFlags,
+        ref IntPtr phPrevCatInfo);
+
+    /// <summary>取出目录文件的完整路径（后面要用它去验证）。</summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptCATCatalogInfoFromContext(
+        IntPtr hCatInfo,
+        ref CatalogInfo psCatInfo,
+        int dwFlags);
+
+    /// <summary>释放目录上下文。</summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptCATAdminReleaseCatalogContext(IntPtr hCatAdmin, IntPtr hCatInfo, int dwFlags);
+
+    /// <summary>释放目录签名管理上下文。</summary>
+    [DllImport("wintrust.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptCATAdminReleaseContext(IntPtr hCatAdmin, int dwFlags);
+
+    // ---------------- 从验证状态里取签名者 ----------------
+    //
+    // WinVerifyTrust 只告诉你「信不信任」，不告诉你「谁签的」。
+    // 下面三个辅助函数能顺着它返回的状态句柄把签名者证书挖出来。
+    // 好处是**内嵌签名和目录签名都能用同一套代码取名字**。
+
+    /// <summary>从 WinVerifyTrust 的状态句柄取提供程序数据。</summary>
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    internal static extern IntPtr WTHelperProvDataFromStateData(IntPtr hStateData);
+
+    /// <summary>从提供程序数据里取签名者。</summary>
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    internal static extern IntPtr WTHelperGetProvSignerFromChain(
+        IntPtr pProvData,
+        int dwIdx,
+        [MarshalAs(UnmanagedType.Bool)] bool fCounterSigner,
+        int dwIdx2);
+
+    /// <summary>从签名者里取证书（含 pCert 指针）。</summary>
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    internal static extern IntPtr WTHelperGetProvCertFromChain(IntPtr pSgnr, int dwIdx);
+}
+
+/// <summary>CATALOG_INFO：目录签名上下文里取出来的目录文件路径。</summary>
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal struct CatalogInfo
+{
+    /// <summary>结构体大小，必须自己填。</summary>
+    public int cbStruct;
+
+    /// <summary>目录文件（.cat）的完整路径，最大 MAX_PATH。</summary>
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string CatalogFile;
+}
+
+/// <summary>
+/// CRYPT_PROVIDER_CERT 的**前缀**。
+///
+/// 我们只读 cbStruct 和 pCert 这两个字段，后面的字段用不到，
+/// 所以这里只声明前缀 —— 结构体只会被我们「指向并读前几个字段」，
+/// 不参与分配，因此不需要完整定义。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CryptProviderCert
+{
+    /// <summary>结构体大小。</summary>
+    public int cbStruct;
+
+    /// <summary>指向 CERT_CONTEXT 的指针。</summary>
+    public IntPtr pCert;
+}
+
+/// <summary>
+/// CERT_CONTEXT：证书上下文。同样只声明我们需要的字段。
+/// 用它取出证书的编码字节，交给 X509CertificateLoader 解析。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CertContext
+{
+    /// <summary>证书编码类型。</summary>
+    public int dwCertEncodingType;
+
+    /// <summary>指向证书编码字节的指针。</summary>
+    public IntPtr pbCertEncoded;
+
+    /// <summary>证书编码字节数。</summary>
+    public int cbCertEncoded;
+
+    /// <summary>证书信息，用不到。</summary>
+    public IntPtr pCertInfo;
+
+    /// <summary>证书存储句柄，用不到。</summary>
+    public IntPtr hCertStore;
+}
+
+/// <summary>
+/// WINTRUST_FILE_INFO：告诉 WinVerifyTrust 要验证哪个文件。
+/// 字段顺序必须与 Win32 完全一致。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct WinTrustFileInfo
+{
+    /// <summary>结构体大小，必须自己填。</summary>
+    public int cbStruct;
+
+    /// <summary>要验证的文件完整路径。</summary>
+    [MarshalAs(UnmanagedType.LPWStr)]
+    public string FilePath;
+
+    /// <summary>已打开的文件句柄；用路径时传 IntPtr.Zero。</summary>
+    public IntPtr hFile;
+
+    /// <summary>已知主题的 GUID；不用时传 IntPtr.Zero。</summary>
+    public IntPtr pgKnownSubject;
+}
+
+/// <summary>
+/// WINTRUST_DATA：WinVerifyTrust 的主参数结构。
+/// 字段顺序必须与 Win32 完全一致，改顺序会读到垃圾数据。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct WinTrustData
+{
+    /// <summary>结构体大小，必须自己填。</summary>
+    public int cbStruct;
+
+    public IntPtr pPolicyCallbackData;
+    public IntPtr pSIPClientData;
+
+    /// <summary>界面选项。2 = WTD_UI_NONE（不弹任何对话框）。</summary>
+    public int dwUIChoice;
+
+    /// <summary>已废弃的吊销检查字段，用 dwProvFlags 代替。填 0。</summary>
+    public int fdwRevocationChecks;
+
+    /// <summary>要验证的对象类型。1 = WTD_CHOICE_FILE（一个文件）。</summary>
+    public int dwUnionChoice;
+
+    /// <summary>指向 WinTrustFileInfo 的指针。</summary>
+    public IntPtr pFile;
+
+    /// <summary>1 = WTD_STATEACTION_VERIFY（开始验证），2 = WTD_STATEACTION_CLOSE（释放状态）。</summary>
+    public int dwStateAction;
+
+    /// <summary>由系统填写，调用方不要动。</summary>
+    public IntPtr hWVTStateData;
+
+    public IntPtr pwszURLReference;
+
+    /// <summary>提供程序标志位：控制是否联网查吊销列表等，见 DigitalSignature.cs。</summary>
+    public int dwProvFlags;
+
+    public int dwUIContext;
+}
+
+/// <summary>
+/// WINTRUST_CATALOG_INFO：验证**目录签名**时用这个结构，替代 WinTrustFileInfo。
+/// 字段顺序必须与 Win32 完全一致。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct WinTrustCatalogInfo
+{
+    /// <summary>结构体大小，必须自己填。</summary>
+    public int cbStruct;
+
+    /// <summary>目录版本号，填 0。</summary>
+    public int dwCatalogVersion;
+
+    /// <summary>目录文件（.cat）的完整路径。</summary>
+    [MarshalAs(UnmanagedType.LPWStr)]
+    public string CatalogFilePath;
+
+    /// <summary>
+    /// 成员标签：文件哈希的**十六进制大写字符串**，不带分隔符。
+    /// 目录签名就是靠这个把「文件」和「签名」对应起来的。
+    /// </summary>
+    [MarshalAs(UnmanagedType.LPWStr)]
+    public string MemberTag;
+
+    /// <summary>被签名的文件完整路径。</summary>
+    [MarshalAs(UnmanagedType.LPWStr)]
+    public string MemberFilePath;
+
+    /// <summary>被签名文件的句柄。</summary>
+    public IntPtr hMemberFile;
+
+    /// <summary>我们算出来的文件哈希字节。</summary>
+    public IntPtr CalculatedFileHash;
+
+    /// <summary>哈希字节数。</summary>
+    public int cbCalculatedFileHash;
+
+    /// <summary>目录上下文，填 IntPtr.Zero。</summary>
+    public IntPtr CatalogContext;
+
+    /// <summary>目录签名管理上下文（CryptCATAdminAcquireContext2 得到的那个）。</summary>
+    public IntPtr hCatAdmin;
 }
 
 /// <summary>

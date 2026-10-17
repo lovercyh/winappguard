@@ -8,8 +8,9 @@ WinAppGuard is a Windows program network-control tool that works the other way r
 Instead of browsing a list of executables, it shows you **live TCP connections** — so you start
 from *"what is talking to the internet right now?"* and end with *"blocked"*.
 
-> WinAppGuard does not handle any traffic itself. All blocking is done by filters in the
-> **Windows Filtering Platform (WFP)**. WinAppGuard only creates and cleans up those filters for you.
+> WinAppGuard does not handle any traffic itself. All blocking is done by an independent filtering
+> engine built on WFP: WinAppGuard only creates and cleans up WFP filters for you, while packet
+> matching and blocking are performed by WFP in the Windows kernel.
 > Since 2.0 it **no longer uses Windows Firewall** and never changes any Windows Firewall setting.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

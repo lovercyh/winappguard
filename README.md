@@ -8,9 +8,9 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 它不让你去翻程序列表，而是直接展示**当前正在联网的 TCP 连接** ——
 从「现在是哪个程序在联网」出发，到「已阻止」结束。
 
-> WinAppGuard 本身不处理任何流量。真正生效的是 **Windows 筛选平台（WFP）** 里的过滤器。
-> WinAppGuard 只负责按你的选择创建和清理这些过滤器。
-> 从 2.0 起它**不再使用 Windows 防火墙**，也不再修改 Windows 防火墙的任何设置。
+> WinAppGuard 本身不处理任何流量。真正生效的是基于 WFP 的独立过滤引擎：
+> WinAppGuard 只负责按你的选择创建和清理 WFP 过滤器，数据包匹配与拦截由 Windows 内核 WFP 执行。
+> 从 2.0 起它不再使用 Windows 防火墙，也不再修改 Windows 防火墙的任何设置。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)

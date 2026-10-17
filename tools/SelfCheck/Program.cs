@@ -43,6 +43,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --strict-mode-test  严格模式：**会真改全局出站默认动作**（但一定还原），验证真能拦、真能放行
 ///   WinAppGuard.SelfCheck.exe --strict-mode-lifecycle-test  严格模式：**同上**，验证开启 / 关闭 / 崩溃后兜底 / 拒绝覆盖别人的策略
 ///   WinAppGuard.SelfCheck.exe --wfp-test        WFP：真实往返（建子层 → 加过滤器 → 枚举 → 删 → 删子层）+ 动态会话自动清理
+///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
@@ -198,6 +199,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--wfp-rule-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpRuleTest();
             }
             else if (args.Contains("--wfp-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3646,6 +3651,7 @@ internal static class Program
                 filterKey,
                 "WinAppGuard 自检过滤器",
                 exePath,
+                WfpNativeMethods.LayerAleAuthConnectV4,
                 WfpNativeMethods.FWP_ACTION_BLOCK,
                 testWeight,
                 persistent: false);
@@ -3679,6 +3685,7 @@ internal static class Program
                 dynamicKey,
                 "WinAppGuard 自检（动态会话）",
                 exePath,
+                WfpNativeMethods.LayerAleAuthConnectV4,
                 WfpNativeMethods.FWP_ACTION_BLOCK,
                 testWeight,
                 persistent: false);
@@ -3706,6 +3713,141 @@ internal static class Program
             if (leftover > 0)
             {
                 W($"    兜底清理了 {leftover} 条残留过滤器");
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// WFP 规则模型自检。
+    ///
+    /// 验证的是 2.0 真正要用的那条路：一条规则 → V4/V6 两条过滤器 → 还能原样读回来。
+    /// 顺带钉死两件事：
+    ///   1. 重复写入是幂等的（不会积出重复规则）；
+    ///   2. V6 层的 GUID 是对的（能往那一层加过滤器，就说明层存在）。
+    ///
+    /// 规则的实验对象是本自检程序自己：即使清理失败，被拦的也只是它。
+    /// </summary>
+    private static void RunWfpRuleTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   WFP 规则模型自检（规则存在过滤器自身，V4 + V6 两层）        #");
+        W("################################################################");
+        W();
+
+        var exePath = Environment.ProcessPath!;
+        var blockRule = new WfpRule(exePath, FirewallAction.Block);
+        var allowRule = new WfpRule(
+            exePath,
+            FirewallAction.Allow,
+            RuleExpiry.At(DateTime.UtcNow.AddMinutes(30)));
+
+        // ---------------- 1. 编码 / 解析（纯离线） ----------------
+        W("===== 1. 规则编码与解析 =====");
+        W($"    阻止规则说明字段 = {blockRule.Description}");
+        W($"    允许规则说明字段 = {allowRule.Description}");
+
+        var blockParsed = WfpRule.TryParse(blockRule.Description, out var parsedBlock);
+        CheckAssertion(results, "说明字段能被自己解析回来", blockParsed);
+        CheckAssertion(results, "解析出的路径一致", blockParsed && parsedBlock.ApplicationPath == exePath);
+        CheckAssertion(results, "解析出的动作一致", blockParsed && parsedBlock.Action == FirewallAction.Block);
+        CheckAssertion(results, "永久规则的到期解析成「永久」", blockParsed && parsedBlock.Expiry.IsPermanent);
+
+        var allowParsed = WfpRule.TryParse(allowRule.Description, out var parsedAllow);
+        CheckAssertion(results, "限期规则能解析出到期时刻",
+            allowParsed && parsedAllow.Expiry.Kind == RuleExpiryKind.AtTime);
+
+        CheckAssertion(results, "不是我们格式的说明字段被忽略", !WfpRule.TryParse("随便写的说明", out _));
+        CheckAssertion(results, "缺字段的说明字段被忽略", !WfpRule.TryParse("AppGuard|1|Block", out _));
+        CheckAssertion(results, "版本号不认识时被忽略", !WfpRule.TryParse("AppGuard|9|Block|C:\\a.exe|", out _));
+
+        CheckAssertion(results, "同一规则的 key 是确定的",
+            WfpRuleStore.FilterKeyFor(blockRule, WfpNativeMethods.LayerAleAuthConnectV4)
+            == WfpRuleStore.FilterKeyFor(blockRule, WfpNativeMethods.LayerAleAuthConnectV4));
+        CheckAssertion(results, "V4 与 V6 两层的 key 不同（不会互相覆盖）",
+            WfpRuleStore.FilterKeyFor(blockRule, WfpNativeMethods.LayerAleAuthConnectV4)
+            != WfpRuleStore.FilterKeyFor(blockRule, WfpNativeMethods.LayerAleAuthConnectV6));
+
+        // ---------------- 2~4. 真实往返 ----------------
+        using (var engine = WfpEngine.Open())
+        {
+            engine.DeleteAllOurFilters();
+            engine.EnsureSublayer(persistent: false);
+
+            // 无论哪一步断言失败（异常），最后都把实验对象收拾干净。
+            try
+            {
+                W();
+                W("===== 2. 写入 → 读回 → 重复写入（幂等）=====");
+
+                var written = WfpRuleStore.Add(engine, blockRule);
+                W($"    写入阻止规则：{written} 条过滤器（预期 2 = V4 + V6）");
+                CheckAssertion(results, "一条规则写入两层", written == 2);
+
+                var layers = engine.ListOurFilters().Select(filter => filter.LayerKey).ToList();
+                CheckAssertion(results, "V4 层上确实有过滤器",
+                    layers.Contains(WfpNativeMethods.LayerAleAuthConnectV4));
+                CheckAssertion(results, "V6 层上确实有过滤器（说明 GUID 有效、层存在）",
+                    layers.Contains(WfpNativeMethods.LayerAleAuthConnectV6));
+
+                WfpRuleStore.Add(engine, blockRule);
+                var afterRepeat = engine.ListOurFilters().Count;
+                W($"    重复写入后过滤器总数 = {afterRepeat}（预期 2）");
+                CheckAssertion(results, "重复写入是幂等的，不产生重复规则", afterRepeat == 2);
+
+                var rules = WfpRuleStore.List(engine);
+                CheckAssertion(results, "读回 1 条规则（两层被识别成同一条）", rules.Count == 1);
+                CheckAssertion(results, "读回的规则内容一致",
+                    rules.Count == 1 && rules[0] == blockRule);
+
+                W();
+                W("===== 3. 允许规则与到期信息 =====");
+
+                WfpRuleStore.Add(engine, allowRule);
+                var both = WfpRuleStore.List(engine);
+                W($"    现在读到 {both.Count} 条规则");
+
+                CheckAssertion(results, "读到 2 条规则（阻止 + 允许）", both.Count == 2);
+
+                var allowBack = both.FirstOrDefault(rule => rule.Action == FirewallAction.Allow);
+                CheckAssertion(results, "允许规则被读回", allowBack is not null);
+                CheckAssertion(results, "允许规则的到期信息也跟着读回来了",
+                    allowBack is not null
+                    && allowBack.Expiry.Kind == RuleExpiryKind.AtTime
+                    && allowBack.Expiry.ExpiresAtUtc is not null);
+
+                W();
+                W("===== 4. 删除 =====");
+
+                var removedAllow = WfpRuleStore.Remove(engine, allowRule);
+                CheckAssertion(results, "删允许规则删掉 2 条过滤器", removedAllow == 2);
+                CheckAssertion(results, "删完只剩 1 条规则", WfpRuleStore.List(engine).Count == 1);
+
+                var removedBlock = WfpRuleStore.Remove(engine, blockRule);
+                CheckAssertion(results, "删阻止规则删掉 2 条过滤器", removedBlock == 2);
+                CheckAssertion(results, "删完一条规则都不剩", WfpRuleStore.List(engine).Count == 0);
+                CheckAssertion(results, "重复删除同一条规则不报错（返回 0）",
+                    WfpRuleStore.Remove(engine, blockRule) == 0);
+
+                // 2.0 的 --recover 就是这两步：先删光过滤器，再删子层。
+                engine.DeleteSublayer();
+                CheckAssertion(results, "子层删除后读不到", IsSublayerMissing(engine));
+            }
+            finally
+            {
+                // 兜底：断言失败/异常也要把自己留下的东西收拾掉。
+                try
+                {
+                    engine.DeleteAllOurFilters();
+                    engine.DeleteSublayer();
+                }
+                catch (WfpException)
+                {
+                    // 已经干净了，忽略。
+                }
             }
         }
 

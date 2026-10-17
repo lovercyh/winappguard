@@ -152,12 +152,25 @@ internal sealed class WfpEngine : IDisposable
         }
     }
 
-    /// <summary>列出本子层下所有过滤器的 key（不排序，顺序由 WFP 决定）。</summary>
-    internal IReadOnlyList<Guid> ListOurFilterKeys()
+    /// <summary>枚举结果里的一条过滤器（只取上层用得上的字段）。</summary>
+    internal readonly record struct WfpFilterInfo(
+        Guid Key,
+        string? Name,
+        string? Description,
+        Guid LayerKey,
+        uint ActionType);
+
+    /// <summary>
+    /// 列出本子层下的所有过滤器。
+    ///
+    /// 会一并读出显示名称和说明 —— 2.0 的规则就存在说明字段里
+    /// （格式见 <see cref="WfpRule"/>），所以"列出规则"实际上就是这一句。
+    /// </summary>
+    internal IReadOnlyList<WfpFilterInfo> ListOurFilters()
     {
         ThrowIfDisposed();
 
-        var keys = new List<Guid>();
+        var filters = new List<WfpFilterInfo>();
 
         var rc = WfpNativeMethods.FwpmFilterCreateEnumHandle0(_handle, IntPtr.Zero, out var enumHandle);
         if (rc != WfpNativeMethods.ERROR_SUCCESS)
@@ -191,10 +204,18 @@ internal sealed class WfpEngine : IDisposable
                         }
 
                         var filter = Marshal.PtrToStructure<WfpNativeMethods.FwpmFilter>(itemPtr);
-                        if (filter.SubLayerKey == WfpNativeMethods.OurSubLayerKey)
+                        if (filter.SubLayerKey != WfpNativeMethods.OurSubLayerKey)
                         {
-                            keys.Add(filter.FilterKey);
+                            continue;
                         }
+
+                        // 字符串必须在 FwpmFreeMemory0 之前读出来 —— 之后这块内存就还给系统了。
+                        filters.Add(new WfpFilterInfo(
+                            filter.FilterKey,
+                            Marshal.PtrToStringUni(filter.DisplayData.Name),
+                            Marshal.PtrToStringUni(filter.DisplayData.Description),
+                            filter.LayerKey,
+                            filter.Action.Type));
                     }
                 }
                 finally
@@ -208,8 +229,12 @@ internal sealed class WfpEngine : IDisposable
             WfpNativeMethods.FwpmFilterDestroyEnumHandle0(_handle, enumHandle);
         }
 
-        return keys;
+        return filters;
     }
+
+    /// <summary>本子层下所有过滤器的 key（<see cref="ListOurFilters"/> 的便捷版本）。</summary>
+    internal IReadOnlyList<Guid> ListOurFilterKeys()
+        => ListOurFilters().Select(filter => filter.Key).ToList();
 
     /// <summary>按 key 删除一条过滤器。不存在时抛 <see cref="WfpException"/>。</summary>
     internal void DeleteFilter(Guid filterKey)
@@ -222,6 +247,22 @@ internal sealed class WfpEngine : IDisposable
         {
             throw new WfpException($"删除过滤器 {filterKey}", rc);
         }
+    }
+
+    /// <summary>按 key 删除；过滤器本来就不存在时返回 false（不算错误）。</summary>
+    internal bool TryDeleteFilter(Guid filterKey)
+    {
+        ThrowIfDisposed();
+
+        var key = filterKey;
+        var rc = WfpNativeMethods.FwpmFilterDeleteByKey0(_handle, ref key);
+
+        return rc switch
+        {
+            WfpNativeMethods.ERROR_SUCCESS => true,
+            WfpNativeMethods.FWP_E_FILTER_NOT_FOUND => false,
+            _ => throw new WfpException($"删除过滤器 {filterKey}", rc),
+        };
     }
 
     /// <summary>
@@ -262,6 +303,7 @@ internal sealed class WfpEngine : IDisposable
     /// <param name="filterKey">调用方生成的确定性 key（重复执行时不会产生重复规则）。</param>
     /// <param name="displayName">显示名称。BFE 要求必填，不能传 null。</param>
     /// <param name="exePath">目标程序的可执行文件完整路径。</param>
+    /// <param name="layerKey">要挂到哪一层（V4 / V6 各挂一条）。</param>
     /// <param name="action">动作，用 <see cref="WfpNativeMethods.FWP_ACTION_BLOCK"/> 或 <see cref="WfpNativeMethods.FWP_ACTION_PERMIT"/>。</param>
     /// <param name="weight">同一子层内的权重，数值大的优先。</param>
     /// <param name="persistent">是否持久化（跨重启保留）。动态会话里必须为 false。</param>
@@ -269,6 +311,7 @@ internal sealed class WfpEngine : IDisposable
         Guid filterKey,
         string displayName,
         string exePath,
+        Guid layerKey,
         uint action,
         ulong weight,
         bool persistent)
@@ -311,7 +354,7 @@ internal sealed class WfpEngine : IDisposable
                 FilterKey = filterKey,
                 DisplayData = new WfpNativeMethods.FwpmDisplayData { Name = namePtr },
                 Flags = persistent ? WfpNativeMethods.FWPM_FILTER_FLAG_PERSISTENT : 0,
-                LayerKey = WfpNativeMethods.LayerAleAuthConnectV4,
+                LayerKey = layerKey,
                 SubLayerKey = WfpNativeMethods.OurSubLayerKey,
                 Weight = new WfpNativeMethods.FwpValue
                 {

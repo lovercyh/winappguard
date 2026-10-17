@@ -102,6 +102,17 @@ internal static class WfpNativeMethods
     /// <summary>FWPM_LAYER_ALE_AUTH_CONNECT_V4：IPv4 出站连接"授权"层。</summary>
     internal static readonly Guid LayerAleAuthConnectV4 = new("c38d57d1-05a7-4c33-904f-7fbceee60e82");
 
+    /// <summary>
+    /// FWPM_LAYER_ALE_AUTH_CONNECT_V6：IPv6 出站连接"授权"层。
+    ///
+    /// ★ 为什么必须有这一层：WFP 的层是按 IP 协议族分开的。
+    ///   只挂 V4 的 block，程序走 IPv6 就绕过去了 —— 门只关了一半。
+    ///   GUID 取自官方头文件 fwpmu.h 的 DEFINE_GUID（4a72393b-319f-44bc-84c3-ba54dcb3b6b4），
+    ///   并由 --wfp-rule-test 在虚拟机里真加一条过滤器来验证：GUID 错的话
+    ///   FwpmFilterAdd0 会直接报"层不存在"。
+    /// </summary>
+    internal static readonly Guid LayerAleAuthConnectV6 = new("4a72393b-319f-44bc-84c3-ba54dcb3b6b4");
+
     /// <summary>FWPM_CONDITION_ALE_APP_ID：按程序身份（可执行文件路径）匹配。</summary>
     internal static readonly Guid ConditionAleAppId = new("d78e1e87-8644-4ea5-9437-d809ecefc971");
 

@@ -45,6 +45,8 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --wfp-test        WFP：真实往返（建子层 → 加过滤器 → 枚举 → 删 → 删子层）+ 动态会话自动清理
 ///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
 ///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条记事本规则 → 迁移 → 核对 → 清理）
+///   WinAppGuard.SelfCheck.exe --wfp-status      WFP：只读，打印当前 2.0 规则与子层状态
+///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
@@ -200,6 +202,14 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--wfp-status", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpStatus();
+            }
+            else if (args.Contains("--wfp-recover-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpRecoverTest();
             }
             else if (args.Contains("--wfp-migrate-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4040,6 +4050,174 @@ internal static class Program
                         W($"    !!! 清理旧规则失败：{name}：{ex.Message}");
                     }
                 }
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 只读：打印 2.0 在 WFP 里的现状（子层、过滤器、规则）。
+    ///
+    /// 这是"内置规则查看器"在命令行里的对应物 —— 用的就是界面将来要调的那两个方法，
+    /// 所以这里显示得对，界面显示的依据也就是对的。
+    /// </summary>
+    private static void RunWfpStatus()
+    {
+        W("################################################################");
+        W("#   2.0 WFP 状态（只读，不做任何修改）                          #");
+        W("################################################################");
+        W();
+
+        using var engine = WfpEngine.Open();
+
+        if (IsSublayerMissing(engine))
+        {
+            W("  子层：不存在 —— 本程序还没有往 WFP 里写过任何东西。");
+        }
+        else
+        {
+            var (weight, persistent) = engine.ReadSublayer();
+            W($"  子层：存在，权重 0x{weight:X4}，持久化={persistent}");
+        }
+
+        var filters = engine.ListOurFilters();
+        W($"  过滤器：{filters.Count} 条（每条规则占 V4/V6 两条）");
+
+        var rules = WfpRuleStore.List(engine);
+        if (rules.Count == 0)
+        {
+            W("  规则：没有");
+        }
+        else
+        {
+            W($"  规则：{rules.Count} 条");
+            foreach (var rule in rules)
+            {
+                var action = rule.Action == FirewallAction.Block ? "阻止" : "允许";
+                var expiry = rule.Expiry.Describe(DateTime.UtcNow);
+                W($"    {action}  {rule.ApplicationPath}  [{expiry}]");
+            }
+        }
+
+        var unrecognized = filters.Count(filter => !WfpRule.TryParse(filter.Description, out _));
+        if (unrecognized > 0)
+        {
+            W($"  ⚠️ 有 {unrecognized} 条过滤器不是当前格式写的（可能是旧版本留下的）。");
+            W("     确认没有需要保留的规则后，用 --wfp-recover-test 清理。");
+        }
+
+        W();
+        W("  说明：这里只读，不修改任何东西。");
+    }
+
+    /// <summary>
+    /// 恢复（--recover）自检。
+    ///
+    /// 要证明三件事：
+    ///   1. 能把本程序在 WFP 里的东西**全部**清掉（过滤器 + 子层）；
+    ///   2. **不碰** Windows 防火墙的规则（那是迁移流程的地盘）；
+    ///   3. 本来就干净时再恢复一次不报错（幂等，救命命令不能比问题更危险）。
+    ///
+    /// ⚠️ 这个自检会清空本程序在 WFP 里的**所有**规则（这正是 --recover 的语义），
+    ///    只适合在开发/虚拟机里跑。它不会碰 Windows 防火墙规则以外的任何系统对象。
+    /// </summary>
+    private static void RunWfpRecoverTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   WFP 恢复自检（--recover：清自己的东西，不碰 Windows 防火墙） #");
+        W("################################################################");
+        W();
+
+        var targetExe = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+        var createdFirewallRule = string.Empty;
+
+        // 记录测试前就存在的记事本规则：万一用户本来就有，测试结束时不能删掉它。
+        var preexisting = FirewallManager.GetAppGuardRules()
+            .Where(rule => string.Equals(rule.ApplicationPath, targetExe, StringComparison.OrdinalIgnoreCase))
+            .Select(rule => rule.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            // ---------------- 1. 先造出"脏"现场 ----------------
+            W("===== 1. 先写入 2 条规则（模拟用过的状态）=====");
+
+            using (var engine = WfpEngine.Open())
+            {
+                engine.DeleteAllOurFilters();
+                engine.DeleteSublayer();
+                engine.EnsureSublayer(persistent: true);
+
+                WfpRuleStore.Add(engine, new WfpRule(targetExe, FirewallAction.Block));
+                WfpRuleStore.Add(engine, new WfpRule(targetExe, FirewallAction.Allow));
+
+                var filterCount = engine.ListOurFilters().Count;
+                W($"    过滤器 = {filterCount} 条（预期 4），规则 = {WfpRuleStore.List(engine).Count} 条（预期 2）");
+                CheckAssertion(results, "现场已造好：2 条规则 → 4 条过滤器", filterCount == 4);
+            }
+
+            // 再造一条 Windows 防火墙规则，用来证明恢复**不会**碰它。
+            createdFirewallRule = FirewallManager.CreateBlockRule(targetExe);
+            W($"    另建一条 Windows 防火墙规则（用来验证恢复不碰它）：{createdFirewallRule}");
+            CheckAssertion(results, "Windows 防火墙里确实有一条规则",
+                FirewallManager.GetAppGuardRules().Any(rule => rule.Name == createdFirewallRule));
+
+            // ---------------- 2. 恢复 ----------------
+            W();
+            W("===== 2. 执行恢复 =====");
+
+            var report = WfpRecovery.Recover();
+            W($"    {report.Describe()}");
+
+            CheckAssertion(results, "删掉了 4 条过滤器", report.FiltersDeleted == 4);
+            CheckAssertion(results, "子层也被删掉了", report.SublayerDeleted);
+            CheckAssertion(results, "不是「本来就干净」的状态", !report.WasAlreadyClean);
+
+            using (var engine = WfpEngine.Open())
+            {
+                CheckAssertion(results, "恢复后过滤器 0 条", engine.ListOurFilters().Count == 0);
+                CheckAssertion(results, "恢复后子层不存在", IsSublayerMissing(engine));
+            }
+
+            CheckAssertion(results, "恢复**没有**碰 Windows 防火墙的规则",
+                FirewallManager.GetAppGuardRules().Any(rule => rule.Name == createdFirewallRule));
+
+            // ---------------- 3. 幂等 ----------------
+            W();
+            W("===== 3. 再恢复一次（幂等）=====");
+
+            var again = WfpRecovery.Recover();
+            W($"    {again.Describe()}");
+
+            CheckAssertion(results, "本来就干净时恢复不报错、删除 0 条",
+                again.FiltersDeleted == 0 && again.WasAlreadyClean);
+        }
+        finally
+        {
+            // 收拾：只删自己建的那条 Windows 防火墙规则（测试前就存在的不动）。
+            if (!string.IsNullOrEmpty(createdFirewallRule) && !preexisting.Contains(createdFirewallRule))
+            {
+                try
+                {
+                    FirewallManager.DeleteRule(createdFirewallRule);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    W($"    !!! 清理 Windows 防火墙规则失败：{ex.Message}");
+                }
+            }
+
+            // 兜底：万一上面中途异常，WFP 自己也再清一次。
+            try
+            {
+                WfpRecovery.Recover();
+            }
+            catch (WfpException)
+            {
+                // 忽略。
             }
         }
 

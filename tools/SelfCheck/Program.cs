@@ -44,7 +44,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --strict-mode-lifecycle-test  严格模式：**同上**，验证开启 / 关闭 / 崩溃后兜底 / 拒绝覆盖别人的策略
 ///   WinAppGuard.SelfCheck.exe --wfp-test        WFP：真实往返（建子层 → 加过滤器 → 枚举 → 删 → 删子层）+ 动态会话自动清理
 ///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
-///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条测试规则 → 迁移 → 核对 → 清理）
+///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条记事本规则 → 迁移 → 核对 → 清理）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
@@ -3893,8 +3893,14 @@ internal static class Program
         W("################################################################");
         W();
 
-        var exePath = Environment.ProcessPath!;
+        // ⚠️ 迁移对象不能选"自检程序自己"：那会撞上产品的自我保护
+        //    （拦住自己就再也打不开界面解除拦截了，这是刻意设的闸，不该绕过）。
+        //    记事本是最合适的替身：一定存在、不在受保护名单里、拦掉也不影响任何功能。
+        var targetExe = Path.Combine(Environment.SystemDirectory, "notepad.exe");
         var createdRuleNames = new List<string>();
+
+        W($"    迁移测试对象 = {targetExe}");
+        CheckAssertion(results, "迁移测试对象存在（记事本）", File.Exists(targetExe));
 
         // ---------------- 1. 可迁移性判断（纯逻辑，不碰系统） ----------------
         W("===== 1. 可迁移性判断 =====");
@@ -3907,7 +3913,7 @@ internal static class Program
             => new()
             {
                 Name = "AppGuard_Test_x",
-                ApplicationPath = path ?? exePath,
+                ApplicationPath = path ?? targetExe,
                 Description = string.Empty,
                 Grouping = AppConstants.RuleGroupingName,
                 Enabled = enabled,
@@ -3938,10 +3944,10 @@ internal static class Program
             {
                 // ---------------- 2. 造两条真实的 1.x 规则 ----------------
                 W();
-                W("===== 2. 造两条真实的 1.x 规则（都指向本自检程序）=====");
+                W("===== 2. 造两条真实的 1.x 规则（都指向记事本）=====");
 
-                createdRuleNames.Add(FirewallManager.CreateBlockRule(exePath));
-                createdRuleNames.Add(FirewallManager.CreateAllowRule(exePath));
+                createdRuleNames.Add(FirewallManager.CreateBlockRule(targetExe));
+                createdRuleNames.Add(FirewallManager.CreateAllowRule(targetExe));
 
                 foreach (var name in createdRuleNames)
                 {

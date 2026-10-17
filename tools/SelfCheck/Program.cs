@@ -4314,6 +4314,10 @@ internal static class Program
             CommandLine.Parse(new[] { "--migrate" }).Kind == CommandKind.Migrate);
         CheckAssertion(results, "--migrate 后面多写了参数 → 参数错误",
             CommandLine.Parse(new[] { "--migrate", "x" }).Kind == CommandKind.Invalid);
+        CheckAssertion(results, "--recover 被解析成 Recover",
+            CommandLine.Parse(new[] { "--recover" }).Kind == CommandKind.Recover);
+        CheckAssertion(results, "--recover 后面多写了参数 → 参数错误",
+            CommandLine.Parse(new[] { "--recover", "x" }).Kind == CommandKind.Invalid);
 
         var unknown = CommandLine.Parse(new[] { "--nope" });
         CheckAssertion(results, "不认识的参数 → Invalid，并且给出说明",

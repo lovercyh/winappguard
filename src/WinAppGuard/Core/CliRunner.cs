@@ -1,3 +1,4 @@
+using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
@@ -44,6 +45,7 @@ internal static class CliRunner
             case CommandKind.ListBlocked:
             case CommandKind.UnblockAll:
             case CommandKind.Migrate:
+            case CommandKind.Recover:
                 // 读/改防火墙都要管理员权限。
                 if (!AdminHelper.IsRunningAsAdmin())
                 {
@@ -55,8 +57,8 @@ internal static class CliRunner
                 {
                     // 命令行也可能面对一台从 1.x 升级上来的机器：
                     // 先把旧规则迁过来，后面的读写才是完整的一幅图。
-                    // （--migrate 自己会做并打印报告，这里不能再做一次。）
-                    if (options.Kind != CommandKind.Migrate)
+                    // （--migrate 自己会做并打印报告；--recover 是要清空，更不能先迁移。）
+                    if (options.Kind is not (CommandKind.Migrate or CommandKind.Recover))
                     {
                         StartupMigration.RunIfNeeded(out _);
                     }
@@ -66,6 +68,7 @@ internal static class CliRunner
                         CommandKind.Block => RunBlock(options.ProgramPath!),
                         CommandKind.ListBlocked => RunListBlocked(),
                         CommandKind.Migrate => RunMigrate(),
+                        CommandKind.Recover => RunRecover(),
                         _ => RunUnblockAll(options.Confirmed),
                     };
                 }
@@ -153,6 +156,52 @@ internal static class CliRunner
         }
 
         LocalLog.Operation($"命令行：删除全部 AppGuard 规则，实际删除 {deleted} 条");
+        return ExitOk;
+    }
+
+    /// <summary>
+    /// 救命命令：把本程序留在系统里的一切都清掉。
+    ///
+    /// 三样东西缺一不可：
+    ///   1. 2.0 在 WFP 里的对象（过滤器 + 子层）；
+    ///   2. 1.x 遗留的「全局默认出站 = 阻止」—— 这一项最要命，它会让整台机器断网，
+    ///      而且和"规则"看起来毫无关系，用户很难自己想到；
+    ///   3. 1.x 遗留的 <c>AppGuard_*</c> Windows 防火墙规则。
+    ///
+    /// 只删本程序自己的东西：WFP 按子层 GUID 过滤，防火墙按 <c>AppGuard_</c> 前缀
+    /// （安全闸在 <see cref="FirewallManager.DeleteRule"/> 里），别的软件和系统自带的一概不碰。
+    /// </summary>
+    private static int RunRecover()
+    {
+        // 1) 2.0 的对象。
+        var report = WfpRecovery.Recover();
+        Console.WriteLine(report.Describe());
+
+        // 2) 1.x 的全局策略。
+        var strict = StrictModeManager.RecoverIfLeftOn();
+        Console.WriteLine(strict.WasLeftOn
+            ? $"已还原 1.x 遗留的全局出站策略：{strict.Message}"
+            : "1.x 的全局出站策略正常（没有遗留的「默认阻止」）。");
+
+        // 3) 1.x 的规则。
+        var legacy = FirewallManager.GetAppGuardRules();
+        var deleted = 0;
+        foreach (var rule in legacy)
+        {
+            if (FirewallManager.DeleteRule(rule.Name))
+            {
+                deleted++;
+            }
+        }
+
+        Console.WriteLine(deleted > 0
+            ? $"另外删除了 {deleted} 条 1.x 遗留的 Windows 防火墙规则。"
+            : "没有 1.x 遗留的 Windows 防火墙规则。");
+
+        Console.WriteLine();
+        Console.WriteLine("# 其他软件和系统自带的规则 / WFP 对象没有受到影响。");
+
+        LocalLog.Operation($"命令行：恢复（WFP：{report.Describe()}；1.x 规则删除 {deleted} 条）");
         return ExitOk;
     }
 

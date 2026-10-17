@@ -25,6 +25,7 @@ public static class CliText
         "  WinAppGuard.exe --list-blocked               列出所有「阻止」规则",
         "  WinAppGuard.exe --unblock-all [--yes]        删除本工具创建的全部规则",
         "  WinAppGuard.exe --migrate                   把 1.x 的规则迁到 2.0（启动时也会自动做）",
+        "  WinAppGuard.exe --recover                   清掉本程序留下的一切（出问题时的救命命令）",
         "  WinAppGuard.exe --help                       显示这段帮助",
         "",
         "说明：",

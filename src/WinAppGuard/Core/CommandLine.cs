@@ -18,6 +18,9 @@ public enum CommandKind
     /// <summary><c>--migrate</c>：把 1.x 的规则迁到 2.0（通常不用手动执行）。</summary>
     Migrate,
 
+    /// <summary><c>--recover</c>：清掉本程序留下的一切，把机器恢复原状。</summary>
+    Recover,
+
     /// <summary><c>--help</c></summary>
     Help,
 
@@ -57,6 +60,7 @@ public static class CommandLine
     public const string ListBlockedSwitch = "--list-blocked";
     public const string UnblockAllSwitch = "--unblock-all";
     public const string MigrateSwitch = "--migrate";
+    public const string RecoverSwitch = "--recover";
     public const string YesSwitch = "--yes";
     public const string HelpSwitch = "--help";
     public const string AutostartSwitch = "--autostart";
@@ -112,6 +116,11 @@ public static class CommandLine
                 return tokens.Count > 1
                     ? Invalid(isAutostart, $"多余的参数：{tokens[1]}")
                     : new CommandLineOptions(CommandKind.Migrate, null, false, isAutostart, null);
+
+            case RecoverSwitch:
+                return tokens.Count > 1
+                    ? Invalid(isAutostart, $"多余的参数：{tokens[1]}")
+                    : new CommandLineOptions(CommandKind.Recover, null, false, isAutostart, null);
 
             default:
                 return Invalid(isAutostart, $"无法识别的参数：{tokens[0]}");

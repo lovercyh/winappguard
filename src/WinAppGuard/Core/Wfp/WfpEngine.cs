@@ -43,6 +43,16 @@ internal sealed class WfpEngine : IDisposable
     /// <summary>本会话是否是动态会话。</summary>
     internal bool IsDynamic { get; }
 
+    /// <summary>
+    /// 子层实际的持久化状态（由 <see cref="EnsureSublayer"/> 读回，不是"打算设成什么"）。
+    ///
+    /// 为什么要以读回来的为准：持久化的过滤器**不能**挂在非持久化的子层上，
+    /// WFP 会报 <c>FWP_E_INCOMPATIBLE_TXN (0x80320016)</c>
+    /// （"该调用尝试将两个生存时间不兼容的对象相互关联"）。
+    /// 如果不按实际情况对齐，写入就会以一个看不懂的错误码失败。
+    /// </summary>
+    internal bool SublayerPersistent { get; private set; }
+
     /// <summary>本程序的子层 GUID。发布后不可更改。</summary>
     internal static Guid SubLayerKey => WfpNativeMethods.OurSubLayerKey;
 
@@ -97,10 +107,23 @@ internal sealed class WfpEngine : IDisposable
             };
 
             var rc = WfpNativeMethods.FwpmSubLayerAdd0(_handle, ref subLayer, IntPtr.Zero);
-            if (rc != WfpNativeMethods.ERROR_SUCCESS && rc != WfpNativeMethods.FWP_E_ALREADY_EXISTS)
+
+            if (rc == WfpNativeMethods.ERROR_SUCCESS)
             {
-                throw new WfpException("创建子层", rc);
+                SublayerPersistent = persistent;
+                return;
             }
+
+            if (rc == WfpNativeMethods.FWP_E_ALREADY_EXISTS)
+            {
+                // 已经存在：以**系统里实际的状态**为准，不能沿用调用方的假设。
+                // （比如上一次创建的是非持久化子层，这次想建持久化的 —— 加不进去，
+                //   但后续过滤器必须按"非持久化"来处理，否则会 0x80320016。）
+                SublayerPersistent = ReadSublayer().Persistent;
+                return;
+            }
+
+            throw new WfpException("创建子层", rc);
         }
         finally
         {

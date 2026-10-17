@@ -3638,6 +3638,9 @@ internal static class Program
                 W($"    先清理了 {leftover} 条上次遗留的过滤器");
             }
 
+            // 旧子层可能是上一次失败留下的（持久化状态也未必和这次要建的一致），先删掉。
+            engine.DeleteSublayer();
+
             engine.EnsureSublayer(persistent: false);
 
             var (weight, persistent) = engine.ReadSublayer();
@@ -3775,7 +3778,13 @@ internal static class Program
         using (var engine = WfpEngine.Open())
         {
             engine.DeleteAllOurFilters();
-            engine.EnsureSublayer(persistent: false);
+
+            // 生产环境就是持久化子层（2.0 的规则要跨重启），这里按同样形状测。
+            // 先删掉可能残留的旧子层（例如上一次失败时建的非持久化子层），
+            // 否则"已存在"会让这次按旧状态走，测的就不是生产的形状了。
+            engine.DeleteSublayer();
+            engine.EnsureSublayer(persistent: true);
+            CheckAssertion(results, "子层是持久化的（2.0 的实际形状）", engine.SublayerPersistent);
 
             // 无论哪一步断言失败（异常），最后都把实验对象收拾干净。
             try

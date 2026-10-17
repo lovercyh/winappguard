@@ -58,8 +58,10 @@ internal static class WfpRuleStore
             ? (WfpNativeMethods.FWP_ACTION_BLOCK, WeightBlock)
             : (WfpNativeMethods.FWP_ACTION_PERMIT, WeightAllow);
 
-        // 动态会话里不能建持久对象（严格模式用的就是动态会话）。
-        var persistent = !engine.IsDynamic;
+        // ⚠️ 过滤器的持久化必须**跟随子层**：
+        //   持久化过滤器挂在非持久化子层上会被 WFP 拒绝（0x80320016，生存时间不兼容）。
+        //   动态会话里本来就不允许建持久对象，所以也排除在外。
+        var persistent = !engine.IsDynamic && engine.SublayerPersistent;
 
         var written = 0;
 

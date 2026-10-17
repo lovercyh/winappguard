@@ -3597,6 +3597,7 @@ internal static class Program
         W("===== 1. 结构体布局（x64）=====");
         W($"    FWPM_FILTER0   = {Marshal.SizeOf<WfpNativeMethods.FwpmFilter>()} 字节（应为 200）");
         W($"    FWPM_SUBLAYER0 = {Marshal.SizeOf<WfpNativeMethods.FwpmSubLayer>()} 字节（应为 72）");
+        W($"    FWPM_ACTION0   = {Marshal.SizeOf<WfpNativeMethods.FwpmAction>()} 字节（应为 20：GUID 按 4 字节对齐）");
 
         var layoutOk = true;
         try

@@ -318,7 +318,12 @@ internal static class WfpNativeMethods
         CheckLayout<FwpmFilter>(200, "FWPM_FILTER0");
         CheckLayout<FwpmSubLayer>(72, "FWPM_SUBLAYER0");
         CheckLayout<FwpmFilterCondition>(40, "FWPM_FILTER_CONDITION0");
-        CheckLayout<FwpmAction>(24, "FWPM_ACTION0");
+
+        // FWPM_ACTION0 = FWP_ACTION_TYPE(4) + union{GUID}(16) = 20 字节。
+        // ⚠️ GUID 在 Windows 上的对齐是 4，不是 8 —— 所以不会填充到 24。
+        //    （这里最初就写错过一次，被 EnsureLayout 自己抓了出来。）
+        CheckLayout<FwpmAction>(20, "FWPM_ACTION0");
+
         CheckLayout<FwpmSession>(72, "FWPM_SESSION0");
         CheckLayout<FwpValue>(16, "FWP_VALUE0");
         CheckLayout<FwpConditionValue>(16, "FWP_CONDITION_VALUE0");
@@ -332,7 +337,8 @@ internal static class WfpNativeMethods
         {
             throw new InvalidOperationException(
                 $"{name} 的结构体尺寸不对：期望 {expected} 字节，实际 {actual} 字节。" +
-                "这通常意味着某个字段被写成了指针而不是结构体本身，请对照官方文档核对。");
+                "这可能是某个字段的类型写错了（例如把结构体写成指针），" +
+                "也可能是这里记录的期望值本身算错了。两种都要对照官方定义核对。");
         }
     }
 }

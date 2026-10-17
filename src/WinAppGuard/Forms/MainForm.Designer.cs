@@ -20,7 +20,6 @@ partial class MainForm
     private System.ComponentModel.IContainer? components = null;
 
     private Label _titleLabel = null!;
-    private Label _descriptionLabel = null!;
     private Label _safetyNoticeLabel = null!;
 
     // ================= 标签页 =================
@@ -155,7 +154,6 @@ partial class MainForm
         components = new System.ComponentModel.Container();
 
         _titleLabel = new Label();
-        _descriptionLabel = new Label();
         _safetyNoticeLabel = new Label();
         _tabControl = new TabControl();
         _tabConnections = new TabPage();
@@ -272,28 +270,16 @@ partial class MainForm
         _titleLabel.TabIndex = 0;
         _titleLabel.Text = "WinAppGuard";
 
-        // ---------- 一句话说明 ----------
-        _descriptionLabel.AutoSize = true;
-        _descriptionLabel.ForeColor = SystemColors.GrayText;
-        _descriptionLabel.Location = new Point(27, 52);
-        _descriptionLabel.MaximumSize = new Size(1120, 0);
-        _descriptionLabel.Name = "_descriptionLabel";
-        _descriptionLabel.Size = new Size(700, 17);
-        _descriptionLabel.TabIndex = 1;
-        _descriptionLabel.Text = "Windows 程序联网控制工具。它本身不处理流量，真正生效的是 Windows 筛选平台（WFP）里的过滤器，" +
-                                 "本工具只负责按你的选择创建和清理这些过滤器。";
-
-        // ---------- 当前阶段提示 ----------
-        // ---------- 安全约定（常驻说明，不再是「当前阶段」）----------
+        // ---------- 说明（常驻）----------
         //
         // 刻意关掉 AutoSize 并写死高度：这段文字是固定长度的常驻说明，
         // 万一以后有人把它改长了、换行了，也只会被裁掉一点，绝不会往下长出去压住标签页。
         _safetyNoticeLabel.AutoSize = false;
         _safetyNoticeLabel.ForeColor = Color.FromArgb(191, 87, 0);
-        _safetyNoticeLabel.Location = new Point(27, 74);
+        _safetyNoticeLabel.Location = new Point(27, 52);
         _safetyNoticeLabel.Name = "_safetyNoticeLabel";
         _safetyNoticeLabel.Size = new Size(1120, 20);
-        _safetyNoticeLabel.TabIndex = 2;
+        _safetyNoticeLabel.TabIndex = 1;
         // ⚠️ 这里的措辞必须和实际行为一致。
         // 有两处会联网：IP 归属查询（本程序自己的代码）和证书吊销检查
         // （Windows 证书服务代表程序发起）。不能写「本程序不访问网络」，那是在骗用户。
@@ -306,7 +292,7 @@ partial class MainForm
         // 所以文案**必须放得下** —— 加长之后后半句会被直接裁掉，而且不报错。
         // 自检里有一条断言专门量它（--ui-check 的「顶部安全横幅放得下」）。
         _safetyNoticeLabel.Text =
-            "安全约定：只在专属子层里创建和删除本工具的过滤器，不修改 Windows 防火墙的任何设置" +
+            "说明：只在专属子层里创建和删除本工具的过滤器，不修改 Windows 防火墙的任何设置" +
             "（严格模式只在本进程内生效）；默认会联网查 IP 归属与证书吊销，都能在「设置」页关闭。";
 
         // ==================================================================
@@ -1070,7 +1056,6 @@ partial class MainForm
         ClientSize = new Size(1180, 700);
         Controls.Add(_tabControl);
         Controls.Add(_safetyNoticeLabel);
-        Controls.Add(_descriptionLabel);
         Controls.Add(_titleLabel);
         Controls.Add(_exitButton);
         Controls.Add(_statusStrip);

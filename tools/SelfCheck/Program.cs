@@ -3653,6 +3653,7 @@ internal static class Program
             var filterId = engine.AddAppIdFilter(
                 filterKey,
                 "WinAppGuard 自检过滤器",
+                null,
                 exePath,
                 WfpNativeMethods.LayerAleAuthConnectV4,
                 WfpNativeMethods.FWP_ACTION_BLOCK,
@@ -3687,6 +3688,7 @@ internal static class Program
             dynamicEngine.AddAppIdFilter(
                 dynamicKey,
                 "WinAppGuard 自检（动态会话）",
+                null,
                 exePath,
                 WfpNativeMethods.LayerAleAuthConnectV4,
                 WfpNativeMethods.FWP_ACTION_BLOCK,
@@ -3801,6 +3803,14 @@ internal static class Program
                     layers.Contains(WfpNativeMethods.LayerAleAuthConnectV4));
                 CheckAssertion(results, "V6 层上确实有过滤器（说明 GUID 有效、层存在）",
                     layers.Contains(WfpNativeMethods.LayerAleAuthConnectV6));
+
+                // 专门钉住一类错误：过滤器加进去了，但说明字段没写进去 ——
+                // 那时"写入成功"却"读回 0 条规则"，症状很迷惑。
+                var stored = engine.ListOurFilters();
+                CheckAssertion(results, "两条过滤器的说明字段里都存着规则内容",
+                    stored.Count == 2 && stored.All(filter => WfpRule.TryParse(filter.Description, out _)));
+                CheckAssertion(results, "显示名称也已写入",
+                    stored.Count == 2 && stored.All(filter => !string.IsNullOrEmpty(filter.Name)));
 
                 WfpRuleStore.Add(engine, blockRule);
                 var afterRepeat = engine.ListOurFilters().Count;

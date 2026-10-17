@@ -325,6 +325,7 @@ internal sealed class WfpEngine : IDisposable
     /// </summary>
     /// <param name="filterKey">调用方生成的确定性 key（重复执行时不会产生重复规则）。</param>
     /// <param name="displayName">显示名称。BFE 要求必填，不能传 null。</param>
+    /// <param name="description">说明字段。2.0 的规则内容就存在这里（见 <see cref="WfpRule.Description"/>）；不需要时传 null。</param>
     /// <param name="exePath">目标程序的可执行文件完整路径。</param>
     /// <param name="layerKey">要挂到哪一层（V4 / V6 各挂一条）。</param>
     /// <param name="action">动作，用 <see cref="WfpNativeMethods.FWP_ACTION_BLOCK"/> 或 <see cref="WfpNativeMethods.FWP_ACTION_PERMIT"/>。</param>
@@ -333,6 +334,7 @@ internal sealed class WfpEngine : IDisposable
     internal ulong AddAppIdFilter(
         Guid filterKey,
         string displayName,
+        string? description,
         string exePath,
         Guid layerKey,
         uint action,
@@ -344,6 +346,7 @@ internal sealed class WfpEngine : IDisposable
         var appIdPtr = IntPtr.Zero;
         var weightPtr = IntPtr.Zero;
         var namePtr = IntPtr.Zero;
+        var descriptionPtr = IntPtr.Zero;
         var conditionPtr = IntPtr.Zero;
 
         try
@@ -358,6 +361,11 @@ internal sealed class WfpEngine : IDisposable
             Marshal.WriteInt64(weightPtr, unchecked((long)weight));
 
             namePtr = Marshal.StringToHGlobalUni(displayName);
+
+            if (description is not null)
+            {
+                descriptionPtr = Marshal.StringToHGlobalUni(description);
+            }
 
             conditionPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>());
             var condition = new WfpNativeMethods.FwpmFilterCondition
@@ -375,7 +383,11 @@ internal sealed class WfpEngine : IDisposable
             var filter = new WfpNativeMethods.FwpmFilter
             {
                 FilterKey = filterKey,
-                DisplayData = new WfpNativeMethods.FwpmDisplayData { Name = namePtr },
+                DisplayData = new WfpNativeMethods.FwpmDisplayData
+                {
+                    Name = namePtr,
+                    Description = descriptionPtr,
+                },
                 Flags = persistent ? WfpNativeMethods.FWPM_FILTER_FLAG_PERSISTENT : 0,
                 LayerKey = layerKey,
                 SubLayerKey = WfpNativeMethods.OurSubLayerKey,
@@ -412,6 +424,11 @@ internal sealed class WfpEngine : IDisposable
             if (namePtr != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(namePtr);
+            }
+
+            if (descriptionPtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(descriptionPtr);
             }
 
             if (weightPtr != IntPtr.Zero)

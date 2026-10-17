@@ -73,6 +73,7 @@ internal static class WfpRuleStore
             engine.AddAppIdFilter(
                 key,
                 rule.DisplayName,
+                rule.Description,
                 rule.ApplicationPath,
                 layer,
                 action,

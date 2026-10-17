@@ -2678,9 +2678,14 @@ internal static class Program
 
             using (var engine = WfpEngine.Open())
             {
+                // 子层里同时躺着两类过滤器：规则自己的（每条 V4/V6 各一条）和严格模式的。
+                var ruleFilterCount = RuleEngine.GetRules().Count * 2;
                 var filterCount = engine.ListOurFilters().Count;
-                var expected = permitted.Count * 2 + 2;
-                W($"    过滤器 = {filterCount} 条（预期 {expected} = 放行程序 × 2 层 + 阻止全部 × 2 层）");
+                var expected = permitted.Count * 2 + 2 + ruleFilterCount;
+
+                W($"    过滤器 = {filterCount} 条" +
+                  $"（预期 {expected} = 放行 {permitted.Count} × 2 + 阻止全部 2 + 规则 {ruleFilterCount}）");
+
                 CheckAssertion(results, "过滤器条数正确", filterCount == expected);
             }
 
@@ -2700,8 +2705,13 @@ internal static class Program
 
             using (var engine = WfpEngine.Open())
             {
-                CheckAssertion(results, "关闭后过滤器全部消失（系统自动删除）",
-                    engine.ListOurFilters().Count == 0);
+                // 关闭严格模式**不该**动规则 —— 所以剩下的应当正好是规则自己的过滤器。
+                var remaining = engine.ListOurFilters().Count;
+                var ruleFilterCount = RuleEngine.GetRules().Count * 2;
+
+                W($"    关闭后过滤器 = {remaining} 条（预期 {ruleFilterCount}：只剩规则自己的）");
+                CheckAssertion(results, "严格模式的过滤器全部消失（规则自己的保留）",
+                    remaining == ruleFilterCount);
             }
 
             CheckAssertion(results, "没开时再关 → 拒绝", !StrictModeManager.Disable().Success);
@@ -2801,8 +2811,12 @@ internal static class Program
 
             using (var engine = WfpEngine.Open())
             {
-                CheckAssertion(results, "重建后过滤器条数同步更新",
-                    engine.ListOurFilters().Count == after.Count * 2 + 2);
+                var ruleFilterCount = RuleEngine.GetRules().Count * 2;
+                var filterCount = engine.ListOurFilters().Count;
+                var expected = after.Count * 2 + 2 + ruleFilterCount;
+
+                W($"    过滤器 = {filterCount} 条（预期 {expected} = 放行 {after.Count} × 2 + 阻止全部 2 + 规则 {ruleFilterCount}）");
+                CheckAssertion(results, "重建后过滤器条数同步更新", filterCount == expected);
             }
 
             W();
@@ -2822,7 +2836,10 @@ internal static class Program
 
             using (var engine = WfpEngine.Open())
             {
-                CheckAssertion(results, "关闭后过滤器 0 条", engine.ListOurFilters().Count == 0);
+                // 关闭严格模式只撤销会话，规则自己的过滤器必须原样保留。
+                var ruleFilterCount = RuleEngine.GetRules().Count * 2;
+                CheckAssertion(results, "关闭后只剩规则自己的过滤器",
+                    engine.ListOurFilters().Count == ruleFilterCount);
             }
 
             CheckAssertion(results, "没开启时 RefreshIfEnabled 返回 null",

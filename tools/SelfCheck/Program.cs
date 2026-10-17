@@ -44,6 +44,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --strict-mode-lifecycle-test  严格模式：**同上**，验证开启 / 关闭 / 崩溃后兜底 / 拒绝覆盖别人的策略
 ///   WinAppGuard.SelfCheck.exe --wfp-test        WFP：真实往返（建子层 → 加过滤器 → 枚举 → 删 → 删子层）+ 动态会话自动清理
 ///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
+///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条测试规则 → 迁移 → 核对 → 清理）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
@@ -199,6 +200,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--wfp-migrate-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpMigrateTest();
             }
             else if (args.Contains("--wfp-rule-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3866,6 +3871,168 @@ internal static class Program
                 catch (WfpException)
                 {
                     // 已经干净了，忽略。
+                }
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 迁移自检：造两条**真实的** 1.x 规则 → 迁移 → 核对 → 清理。
+    ///
+    /// 只迁移"自己造的那两条"，绝不碰用户已有的真实规则 ——
+    /// 所以这个自检在机器上有多少条 <c>AppGuard_</c> 规则都是安全的。
+    /// </summary>
+    private static void RunWfpMigrateTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   1.x → 2.0 规则迁移自检（只迁移自己造的两条测试规则）        #");
+        W("################################################################");
+        W();
+
+        var exePath = Environment.ProcessPath!;
+        var createdRuleNames = new List<string>();
+
+        // ---------------- 1. 可迁移性判断（纯逻辑，不碰系统） ----------------
+        W("===== 1. 可迁移性判断 =====");
+
+        FirewallRuleItem MakeRule(
+            FirewallDirection direction = FirewallDirection.Outbound,
+            int protocol = 256,
+            bool enabled = true,
+            string? path = null)
+            => new()
+            {
+                Name = "AppGuard_Test_x",
+                ApplicationPath = path ?? exePath,
+                Description = string.Empty,
+                Grouping = AppConstants.RuleGroupingName,
+                Enabled = enabled,
+                Action = FirewallAction.Block,
+                Direction = direction,
+                Protocol = protocol,
+            };
+
+        CheckAssertion(results, "普通出站阻止规则：可迁移", WfpMigration.Validate(MakeRule()) is null);
+        CheckAssertion(results, "入站规则：跳过",
+            WfpMigration.Validate(MakeRule(direction: FirewallDirection.Inbound)) is not null);
+        CheckAssertion(results, "带协议限制的规则：跳过",
+            WfpMigration.Validate(MakeRule(protocol: 6)) is not null);
+        CheckAssertion(results, "停用的规则：跳过（不能因为迁移把它变生效）",
+            WfpMigration.Validate(MakeRule(enabled: false)) is not null);
+        CheckAssertion(results, "程序文件已不存在：跳过",
+            WfpMigration.Validate(MakeRule(path: @"C:\WinAppGuard-不存在的目录\none.exe")) is not null);
+        CheckAssertion(results, "没有指定程序的规则：跳过",
+            WfpMigration.Validate(MakeRule(path: " ")) is not null);
+
+        using (var engine = WfpEngine.Open())
+        {
+            engine.DeleteAllOurFilters();
+            engine.DeleteSublayer();
+            engine.EnsureSublayer(persistent: true);
+
+            try
+            {
+                // ---------------- 2. 造两条真实的 1.x 规则 ----------------
+                W();
+                W("===== 2. 造两条真实的 1.x 规则（都指向本自检程序）=====");
+
+                createdRuleNames.Add(FirewallManager.CreateBlockRule(exePath));
+                createdRuleNames.Add(FirewallManager.CreateAllowRule(exePath));
+
+                foreach (var name in createdRuleNames)
+                {
+                    W($"    已创建：{name}");
+                }
+
+                var mine = FirewallManager.GetAppGuardRules()
+                    .Where(rule => createdRuleNames.Contains(rule.Name))
+                    .ToList();
+
+                CheckAssertion(results, "读到 2 条刚创建的 1.x 规则", mine.Count == 2);
+                CheckAssertion(results, "其中一条阻止、一条允许",
+                    mine.Count(rule => rule.Action == FirewallAction.Block) == 1
+                    && mine.Count(rule => rule.Action == FirewallAction.Allow) == 1);
+
+                // ---------------- 3. 迁移 ----------------
+                W();
+                W("===== 3. 迁移 =====");
+
+                var report = WfpMigration.Migrate(engine, mine);
+                W($"    迁移 = {report.Migrated}，跳过 = {report.Skipped}，" +
+                  $"失败 = {report.Failed}，删除旧规则 = {report.FirewallRulesDeleted}");
+
+                foreach (var line in report.Details)
+                {
+                    W($"      {line}");
+                }
+
+                CheckAssertion(results, "2 条都迁移成功", report.Migrated == 2);
+                CheckAssertion(results, "没有失败项", report.Succeeded);
+                CheckAssertion(results, "2 条旧规则都被删除", report.FirewallRulesDeleted == 2);
+
+                // ---------------- 4. 核对两边 ----------------
+                W();
+                W("===== 4. 核对结果 =====");
+
+                var leftovers = FirewallManager.GetAppGuardRules()
+                    .Where(rule => createdRuleNames.Contains(rule.Name))
+                    .ToList();
+                CheckAssertion(results, "Windows 防火墙里已经找不到这两条", leftovers.Count == 0);
+
+                var wfpRules = WfpRuleStore.List(engine);
+                W($"    2.0 里现在有 {wfpRules.Count} 条规则：");
+                foreach (var rule in wfpRules)
+                {
+                    var action = rule.Action == FirewallAction.Block ? "阻止" : "允许";
+                    W($"      {action}  {rule.ApplicationPath}");
+                }
+
+                CheckAssertion(results, "2.0 里是 2 条规则", wfpRules.Count == 2);
+                CheckAssertion(results, "阻止规则迁移过来了",
+                    wfpRules.Any(rule => rule.Action == FirewallAction.Block));
+                CheckAssertion(results, "允许规则迁移过来了",
+                    wfpRules.Any(rule => rule.Action == FirewallAction.Allow));
+                CheckAssertion(results, "每条规则都写了两层（共 4 条过滤器）",
+                    engine.ListOurFilters().Count == 4);
+
+                // ---------------- 5. 重复迁移 ----------------
+                W();
+                W("===== 5. 重复迁移（幂等）=====");
+
+                var again = WfpMigration.Migrate(engine, mine);
+                var filterCount = engine.ListOurFilters().Count;
+                W($"    再迁一次：迁移 = {again.Migrated}，过滤器总数 = {filterCount}");
+
+                CheckAssertion(results, "重复迁移不增加过滤器", filterCount == 4);
+                CheckAssertion(results, "重复迁移不报失败", again.Failed == 0);
+            }
+            finally
+            {
+                // 收拾自己造出来的东西：先删 2.0 规则，再删可能残留的 1.x 规则。
+                try
+                {
+                    WfpRuleStore.RemoveAll(engine);
+                    engine.DeleteSublayer();
+                }
+                catch (WfpException)
+                {
+                    // 已经干净了，忽略。
+                }
+
+                foreach (var name in createdRuleNames)
+                {
+                    try
+                    {
+                        FirewallManager.DeleteRule(name);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        W($"    !!! 清理旧规则失败：{name}：{ex.Message}");
+                    }
                 }
             }
         }

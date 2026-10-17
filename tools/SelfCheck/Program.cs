@@ -106,7 +106,8 @@ internal static class Program
                          && !args.Contains("--temp-block-status", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-check", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-render", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -193,6 +194,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunCliTest();
             }
             else
             {
@@ -3554,6 +3559,149 @@ internal static class Program
         return method?.Invoke(form, args) as T;
     }
 
+    /// <summary>
+    /// 命令行模式的离线自检：**只测参数解析与输出格式**。
+    ///
+    /// 为什么不在这里真跑 <c>--block</c> / <c>--unblock-all</c>：那会改防火墙（需要管理员），
+    /// 属于 <c>--strict-mode-*</c> 那类"会动系统"的模式。
+    /// 这里刻意保持**纯离线、零副作用**，所以它能进 CI、能随时复跑。
+    /// 真实的 block → list → unblock 往返在虚拟机里人工验（见 <c>docs/验收清单.md</c> 的 K 组）。
+    /// </summary>
+    private static void RunCliTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   命令行模式自检（离线：只测参数解析与输出格式）                #");
+        W("################################################################");
+        W();
+
+        // ---------------- 1. 不能把"启动界面"误判成命令 ----------------
+        W("===== 1. 启动界面 vs 命令行 =====");
+
+        var none = CommandLine.Parse(Array.Empty<string>());
+        CheckAssertion(results, "无参数 → 启动界面", none.Kind == CommandKind.None);
+
+        var autostart = CommandLine.Parse(new[] { "--autostart" });
+        CheckAssertion(results, "只有 --autostart → 仍然启动界面（只是最小化到托盘）",
+            autostart.Kind == CommandKind.None);
+        CheckAssertion(results, "只有 --autostart 时 IsAutostart = true", autostart.IsAutostart);
+
+        // ---------------- 2. --block ----------------
+        W();
+        W("===== 2. --block =====");
+
+        var block = CommandLine.Parse(new[] { "--block", @"C:\Tools\a.exe" });
+        CheckAssertion(results, "--block 被解析成 Block", block.Kind == CommandKind.Block);
+        CheckAssertion(results, "--block 带出了程序路径", block.ProgramPath == @"C:\Tools\a.exe");
+
+        var withSpaces = CommandLine.Parse(new[] { "--block", @"C:\Program Files\A B\c.exe" });
+        CheckAssertion(results, "带空格的路径原样保留", withSpaces.ProgramPath == @"C:\Program Files\A B\c.exe");
+
+        CheckAssertion(results, "--block 后面漏了路径 → 参数错误",
+            CommandLine.Parse(new[] { "--block" }).Kind == CommandKind.Invalid);
+        CheckAssertion(results, "--block 后面是空字符串 → 参数错误",
+            CommandLine.Parse(new[] { "--block", "   " }).Kind == CommandKind.Invalid);
+        CheckAssertion(results, "--block 后面多写了参数 → 参数错误（不静默忽略）",
+            CommandLine.Parse(new[] { "--block", @"C:\a.exe", "--yes" }).Kind == CommandKind.Invalid);
+
+        // ---------------- 3. --list-blocked ----------------
+        W();
+        W("===== 3. --list-blocked =====");
+
+        CheckAssertion(results, "--list-blocked 被解析成 ListBlocked",
+            CommandLine.Parse(new[] { "--list-blocked" }).Kind == CommandKind.ListBlocked);
+        CheckAssertion(results, "--list-blocked 后面多写了参数 → 参数错误",
+            CommandLine.Parse(new[] { "--list-blocked", "x" }).Kind == CommandKind.Invalid);
+
+        // ---------------- 4. --unblock-all / --yes ----------------
+        W();
+        W("===== 4. --unblock-all 与 --yes =====");
+
+        var unblock = CommandLine.Parse(new[] { "--unblock-all" });
+        CheckAssertion(results, "--unblock-all 被解析成 UnblockAll", unblock.Kind == CommandKind.UnblockAll);
+        CheckAssertion(results, "没带 --yes 时 Confirmed = false（不会真删）", !unblock.Confirmed);
+
+        CheckAssertion(results, "带了 --yes 时 Confirmed = true",
+            CommandLine.Parse(new[] { "--unblock-all", "--yes" }).Confirmed);
+        CheckAssertion(results, "--unblock-all 后面出现不认识的参数 → 参数错误",
+            CommandLine.Parse(new[] { "--unblock-all", "--force" }).Kind == CommandKind.Invalid);
+
+        // ---------------- 5. 帮助 / 大小写 / 错误参数 ----------------
+        W();
+        W("===== 5. 帮助、大小写、错误参数 =====");
+
+        CheckAssertion(results, "--help → Help", CommandLine.Parse(new[] { "--help" }).Kind == CommandKind.Help);
+        CheckAssertion(results, "-h → Help", CommandLine.Parse(new[] { "-h" }).Kind == CommandKind.Help);
+        CheckAssertion(results, "/? → Help", CommandLine.Parse(new[] { "/?" }).Kind == CommandKind.Help);
+        CheckAssertion(results, "--help 优先级最高（--block --help 也显示帮助）",
+            CommandLine.Parse(new[] { "--block", "--help" }).Kind == CommandKind.Help);
+        CheckAssertion(results, "参数不区分大小写（--BLOCK）",
+            CommandLine.Parse(new[] { "--BLOCK", @"C:\a.exe" }).Kind == CommandKind.Block);
+
+        var unknown = CommandLine.Parse(new[] { "--nope" });
+        CheckAssertion(results, "不认识的参数 → Invalid，并且给出说明",
+            unknown.Kind == CommandKind.Invalid && !string.IsNullOrEmpty(unknown.Error));
+        CheckAssertion(results, "只给一个裸路径（忘记写 --block）→ Invalid",
+            CommandLine.Parse(new[] { @"C:\a.exe" }).Kind == CommandKind.Invalid);
+
+        // ---------------- 6. 输出格式（脚本要能解析） ----------------
+        W();
+        W("===== 6. 输出格式 =====");
+
+        var rule = new FirewallRuleItem
+        {
+            Name = "AppGuard_Block_a.exe_1a2b3c4d",
+            ApplicationPath = @"C:\Tools\a.exe",
+            Description = "x",
+            Grouping = "AppGuard",
+            Enabled = true,
+            Action = FirewallAction.Block,
+            Direction = FirewallDirection.Outbound,
+            Protocol = 256,
+        };
+
+        var line = CliText.FormatRuleLine(rule);
+        W($"    规则行 = {line}");
+        CheckAssertion(results, "规则行是「规则名 \\t 路径 \\t 自动解除」三段",
+            line.Split('\t').Length == 3
+            && line.StartsWith("AppGuard_Block_a.exe_1a2b3c4d\t", StringComparison.Ordinal)
+            && line.Contains(@"C:\Tools\a.exe"));
+
+        var output = CliText.BuildListBlockedOutput(new[] { rule }, allowRuleCount: 2, version: "1.4.0");
+        W();
+        W("    --list-blocked 的完整输出：");
+        foreach (var textLine in output.Split('\n'))
+        {
+            W("      " + textLine.TrimEnd('\r'));
+        }
+
+        CheckAssertion(results, "标题行说明了条数", output.Contains("已阻止的程序：1 条"));
+        CheckAssertion(results,
+            "每一行要么是以 # 开头的说明行、要么是 3 段的数据行（脚本好解析）",
+            output.Split('\n')
+                .Select(textLine => textLine.TrimEnd('\r'))
+                .Where(textLine => textLine.Length > 0)
+                .All(textLine => textLine.StartsWith('#') || textLine.Split('\t').Length == 3));
+        CheckAssertion(results, "包含那条规则", output.Contains("AppGuard_Block_a.exe_1a2b3c4d"));
+        CheckAssertion(results, "如实说明有 2 条「允许」规则没列出", output.Contains("另有 2 条「允许」规则"));
+
+        var emptyOutput = CliText.BuildListBlockedOutput(Array.Empty<FirewallRuleItem>(), 0, "1.4.0");
+        CheckAssertion(results, "没有阻止规则时明确写「没有阻止规则」", emptyOutput.Contains("没有阻止规则"));
+        CheckAssertion(results, "没有允许规则时不出现那行说明", !emptyOutput.Contains("「允许」规则"));
+
+        var preview = CliText.BuildUnblockPreview(new[] { rule });
+        CheckAssertion(results, "待删清单写着将要删除 1 条", preview.Contains("将要删除这 1 条"));
+
+        CheckAssertion(results, "帮助里列了全部四条命令",
+            CliText.Usage.Contains("--block") && CliText.Usage.Contains("--list-blocked")
+            && CliText.Usage.Contains("--unblock-all") && CliText.Usage.Contains("--help"));
+        CheckAssertion(results, "帮助里写清了退出码", CliText.Usage.Contains("退出码"));
+        CheckAssertion(results, "帮助里写清了确认框的例外", CliText.Usage.Contains("不会弹确认框"));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     /// <summary>反射调用 MainForm 的私有无参方法（自检要跑真实代码路径，不自己另写一遍）。</summary>
     private static bool InvokePrivateNoArgs(MainForm form, string methodName)
         => InvokePrivate(form, methodName, null);
@@ -4266,7 +4414,7 @@ internal static class Program
         if (hits.Count == 0)
         {
             W("    没有直接调用任何网络相关的原生 API。");
-            W("    （本程序的联网走托管 TcpClient，所以原生调用清单保持 16 个不变。）");
+            W("    （本程序的联网走托管 TcpClient，所以原生调用清单里不会出现网络 API。）");
         }
         else
         {

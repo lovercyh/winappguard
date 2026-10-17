@@ -122,6 +122,25 @@ Grab `WinAppGuard.exe` from the [latest release](https://github.com/lovercyh/win
 - Windows 10 or Windows 11, x64
 - Administrator rights (it edits firewall rules and Task Scheduler)
 
+## Command line
+
+For scripting / batch deployment (needs **administrator rights**, including `--help`):
+
+```powershell
+WinAppGuard.exe --block "C:\Tools\a.exe"   # block a program (idempotent)
+WinAppGuard.exe --list-blocked             # list every "block" rule
+WinAppGuard.exe --unblock-all              # preview only, deletes nothing
+WinAppGuard.exe --unblock-all --yes        # actually delete
+WinAppGuard.exe --help                     # usage
+```
+
+- **Exit codes**: `0` ok / `1` bad arguments or not confirmed / `2` failed / `3` not elevated.
+- `--list-blocked` prints **one rule per line**, tab separated, with `#` comment lines — easy to parse.
+- These commands do **not** show a confirmation dialog (the command line *is* the instruction);
+  operations in the GUI still ask every time.
+- Starting the GUI briefly shows a console window (~0.5 s) — the price of a synchronous CLI —
+  then it closes itself.
+
 ## Screenshots
 
 | Rules | Settings |
@@ -175,13 +194,14 @@ Two notes on that output:
   while a network path hides behind it would be worse than no audit at all.
 - `--audit` needs no administrator rights, so it runs in CI too.
 
-Those 16 native calls are the complete set of unmanaged functions the program can reach:
+Those 17 native calls are the complete set of unmanaged functions the program can reach:
 
 ```
 iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table
 kernel32.dll!OpenProcess                            open a process (to resolve its path)
 kernel32.dll!QueryFullProcessImageNameW             query a process's executable path
 kernel32.dll!CloseHandle                            close a handle
+kernel32.dll!FreeConsole                             drop the console window in GUI mode
 user32.dll!RegisterWindowMessageW                   register the single-instance window message
 user32.dll!PostMessageW                             broadcast the single-instance window message
 wintrust.dll!WinVerifyTrust                         verify an embedded Authenticode signature

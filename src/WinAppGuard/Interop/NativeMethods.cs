@@ -6,9 +6,10 @@ namespace WinAppGuard.Interop;
 /// <summary>
 /// Win32 API 声明。
 ///
-/// 本程序与系统底层打交道的地方只有两类：
+/// 本程序与系统底层打交道的地方只有三类：
 ///   1. 读取 TCP 连接表（iphlpapi.dll）；
-///   2. 查询进程的可执行文件路径（kernel32.dll）。
+///   2. 查询进程的可执行文件路径（kernel32.dll）；
+///   3. 图形界面模式启动时释放掉控制台窗口（kernel32.dll）。
 ///
 /// 所有 P/Invoke 全部集中在这一个文件，目的是方便安全审计——
 /// 想知道程序到底调用了哪些系统接口，只看这里就够了。
@@ -101,6 +102,23 @@ internal static class NativeMethods
         int dwFlags,
         StringBuilder lpExeName,
         ref int lpdwSize);
+
+    // ---------------- 控制台（图形界面模式要收掉它） ----------------
+
+    /// <summary>
+    /// 释放当前进程的控制台。
+    ///
+    /// 为什么需要它：本程序是**控制台子系统**的 exe（这样命令行模式才能同步输出、
+    /// 退出码才对），但图形界面模式不需要那个黑框 —— 启动时立刻调它把控制台收掉。
+    ///
+    /// 代价：控制台窗口在进程启动到这一行之间是可见的。实测稳态约 0.5 秒；
+    /// 发布后第一次运行因为杀毒软件要扫这个 49MB 的新文件，可能几秒到十几秒。
+    ///
+    /// 没有控制台时它返回 false —— 忽略即可。
+    /// </summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool FreeConsole();
 
     // ---------------- 数字签名验证 ----------------
 

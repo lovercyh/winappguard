@@ -46,6 +46,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
 ///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条记事本规则 → 迁移 → 核对 → 清理）
 ///   WinAppGuard.SelfCheck.exe --wfp-status      WFP：只读，打印当前 2.0 规则与子层状态
+///   WinAppGuard.SelfCheck.exe --wfp-strict-test WFP：严格模式（动态会话 + 白名单 + 阻止全部，验证真能拦、退出即恢复）
 ///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
@@ -202,6 +203,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--wfp-strict-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpStrictTest();
             }
             else if (args.Contains("--wfp-status", StringComparer.OrdinalIgnoreCase))
             {
@@ -4222,6 +4227,117 @@ internal static class Program
         }
 
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 严格模式（真白名单）自检。
+    ///
+    /// 要证明四件事：
+    ///   1. 会话建立后，我们的子层里出现「白名单放行 + 阻止全部」；
+    ///   2. 会话活着时，未被放行的程序（就是本自检程序自己）真的连不出去；
+    ///   3. 会话结束（等价于进程退出 / 被强杀）后，过滤器**自动消失**；
+    ///   4. 连接随之恢复 —— 不需要任何"还原"代码。
+    ///
+    /// 这台自检程序**刻意不把自己放进白名单**：要测的正是"没被放行的程序会被挡住"。
+    /// </summary>
+    private static void RunWfpStrictTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   WFP 严格模式自检（动态会话：白名单放行 + 阻止全部）          #");
+        W("################################################################");
+        W();
+
+        var targetExe = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+        const string probeHost = "whois.cymru.com";
+        const int probePort = 43;
+
+        // 清场：先把自己的东西清干净，免得上次的残留把条数搅乱。
+        using (var cleanup = WfpEngine.Open())
+        {
+            cleanup.DeleteAllOurFilters();
+            cleanup.DeleteSublayer();
+        }
+
+        // 基线：先确认这台机器本来能连出去，否则"连不通"证明不了任何事。
+        var baseline = CanConnect(probeHost, probePort);
+        W($"  基线连接（{probeHost}:{probePort}）= {(baseline ? "通" : "不通")}");
+
+        if (!baseline)
+        {
+            W("  ⚠️ 基线就不通，本轮跳过「真的能拦住」的断言（只验证过滤器结构）。");
+        }
+
+        using (var session = WfpStrictSession.Start(new[] { targetExe }))
+        {
+            W();
+            W("===== 1. 会话建立 =====");
+            W($"    放行程序 = {string.Join("、", session.PermittedPrograms.Select(Path.GetFileName))}");
+            W($"    过滤器 = {session.FilterKeys.Count} 条（预期 4 = 1 条放行 + 1 条阻止全部，各 V4/V6）");
+
+            CheckAssertion(results, "放行了 1 个程序", session.PermittedPrograms.Count == 1);
+            CheckAssertion(results, "会话里有 4 条过滤器", session.FilterKeys.Count == 4);
+
+            using (var peek = WfpEngine.Open())
+            {
+                var visible = peek.ListOurFilters();
+                W($"    从另一个会话看到我们的过滤器 = {visible.Count} 条");
+                CheckAssertion(results, "另一个会话能看到这 4 条（说明真的进了 BFE）", visible.Count == 4);
+            }
+
+            W();
+            W("===== 2. 未放行的程序应当连不出去 =====");
+
+            var during = CanConnect(probeHost, probePort);
+            W($"    严格模式下连接 = {(during ? "通" : "不通（被拦）")}");
+
+            if (baseline)
+            {
+                CheckAssertion(results, "未放行的程序被拦住了（连不通）", !during);
+            }
+        }
+
+        W();
+        W("===== 3. 会话结束（= 进程退出 / 被强杀）后应当自动撤销 =====");
+
+        using (var check = WfpEngine.Open())
+        {
+            var leftover = check.ListOurFilters();
+            W($"    过滤器 = {leftover.Count} 条（预期 0）");
+            CheckAssertion(results, "会话结束后过滤器全部消失", leftover.Count == 0);
+        }
+
+        var after = CanConnect(probeHost, probePort);
+        W($"    连接 = {(after ? "通（已恢复）" : "不通")}");
+
+        if (baseline)
+        {
+            CheckAssertion(results, "连接自动恢复（不需要任何还原逻辑）", after);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>能不能建立一条 TCP 连接（自检专用，快速失败，不抛异常）。</summary>
+    private static bool CanConnect(string host, int port, int timeoutMs = 3000)
+    {
+        try
+        {
+            using var client = new TcpClient();
+
+            var task = client.ConnectAsync(host, port);
+            if (!task.Wait(timeoutMs))
+            {
+                return false;
+            }
+
+            return client.Connected;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>子层是否已经不存在（只读判断，不抛异常）。</summary>

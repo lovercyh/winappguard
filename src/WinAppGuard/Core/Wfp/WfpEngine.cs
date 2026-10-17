@@ -340,6 +340,35 @@ internal sealed class WfpEngine : IDisposable
         uint action,
         ulong weight,
         bool persistent)
+        => AddFilterCore(filterKey, displayName, description, layerKey, action, weight, persistent, exePath);
+
+    /// <summary>
+    /// 加一条**不带任何条件**的过滤器 —— 它会匹配该层上的**所有**流量。
+    ///
+    /// 严格模式的"阻止全部"用的就是它：放在权重 0，上面再挂白名单的放行过滤器（权重更高）。
+    /// 注意它必须建在**动态会话**里：这是"进程退出即自动撤销"的前提。
+    /// </summary>
+    internal ulong AddBlockAllFilter(
+        Guid filterKey,
+        string displayName,
+        Guid layerKey,
+        uint action,
+        ulong weight,
+        bool persistent = false)
+        => AddFilterCore(filterKey, displayName, null, layerKey, action, weight, persistent, null);
+
+    /// <summary>
+    /// 加过滤器的唯一实现。<paramref name="exePath"/> 为 null 时不带条件（匹配全部）。
+    /// </summary>
+    private ulong AddFilterCore(
+        Guid filterKey,
+        string displayName,
+        string? description,
+        Guid layerKey,
+        uint action,
+        ulong weight,
+        bool persistent,
+        string? exePath)
     {
         ThrowIfDisposed();
 
@@ -351,12 +380,6 @@ internal sealed class WfpEngine : IDisposable
 
         try
         {
-            var rc = WfpNativeMethods.FwpmGetAppIdFromFileName0(exePath, out appIdPtr);
-            if (rc != WfpNativeMethods.ERROR_SUCCESS)
-            {
-                throw new WfpException($"取程序身份（{exePath}）", rc);
-            }
-
             weightPtr = Marshal.AllocHGlobal(sizeof(ulong));
             Marshal.WriteInt64(weightPtr, unchecked((long)weight));
 
@@ -367,18 +390,30 @@ internal sealed class WfpEngine : IDisposable
                 descriptionPtr = Marshal.StringToHGlobalUni(description);
             }
 
-            conditionPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>());
-            var condition = new WfpNativeMethods.FwpmFilterCondition
+            uint conditionCount = 0;
+
+            if (exePath is not null)
             {
-                FieldKey = WfpNativeMethods.ConditionAleAppId,
-                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
-                ConditionValue = new WfpNativeMethods.FwpConditionValue
+                var appIdResult = WfpNativeMethods.FwpmGetAppIdFromFileName0(exePath, out appIdPtr);
+                if (appIdResult != WfpNativeMethods.ERROR_SUCCESS)
                 {
-                    Type = WfpNativeMethods.FWP_BYTE_BLOB_TYPE,
-                    Value = appIdPtr,
-                },
-            };
-            Marshal.StructureToPtr(condition, conditionPtr, false);
+                    throw new WfpException($"取程序身份（{exePath}）", appIdResult);
+                }
+
+                conditionPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>());
+                var condition = new WfpNativeMethods.FwpmFilterCondition
+                {
+                    FieldKey = WfpNativeMethods.ConditionAleAppId,
+                    MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                    ConditionValue = new WfpNativeMethods.FwpConditionValue
+                    {
+                        Type = WfpNativeMethods.FWP_BYTE_BLOB_TYPE,
+                        Value = appIdPtr,
+                    },
+                };
+                Marshal.StructureToPtr(condition, conditionPtr, false);
+                conditionCount = 1;
+            }
 
             var filter = new WfpNativeMethods.FwpmFilter
             {
@@ -396,12 +431,12 @@ internal sealed class WfpEngine : IDisposable
                     Type = WfpNativeMethods.FWP_UINT64,
                     Value = weightPtr,
                 },
-                NumFilterConditions = 1,
+                NumFilterConditions = conditionCount,
                 FilterCondition = conditionPtr,
                 Action = new WfpNativeMethods.FwpmAction { Type = action },
             };
 
-            rc = WfpNativeMethods.FwpmFilterAdd0(_handle, ref filter, IntPtr.Zero, out var id);
+            var rc = WfpNativeMethods.FwpmFilterAdd0(_handle, ref filter, IntPtr.Zero, out var id);
             if (rc != WfpNativeMethods.ERROR_SUCCESS)
             {
                 throw new WfpException($"添加过滤器（{displayName}）", rc);

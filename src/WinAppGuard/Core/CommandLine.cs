@@ -15,6 +15,9 @@ public enum CommandKind
     /// <summary><c>--unblock-all [--yes]</c></summary>
     UnblockAll,
 
+    /// <summary><c>--migrate</c>：把 1.x 的规则迁到 2.0（通常不用手动执行）。</summary>
+    Migrate,
+
     /// <summary><c>--help</c></summary>
     Help,
 
@@ -53,6 +56,7 @@ public static class CommandLine
     public const string BlockSwitch = "--block";
     public const string ListBlockedSwitch = "--list-blocked";
     public const string UnblockAllSwitch = "--unblock-all";
+    public const string MigrateSwitch = "--migrate";
     public const string YesSwitch = "--yes";
     public const string HelpSwitch = "--help";
     public const string AutostartSwitch = "--autostart";
@@ -103,6 +107,11 @@ public static class CommandLine
                 return extras.Count > 0
                     ? Invalid(isAutostart, $"无法识别的参数：{extras[0]}")
                     : new CommandLineOptions(CommandKind.UnblockAll, null, confirmed, isAutostart, null);
+
+            case MigrateSwitch:
+                return tokens.Count > 1
+                    ? Invalid(isAutostart, $"多余的参数：{tokens[1]}")
+                    : new CommandLineOptions(CommandKind.Migrate, null, false, isAutostart, null);
 
             default:
                 return Invalid(isAutostart, $"无法识别的参数：{tokens[0]}");

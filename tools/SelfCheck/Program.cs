@@ -4310,6 +4310,11 @@ internal static class Program
         CheckAssertion(results, "参数不区分大小写（--BLOCK）",
             CommandLine.Parse(new[] { "--BLOCK", @"C:\a.exe" }).Kind == CommandKind.Block);
 
+        CheckAssertion(results, "--migrate 被解析成 Migrate",
+            CommandLine.Parse(new[] { "--migrate" }).Kind == CommandKind.Migrate);
+        CheckAssertion(results, "--migrate 后面多写了参数 → 参数错误",
+            CommandLine.Parse(new[] { "--migrate", "x" }).Kind == CommandKind.Invalid);
+
         var unknown = CommandLine.Parse(new[] { "--nope" });
         CheckAssertion(results, "不认识的参数 → Invalid，并且给出说明",
             unknown.Kind == CommandKind.Invalid && !string.IsNullOrEmpty(unknown.Error));

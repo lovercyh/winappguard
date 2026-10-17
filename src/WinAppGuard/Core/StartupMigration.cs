@@ -17,8 +17,12 @@ namespace WinAppGuard.Core;
 internal static class StartupMigration
 {
     /// <summary>有 1.x 规则就迁移，没有就立即返回。</summary>
-    internal static void RunIfNeeded()
+    /// <param name="error">失败原因；成功或无事可做时为 null。</param>
+    /// <returns>迁移报告；没有旧规则时返回 null。</returns>
+    internal static WfpMigrationReport? RunIfNeeded(out string? error)
     {
+        error = null;
+
         List<FirewallRuleItem> legacy;
 
         try
@@ -29,12 +33,13 @@ internal static class StartupMigration
         {
             // 读不到旧规则不影响使用（2.0 的规则在 WFP 里，和这里无关）。
             LocalLog.Error("读取 1.x 规则失败，本轮不做迁移（下次启动会重试）", ex);
-            return;
+            error = ex.Message;
+            return null;
         }
 
         if (legacy.Count == 0)
         {
-            return;
+            return null;
         }
 
         try
@@ -52,10 +57,14 @@ internal static class StartupMigration
             {
                 LocalLog.Info("  迁移：" + line);
             }
+
+            return report;
         }
         catch (Exception ex)
         {
             LocalLog.Error("1.x 规则迁移失败：旧规则全部保留，下次启动会重试", ex);
+            error = ex.Message;
+            return null;
         }
     }
 }

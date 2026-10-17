@@ -43,6 +43,7 @@ internal static class CliRunner
             case CommandKind.Block:
             case CommandKind.ListBlocked:
             case CommandKind.UnblockAll:
+            case CommandKind.Migrate:
                 // 读/改防火墙都要管理员权限。
                 if (!AdminHelper.IsRunningAsAdmin())
                 {
@@ -54,12 +55,17 @@ internal static class CliRunner
                 {
                     // 命令行也可能面对一台从 1.x 升级上来的机器：
                     // 先把旧规则迁过来，后面的读写才是完整的一幅图。
-                    StartupMigration.RunIfNeeded();
+                    // （--migrate 自己会做并打印报告，这里不能再做一次。）
+                    if (options.Kind != CommandKind.Migrate)
+                    {
+                        StartupMigration.RunIfNeeded(out _);
+                    }
 
                     return options.Kind switch
                     {
                         CommandKind.Block => RunBlock(options.ProgramPath!),
                         CommandKind.ListBlocked => RunListBlocked(),
+                        CommandKind.Migrate => RunMigrate(),
                         _ => RunUnblockAll(options.Confirmed),
                     };
                 }
@@ -147,6 +153,41 @@ internal static class CliRunner
         }
 
         LocalLog.Operation($"命令行：删除全部 AppGuard 规则，实际删除 {deleted} 条");
+        return ExitOk;
+    }
+
+    private static int RunMigrate()
+    {
+        var report = StartupMigration.RunIfNeeded(out var error);
+
+        if (error is not null)
+        {
+            Console.Error.WriteLine($"迁移失败：{error}");
+            Console.Error.WriteLine("旧规则没有被动过；下次启动程序时会自动重试。");
+            return ExitFailed;
+        }
+
+        if (report is null)
+        {
+            Console.WriteLine("没有需要迁移的 1.x 规则（Windows 防火墙里没有 AppGuard_ 规则）。");
+            return ExitOk;
+        }
+
+        Console.WriteLine(
+            $"迁移完成：成功 {report.Migrated} 条，跳过 {report.Skipped} 条，" +
+            $"失败 {report.Failed} 条，删除旧规则 {report.FirewallRulesDeleted} 条。");
+
+        foreach (var line in report.Details)
+        {
+            Console.WriteLine("  " + line);
+        }
+
+        if (!report.Succeeded)
+        {
+            Console.Error.WriteLine("有一次迁移失败：失败的规则保留在 Windows 防火墙里，可以再执行一次。");
+            return ExitFailed;
+        }
+
         return ExitOk;
     }
 

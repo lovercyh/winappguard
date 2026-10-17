@@ -24,6 +24,7 @@ public static class CliText
         "  WinAppGuard.exe --block \"C:\\Tools\\a.exe\"     阻止某个程序联网（可重复执行，幂等）",
         "  WinAppGuard.exe --list-blocked               列出所有「阻止」规则",
         "  WinAppGuard.exe --unblock-all [--yes]        删除本工具创建的全部规则",
+        "  WinAppGuard.exe --migrate                   把 1.x 的规则迁到 2.0（启动时也会自动做）",
         "  WinAppGuard.exe --help                       显示这段帮助",
         "",
         "说明：",

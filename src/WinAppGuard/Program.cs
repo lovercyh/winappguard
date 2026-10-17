@@ -42,7 +42,14 @@ internal static class Program
         // 命令行模式则要**留着**控制台 —— 那正是输出要走的地方。
         NativeMethods.FreeConsole();
 
-        // 2) 单实例检查。
+        // 2) 1.x → 2.0 规则迁移（没有旧规则时什么都不做；失败也不影响启动）。
+        //
+        //    ★ 刻意放在「单实例检查」**之前**：如果用户已经开着一个窗口，
+        //      再启动一次会静默退出 —— 那时代码根本走不到迁移，用户会以为升级失败。
+        //      迁移本身是幂等的（写入先删后加、删除容忍不存在），两个实例同时跑也没问题。
+        StartupMigration.RunIfNeeded(out _);
+
+        // 3) 单实例检查。
         //    没有这一层的话，用户第二次双击会多出一个托盘图标，
         //    而且两个实例会同时操作防火墙和计划任务。
         if (!SingleInstance.TryAcquire())
@@ -59,7 +66,7 @@ internal static class Program
             return 0;
         }
 
-        // 3) 管理员权限检测。
+        // 4) 管理员权限检测。
         //    正常情况下 app.manifest 已经声明了 requireAdministrator，进程启动时就已经提权；
         //    这里再做一次运行时检查，是为了兜住「被计划任务以普通权限拉起」这类异常情况。
         var isAdmin = AdminHelper.IsRunningAsAdmin();
@@ -100,9 +107,6 @@ internal static class Program
 
             return 0;
         }
-
-        // 4) 1.x → 2.0 规则迁移（没有旧规则时什么都不做；失败也不影响启动）。
-        StartupMigration.RunIfNeeded();
 
         // 5) 启动界面。
         ApplicationConfiguration.Initialize();

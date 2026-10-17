@@ -1,0 +1,180 @@
+using WinAppGuard.Core.Wfp;
+using WinAppGuard.Models;
+
+namespace WinAppGuard.Core;
+
+/// <summary>
+/// 2.0 的规则入口：界面、命令行、严格模式都只跟它打交道。
+///
+/// 底下是 WFP（<c>Core/Wfp/*</c>），上层完全看不到"过滤器 / 子层 / 层"这些概念 ——
+/// 对外仍然返回 <see cref="FirewallRuleItem"/>，所以界面代码几乎不用改，
+/// 换掉的只是"这些规则存在哪里"。
+///
+/// 每次调用都新开一个引擎会话、用完就关。这样最简单、也不怕会话被别处关掉；
+/// 代价是每次多一次 RPC 往返（实测枚举几百条过滤器是毫秒级，界面上感觉不到）。
+/// </summary>
+internal static class RuleEngine
+{
+    /// <summary>读出全部规则（界面列表、命令行列表都用它）。</summary>
+    internal static List<FirewallRuleItem> GetRules()
+    {
+        using var engine = OpenEngine();
+        return WfpRuleStore.List(engine).Select(ToRuleItem).ToList();
+    }
+
+    /// <summary>这个程序当前是不是被阻止。</summary>
+    internal static bool IsProgramBlocked(string programPath)
+    {
+        var fullPath = TryGetFullPath(programPath);
+        if (fullPath is null)
+        {
+            return false;
+        }
+
+        return GetRules().Any(rule =>
+            rule.Action == FirewallAction.Block && PathsEqual(rule.ApplicationPath, fullPath));
+    }
+
+    /// <summary>为指定程序创建「阻止联网」规则（永久）。重复调用不会产生重复规则。</summary>
+    internal static string CreateBlockRule(string programPath)
+        => CreateBlockRule(programPath, RuleExpiry.Never);
+
+    /// <summary>为指定程序创建「阻止联网」规则，并指定什么时候自动解除。</summary>
+    internal static string CreateBlockRule(string programPath, RuleExpiry expiry)
+        => Save(programPath, FirewallAction.Block, expiry);
+
+    /// <summary>为指定程序创建「允许联网」规则。</summary>
+    internal static string CreateAllowRule(string programPath)
+        => Save(programPath, FirewallAction.Allow, RuleExpiry.Never);
+
+    /// <summary>
+    /// 按规则名删除一条规则。
+    /// 规则名由 <see cref="RuleNaming"/> 从路径确定性生成，所以先按名字找出规则、再按规则删。
+    /// </summary>
+    /// <returns>确实删掉了返回 true；没有这条规则返回 false。</returns>
+    internal static bool DeleteRule(string ruleName)
+    {
+        using var engine = OpenEngine();
+
+        var rule = WfpRuleStore.List(engine)
+            .FirstOrDefault(candidate => string.Equals(
+                candidate.DisplayName, ruleName, StringComparison.OrdinalIgnoreCase));
+
+        if (rule is null)
+        {
+            return false;
+        }
+
+        WfpRuleStore.Remove(engine, rule);
+        return true;
+    }
+
+    /// <summary>删除作用于指定程序的全部规则（阻止 + 允许），返回删除的规则条数。</summary>
+    internal static int DeleteRulesForProgram(string programPath)
+    {
+        var fullPath = TryGetFullPath(programPath);
+        if (fullPath is null)
+        {
+            return 0;
+        }
+
+        using var engine = OpenEngine();
+
+        var targets = WfpRuleStore.List(engine)
+            .Where(rule => PathsEqual(rule.ApplicationPath, fullPath))
+            .ToList();
+
+        var deleted = 0;
+        foreach (var rule in targets)
+        {
+            WfpRuleStore.Remove(engine, rule);
+            deleted++;
+        }
+
+        return deleted;
+    }
+
+    /// <summary>删除本程序创建的全部规则，返回删除的规则条数（不是过滤器条数）。</summary>
+    internal static int DeleteAllRules()
+    {
+        using var engine = OpenEngine();
+
+        var count = WfpRuleStore.List(engine).Count;
+        WfpRuleStore.RemoveAll(engine);
+        return count;
+    }
+
+    // ------------------------------------------------------------------
+    // 内部
+    // ------------------------------------------------------------------
+
+    private static string Save(string programPath, FirewallAction action, RuleExpiry expiry)
+    {
+        // 路径合法性、自我保护、系统关键进程保护都在这里统一把关 ——
+        // 2.0 换掉了存储方式，但**这些安全闸一条都没有放宽**。
+        var fullPath = FirewallManager.ValidateProgramPath(
+            programPath,
+            forBlocking: action == FirewallAction.Block);
+
+        var rule = new WfpRule(fullPath, action, expiry);
+
+        using var engine = OpenEngine();
+        WfpRuleStore.Add(engine, rule);
+
+        return rule.DisplayName;
+    }
+
+    private static WfpEngine OpenEngine()
+    {
+        var engine = WfpEngine.Open();
+        try
+        {
+            // 规则都挂在我们的子层下面，所以每次进来都确保它在。
+            // 已经存在时不会改动它（权重之类的设置以现有为准）。
+            engine.EnsureSublayer(persistent: true);
+        }
+        catch
+        {
+            engine.Dispose();
+            throw;
+        }
+
+        return engine;
+    }
+
+    private static FirewallRuleItem ToRuleItem(WfpRule rule) => new()
+    {
+        Name = rule.DisplayName,
+        ApplicationPath = rule.ApplicationPath,
+
+        // 说明字段里存的是机器可读的规则内容（含到期标记），
+        // 界面上显示它反而看得懂"什么时候解除"，也方便用户直接核对。
+        Description = rule.Description,
+        Grouping = AppConstants.RuleGroupingName,
+        Enabled = true,
+        Action = rule.Action,
+        Direction = FirewallDirection.Outbound,
+        Protocol = 256,
+        Expiry = rule.Expiry,
+    };
+
+    private static string? TryGetFullPath(string programPath)
+    {
+        if (string.IsNullOrWhiteSpace(programPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(programPath);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+}

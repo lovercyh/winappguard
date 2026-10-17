@@ -77,9 +77,9 @@ internal static class CliRunner
         var fullPath = TryResolvePath(programPath);
 
         // 非法路径这里返回 false（不抛），所以正好拿来判断"是不是已经拦过了"。
-        var alreadyBlocked = FirewallManager.IsProgramBlocked(fullPath);
+        var alreadyBlocked = RuleEngine.IsProgramBlocked(fullPath);
 
-        var ruleName = FirewallManager.CreateBlockRule(fullPath);
+        var ruleName = RuleEngine.CreateBlockRule(fullPath);
 
         Console.WriteLine(alreadyBlocked
             ? $"该程序已经在阻止列表中：{fullPath}"
@@ -93,7 +93,7 @@ internal static class CliRunner
 
     private static int RunListBlocked()
     {
-        var all = FirewallManager.GetAppGuardRules();
+        var all = RuleEngine.GetRules();
         var blocked = all.Where(rule => rule.Action == FirewallAction.Block).ToList();
         var allowCount = all.Count - blocked.Count;
 
@@ -107,7 +107,7 @@ internal static class CliRunner
         // 否则紧接着把白名单删光，等于让整台机器断网。
         var recovery = StrictModeManager.RecoverIfLeftOn();
 
-        var rules = FirewallManager.GetAppGuardRules();
+        var rules = RuleEngine.GetRules();
 
         if (rules.Count == 0)
         {
@@ -131,7 +131,7 @@ internal static class CliRunner
             return ExitUsage;
         }
 
-        var deleted = FirewallManager.DeleteAllAppGuardRules();
+        var deleted = RuleEngine.DeleteAllRules();
 
         Console.WriteLine();
         Console.WriteLine($"已删除 {deleted} 条规则。");

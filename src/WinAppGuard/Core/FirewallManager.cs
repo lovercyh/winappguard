@@ -351,7 +351,7 @@ public static class FirewallManager
         // 所有校验都在这里统一完成：路径合法性、是否系统关键进程。
         // 注意 forBlocking 只在「阻止」时为真 —— 受保护进程可以被放行，见 ValidateProgramPath。
         var fullPath = ValidateProgramPath(programPath, forBlocking: action == ActionBlock);
-        var ruleName = BuildRuleName(prefix, fullPath);
+        var ruleName = RuleNaming.Build(prefix, fullPath);
 
         var policy = CreateComObject(PolicyProgId);
 
@@ -546,58 +546,13 @@ public static class FirewallManager
     /// 生成阻止规则名，例如 AppGuard_Block_chrome.exe_1a2b3c4d。
     /// </summary>
     public static string BuildBlockRuleName(string programPath)
-        => BuildRuleName(AppConstants.RulePrefixBlock, programPath);
+        => RuleNaming.BuildBlockRuleName(programPath);
 
     /// <summary>
     /// 生成允许规则名，例如 AppGuard_Allow_chrome.exe_1a2b3c4d。
     /// </summary>
     public static string BuildAllowRuleName(string programPath)
-        => BuildRuleName(AppConstants.RulePrefixAllow, programPath);
-
-    /// <summary>
-    /// 规则名 = 前缀 + 程序文件名 + 路径哈希。
-    ///
-    /// 为什么要带哈希：同一个程序如果放在不同目录，光靠文件名会撞名。
-    /// 哈希取自完整路径，保证「一个路径对应一个规则名」，重复创建才能真正幂等。
-    /// </summary>
-    private static string BuildRuleName(string prefix, string programPath)
-    {
-        var fileName = Path.GetFileName(programPath);
-        var safeName = SanitizeForRuleName(fileName);
-
-        if (safeName.Length > 40)
-        {
-            safeName = safeName[..40];
-        }
-
-        return $"{prefix}{safeName}_{ShortHash(programPath)}";
-    }
-
-    /// <summary>
-    /// 规则名里只保留字母、数字和 . _ - ，其余一律换成下划线。
-    /// 目的是保证规则名在各种界面里都能正常显示，不会因为特殊字符出问题。
-    /// </summary>
-    private static string SanitizeForRuleName(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-
-        foreach (var c in value)
-        {
-            builder.Append(char.IsLetterOrDigit(c) || c is '.' or '_' or '-' ? c : '_');
-        }
-
-        return builder.ToString();
-    }
-
-    /// <summary>
-    /// 取路径的短哈希（8 个十六进制字符）。
-    /// 先统一转成小写，保证同一个路径大小写不同也算同一个规则。
-    /// </summary>
-    private static string ShortHash(string value)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value.ToLowerInvariant()));
-        return Convert.ToHexString(bytes, 0, 4).ToLowerInvariant();
-    }
+        => RuleNaming.BuildAllowRuleName(programPath);
 
     // ==================================================================
     // 内部工具
@@ -670,7 +625,7 @@ public static class FirewallManager
     /// 反向放行是必须的 —— 严格模式下本程序要靠一条允许规则才能查 IP 归属，
     /// 系统关键进程也常常是用户主动想放行的对象。
     /// </param>
-    private static string ValidateProgramPath(string programPath, bool forBlocking)
+    internal static string ValidateProgramPath(string programPath, bool forBlocking)
     {
         if (string.IsNullOrWhiteSpace(programPath))
         {

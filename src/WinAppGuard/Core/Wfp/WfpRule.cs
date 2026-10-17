@@ -53,21 +53,10 @@ internal sealed record WfpRule
     /// <summary>动作的固定文本（写进说明字段，同时用于比较）。</summary>
     private string ActionToken => Action == FirewallAction.Block ? "Block" : "Allow";
 
-    /// <summary>显示名称。沿用 1.x 的命名习惯，一眼能看出是本工具建的。</summary>
-    internal string DisplayName
-    {
-        get
-        {
-            var prefix = Action == FirewallAction.Block
-                ? AppConstants.RulePrefixBlock
-                : AppConstants.RulePrefixAllow;
-
-            var name = prefix + Path.GetFileName(ApplicationPath);
-            return name.Length <= AppConstants.RuleNameMaxLength
-                ? name
-                : name[..AppConstants.RuleNameMaxLength];
-        }
-    }
+    /// <summary>显示名称。沿用 1.x 的命名规则，迁移前后名字保持一致。</summary>
+    internal string DisplayName => Action == FirewallAction.Block
+        ? RuleNaming.BuildBlockRuleName(ApplicationPath)
+        : RuleNaming.BuildAllowRuleName(ApplicationPath);
 
     /// <summary>写进 WFP 过滤器说明字段的机器可读串。</summary>
     internal string Description

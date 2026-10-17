@@ -1,5 +1,6 @@
 using WinAppGuard.Core;
 using WinAppGuard.Forms;
+using WinAppGuard.Interop;
 
 namespace WinAppGuard;
 
@@ -15,7 +16,7 @@ internal static class Program
     public static bool IsAutostart { get; private set; }
 
     [STAThread]
-    private static void Main(string[] args)
+    private static int Main(string[] args)
     {
         // 全局异常兜底必须放在最前面，保证后面任何地方出错都能被接住。
         // 没有这一段的话，一个没接住的异常会让 Windows 弹出「已停止工作」那种
@@ -24,9 +25,22 @@ internal static class Program
         Application.ThreadException += OnUiThreadException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
 
-        // 1) 解析命令行参数。只关心有没有 --autostart，其余参数一律忽略。
-        IsAutostart = args.Any(arg =>
-            string.Equals(arg, AppConstants.AutostartArgument, StringComparison.OrdinalIgnoreCase));
+        // 1) 解析命令行。
+        //    --autostart 仍然只管「启动后最小化到托盘」；
+        //    其它指令（--block / --list-blocked / --unblock-all）属于**命令行模式**：
+        //    它们不碰界面，也**不参与单实例检查** —— 否则图形界面开着时，
+        //    脚本里的 --block 会先被"已有实例在运行"拦下来、静默什么都不做。
+        var options = CommandLine.Parse(args);
+        IsAutostart = options.IsAutostart;
+
+        if (options.Kind != CommandKind.None)
+        {
+            return CliRunner.Run(options);
+        }
+
+        // 图形界面模式：控制台子系统会带出一个黑框，这里立刻收掉它。
+        // 命令行模式则要**留着**控制台 —— 那正是输出要走的地方。
+        NativeMethods.FreeConsole();
 
         // 2) 单实例检查。
         //    没有这一层的话，用户第二次双击会多出一个托盘图标，
@@ -42,7 +56,7 @@ internal static class Program
             }
 
             LocalLog.Info($"检测到已有实例在运行，本次启动（{AppConstants.AutostartArgument}模式={IsAutostart}）直接退出。");
-            return;
+            return 0;
         }
 
         // 3) 管理员权限检测。
@@ -69,7 +83,7 @@ internal static class Program
                     AppConstants.AppName,
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
-                return;
+                return 0;
             }
 
             // 手动启动场景：询问用户是否提权重启。
@@ -84,12 +98,13 @@ internal static class Program
                 AdminHelper.RestartAsAdmin(autostart: false);
             }
 
-            return;
+            return 0;
         }
 
         // 4) 启动界面。
         ApplicationConfiguration.Initialize();
         Application.Run(new MainForm(IsAutostart));
+        return 0;
     }
 
     /// <summary>

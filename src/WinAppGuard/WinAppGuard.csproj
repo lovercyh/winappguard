@@ -2,14 +2,28 @@
 
   <PropertyGroup>
     <!-- 这是一个 Windows 桌面程序，输出 exe，不弹控制台窗口 -->
-    <OutputType>WinExe</OutputType>
+    <!--
+    控制台子系统的 exe（不是 WinExe）。
+
+    为什么：图形界面程序如果标成 WinExe，**shell 不会等它结束** ——
+    命令行模式会在命令还没跑完时就返回，输出错位、退出码拿不到，
+    脚本里的命令还会互相并发（实测踩过）。
+    改成控制台子系统之后，命令行模式是**同步**的：输出和退出码都正常，
+    也不需要额外的 .cmd 包装器。
+
+    代价：图形界面启动时会先出现一个控制台窗口。所以 Program.cs 在没有命令行
+    指令时会立刻调用 FreeConsole 把它收掉。实测：稳态约 0.5 秒，
+    发布后第一次运行因为 Defender 要扫这个 49MB 的新文件，可能几秒到十几秒
+    （产品负责人在虚拟机里实测后认可了这个代价）。
+  -->
+  <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
 
     <AssemblyName>WinAppGuard</AssemblyName>
     <RootNamespace>WinAppGuard</RootNamespace>
 
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <AssemblyTitle>WinAppGuard</AssemblyTitle>
     <Product>WinAppGuard — Windows 程序联网控制工具</Product>
     <Description>通过管理 Windows 防火墙规则来阻止或允许指定程序联网。本程序自身不拦截任何流量、不访问网络、不上传任何数据。</Description>

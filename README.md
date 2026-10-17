@@ -79,6 +79,23 @@ WinAppGuard 是一个 Windows 防火墙规则管理工具，但它和多数同�
 
 - ❌ **不**用注册表做持久化 —— 开机自启只用任务计划程序，设置只写 `%LOCALAPPDATA%` 下的文件
 
+## 命令行模式
+
+想脚本化 / 批量部署时可以直接用命令行（**需要管理员权限**，包括 `--help`）：
+
+```powershell
+WinAppGuard.exe --block "C:\Tools\a.exe"   # 阻止某个程序联网（可重复执行，幂等）
+WinAppGuard.exe --list-blocked             # 列出所有「阻止」规则
+WinAppGuard.exe --unblock-all              # 只预览要删什么，什么都不删
+WinAppGuard.exe --unblock-all --yes        # 真的删掉
+WinAppGuard.exe --help                     # 用法
+```
+
+- **退出码**：`0` 成功 / `1` 参数错误或未确认 / `2` 执行失败 / `3` 缺少管理员权限。
+- `--list-blocked` **一行一条**、制表符分隔，`#` 开头的是说明行 —— 便于脚本解析。
+- 这些命令**不弹确认框**（命令行参数本身就是明确指令）；**图形界面里的操作仍然每条都要确认**。
+- 图形界面启动时会先出现约 0.5 秒的控制台窗口（控制台子系统换来的同步 CLI），随后自动收起。
+
 ## 界面
 
 | 规则 | 设置 |
@@ -135,7 +152,7 @@ WinAppGuard.SelfCheck.exe --audit
 引用的程序集            25 个，全部来自 .NET 框架    → 零第三方库
 网络相关类型引用        2 个：TcpClient / NetworkStream
                         → 都在预期清单内，只属于 IP 归属查询
-原生 API 调用（P/Invoke）  16 个
+原生 API 调用（P/Invoke）  17 个
 网络相关原生调用        无                          → 没有绕过托管检查直接用网络 API
 注册表访问              无
 ```
@@ -147,13 +164,14 @@ WinAppGuard.SelfCheck.exe --audit
   **一份「绿的但藏着联网路径」的审计，比没有审计更糟。**
 - `--audit` 不需要管理员权限，所以 CI 里也能跑。
 
-那 16 个原生调用就是程序能碰到的**全部**非托管函数：
+那 17 个原生调用就是程序能碰到的**全部**非托管函数：
 
 ```
 iphlpapi.dll!GetExtendedTcpTable                    读 TCP 连接表
 kernel32.dll!OpenProcess                            打开进程（查路径用）
 kernel32.dll!QueryFullProcessImageNameW             查进程可执行文件路径
 kernel32.dll!CloseHandle                            关句柄
+kernel32.dll!FreeConsole                            图形界面模式启动时收掉控制台窗口
 user32.dll!RegisterWindowMessageW                   注册单实例用的自定义消息
 user32.dll!PostMessageW                             广播单实例消息
 wintrust.dll!WinVerifyTrust                         验证内嵌数字签名
@@ -168,7 +186,7 @@ wintrust.dll!WTHelperGetProvSignerFromChain         取签名者
 wintrust.dll!WTHelperGetProvCertFromChain           取签名者证书
 ```
 
-**16 个，除此之外它碰不到任何东西。**
+**17 个，除此之外它碰不到任何东西。**
 
 ## 安全护栏
 

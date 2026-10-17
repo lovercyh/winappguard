@@ -86,13 +86,14 @@ type is **on an expected list** (and that no one bypassed it via a direct `ws2_3
 P/Invoke). The reason is stated plainly in the README: the IP ownership lookup is real networking
 that the app performs itself, and pretending otherwise would make the audit worthless.
 
-Those 16 native calls are the complete set of non-managed functions the program can reach:
+Those 17 native calls are the complete set of non-managed functions the program can reach:
 
 ```
 iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table
 kernel32.dll!OpenProcess                            open a process (to resolve its path)
 kernel32.dll!QueryFullProcessImageNameW             query a process's executable path
 kernel32.dll!CloseHandle                            close a handle
+kernel32.dll!FreeConsole                             drop the console window in GUI mode
 user32.dll!RegisterWindowMessageW                   register the single-instance window message
 user32.dll!PostMessageW                             broadcast the single-instance window message
 wintrust.dll!WinVerifyTrust                         verify an embedded Authenticode signature

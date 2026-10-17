@@ -40,7 +40,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --connection-filter-test  连接列表：离线，核对搜索过滤与排序规则
 ///   WinAppGuard.SelfCheck.exe --temp-block-test  临时阻断：离线，核对待到期信息的编码 / 解析 / 判定
 ///   WinAppGuard.SelfCheck.exe --temp-block-status  临时阻断：只读，打印每条规则的到期解析结果
-///   WinAppGuard.SelfCheck.exe --strict-mode-test  严格模式：**会真改全局出站默认动作**（但一定还原），验证真能拦、真能放行
+///   WinAppGuard.SelfCheck.exe --strict-mode-test  严格模式：会话内拦截（会短暂断开未放行程序的网络，结束即恢复）
 ///   WinAppGuard.SelfCheck.exe --strict-mode-lifecycle-test  严格模式：**同上**，验证开启 / 关闭 / 崩溃后兜底 / 拒绝覆盖别人的策略
 ///   WinAppGuard.SelfCheck.exe --wfp-test        WFP：真实往返（建子层 → 加过滤器 → 枚举 → 删 → 删子层）+ 动态会话自动清理
 ///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
@@ -684,7 +684,7 @@ internal static class Program
         W($"默认入站动作       = {DescribeAction(state.DefaultInboundAction)}");
         W($"默认出站动作       = {DescribeAction(state.DefaultOutboundAction)}");
         W($"默认出站动作（按配置文件）= {FirewallManager.GetOutboundDefaultAllowed().Describe()}");
-        W("   ↑ 严格模式会把这三项一起改成「阻止」，退出 / 异常时还原。正常情况下三项都应当是「允许」。");
+        W("   ↑ 2.0 的严格模式不改这三项（它只在进程内建立动态会话），任何时候都应当保持「允许」。");
         W($"系统防火墙规则总数 = {FirewallManager.GetTotalRuleCount()}");
 
         var rules = FirewallManager.GetAppGuardRules();

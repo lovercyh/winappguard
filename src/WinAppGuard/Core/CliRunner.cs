@@ -116,7 +116,8 @@ internal static class CliRunner
 
     private static int RunUnblockAll(bool confirmed)
     {
-        // 严格模式的兜底：如果上次没正常退出，先把「默认阻止出站」还原成「允许」。
+        // 1.x 的兜底：如果上次（1.x 时代）没正常退出，先把「默认阻止出站」还原成「允许」。
+        // 2.0 自己不再写这个标志，所以新机器上这一步永远什么都不做。
         // 否则紧接着把白名单删光，等于让整台机器断网。
         var recovery = StrictModeManager.RecoverIfLeftOn();
 
@@ -148,11 +149,11 @@ internal static class CliRunner
 
         Console.WriteLine();
         Console.WriteLine($"已删除 {deleted} 条规则。");
-        Console.WriteLine("# 其他软件和系统自带的防火墙规则没有受到影响。");
+        Console.WriteLine("# 其他软件的规则、以及本工具在 WFP 里创建的过滤器之外的东西都没有受到影响。");
 
         if (recovery.WasLeftOn)
         {
-            Console.WriteLine("严格模式的「默认阻止出站」已还原成「允许」（上次没有正常退出）。");
+            Console.WriteLine("1.x 遗留的「默认阻止出站」已还原成「允许」（上次没有正常退出）。");
         }
 
         LocalLog.Operation($"命令行：删除全部 AppGuard 规则，实际删除 {deleted} 条");

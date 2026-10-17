@@ -4,12 +4,13 @@
 
 [简体中文](README.md) · English
 
-WinAppGuard is a Windows firewall rule manager that works the other way round from most tools.
+WinAppGuard is a Windows program network-control tool that works the other way round from most tools.
 Instead of browsing a list of executables, it shows you **live TCP connections** — so you start
 from *"what is talking to the internet right now?"* and end with *"blocked"*.
 
-> WinAppGuard does not filter any traffic itself. All blocking is done by **Windows Firewall**.
-> WinAppGuard only creates and cleans up the rules for you.
+> WinAppGuard does not handle any traffic itself. All blocking is done by filters in the
+> **Windows Filtering Platform (WFP)**. WinAppGuard only creates and cleans up those filters for you.
+> Since 2.0 it **no longer uses Windows Firewall** and never changes any Windows Firewall setting.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
@@ -29,33 +30,34 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
   network operator (autonomous system).
 - **Search and sort the list** — filter by process name, PID, remote IP or remote port;
   click a column header to sort (ports and IPs sort **numerically**, not as text).
-- **Blocks a program** — writes a single outbound Windows Firewall rule (TCP **and** UDP) for
-  that executable. You can choose for **how long**: permanently, 30 minutes, 2 hours,
+- **Blocks a program** — writes **two** outbound WFP filters (IPv4 + IPv6) for that executable,
+  covering TCP **and** UDP. You can choose for **how long**: permanently, 30 minutes, 2 hours,
   or until the next restart — a timed block removes itself when it expires.
-- **Unblocks it** — deletes the rules it created for that program.
-- **Strict mode (off by default, advanced)** — sets Windows' *default outbound action* to **block**,
-  so only whitelisted programs can reach the network. The whitelist is what you add via
-  *Add to whitelist*. It is **session-scoped**: quitting the app (or the next launch after a crash)
-  restores the default action to *allow* automatically. It never touches other programs' rules —
-  which is why built-in Windows rules and rules created by other software still let their
-  programs through, and why the **Release** column shows that fact in three distinct states
-  instead of a vague "allowed".
+- **Unblocks it** — deletes the filters it created for that program.
+- **Strict mode (off by default, advanced)** — a **true whitelist**: only whitelisted programs can
+  reach the network. It opens a **dynamic WFP session inside this process** (whitelist permit at
+  high weight + block-all at low weight), so it **changes no system setting**, and the restriction
+  is **removed automatically** when the app exits, crashes, or is force-killed. A built-in list of
+  required system programs (mostly `svchost.exe`) stays allowed so DNS / time sync / Windows Update
+  keep working. The whitelist is what you add via *Add to whitelist*.
 - **Keeps a list of everything it manages**, so you can always undo — even if the program
   is not running any more.
 - **Optionally auto-starts at logon**, to the system tray.
-- **Every rule it creates is named `AppGuard_*`** so you can find them in `wf.msc` yourself.
+- **Every rule lands in a dedicated WFP sublayer with a fixed GUID** — manage them on the *Rules*
+  page; `wf.msc` will not show them (it only lists Windows Firewall's own rules).
 
 ## What it does **not** do
 
 Being explicit about this matters, because the tool needs administrator rights.
 
-- ❌ It does **not** filter, inspect, or route any traffic. Windows Firewall does all of that.
-- ❌ It does **not** change global firewall policy — **the one exception is strict mode**
-  (off by default, must be turned on explicitly, and reverts automatically when the app exits).
-  Apart from that it never enables/disables the firewall and never touches the default inbound action.
-- ❌ It does **not** touch firewall rules created by anything else. Deletion is hard-limited to
-  rules whose name starts with `AppGuard_`.
-- ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …).
+- ❌ It does **not** filter, inspect, or route any traffic. The system's WFP does all of that.
+- ❌ It does **not** change any Windows Firewall setting — it does not disable the firewall and does
+  not change the default inbound or outbound action. **Strict mode is no exception**: it only opens
+  an in-process session that is revoked on exit.
+- ❌ It does **not** touch filters or rules created by anything else. It only sees and deletes
+  filters under its own sublayer GUID.
+- ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …) —
+  this guard applies to **blocking** only, never to allowing (an allow can never lock anyone out).
 - ⚠️ It **does** reach the network by default, for two specific purposes (see below).
   It sends **no telemetry, no analytics, no usage data**, and there is no update check.
 
@@ -94,7 +96,7 @@ lookup. Turn it off and the tool reads only the local revocation cache.
 - ❌ It does **not** use the registry for persistence. Auto-start uses Task Scheduler; settings go to
   a plain JSON file under `%LOCALAPPDATA%`.
 
-## Why another firewall tool?
+## Why another network-control tool?
 
 Most firewall GUIs start from a list of installed programs. That is fine when you already know
 what you want to block.
@@ -120,7 +122,7 @@ Grab `WinAppGuard.exe` from the [latest release](https://github.com/lovercyh/win
 ## Requirements
 
 - Windows 10 or Windows 11, x64
-- Administrator rights (it edits firewall rules and Task Scheduler)
+- Administrator rights (it manages WFP filters and Task Scheduler)
 
 ## Command line
 
@@ -131,11 +133,15 @@ WinAppGuard.exe --block "C:\Tools\a.exe"   # block a program (idempotent)
 WinAppGuard.exe --list-blocked             # list every "block" rule
 WinAppGuard.exe --unblock-all              # preview only, deletes nothing
 WinAppGuard.exe --unblock-all --yes        # actually delete
+WinAppGuard.exe --migrate                  # migrate 1.x rules to 2.0 and print a report
+WinAppGuard.exe --recover                  # remove this tool's WFP objects and 1.x leftovers
 WinAppGuard.exe --help                     # usage
 ```
 
 - **Exit codes**: `0` ok / `1` bad arguments or not confirmed / `2` failed / `3` not elevated.
 - `--list-blocked` prints **one rule per line**, tab separated, with `#` comment lines — easy to parse.
+- On first launch, both the GUI and the CLI automatically migrate 1.x rules to 2.0; rule names stay
+  the same.
 - These commands do **not** show a confirmation dialog (the command line *is* the instruction);
   operations in the GUI still ask every time.
 - Starting the GUI briefly shows a console window (~0.5 s) — the price of a synchronous CLI —
@@ -156,16 +162,17 @@ its full path, the scope of the change, and the rule that is about to be created
 
 | Concern | Implementation |
 |---|---|
-| Blocking | One outbound Windows Firewall rule per executable path, protocol *any* (TCP + UDP), all profiles |
+| Blocking | **Two** outbound filters per executable path (IPv4 + IPv6), attached to WFP's `ALE_AUTH_CONNECT` layer, covering TCP + UDP |
 | Rule naming | `AppGuard_Block_<exe name>_<8 hex chars of the path>` — deterministic, so re-blocking is idempotent |
-| Firewall access | Windows Firewall COM API (`HNetCfg.FwPolicy2`) — no third-party library |
+| Firewall access | Calls `fwpuclnt.dll` directly (the WFP user-mode API) — 12 functions, no third-party library |
+| Only its own objects | Every enumeration and deletion is filtered by the **sublayer GUID**; other software and system objects are never touched |
 | Connection listing | `GetExtendedTcpTable` via `iphlpapi.dll` |
 | Process path lookup | `QueryFullProcessImageNameW` (no `System.Diagnostics.Process` objects, so no handle leak while refreshing) |
 | Auto-start | One Task Scheduler task named `WinAppGuard`, logon trigger, highest privileges, no execution time limit |
 | Single instance | Named mutex + a broadcast window message, so launching it twice focuses the existing window |
 | IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the app's **only** outbound endpoint, batched and cached in memory, on by default, switchable off |
-| Timed blocks | The expiry is stored **in the firewall rule's own description** (`自动解除=…`), so it is visible in `wf.msc` and survives restarts. A background 30-second timer removes expired rules and shows a tray notification. |
-| Strict mode | Sets the *default outbound action* to block on all three network profiles, combined with the app's own `AppGuard_Allow_*` whitelist rules. **Session-scoped** (reverted on exit, and recovered on the next launch after a crash); it can only be enabled when all three profiles are currently set to allow. |
+| Strict mode | Opens a **dynamic WFP session inside the process**: whitelist permit (high weight) + block all (low weight). **Revoked automatically** on exit or crash; changes no system setting |
+| Timed blocks | The expiry is stored **in the filter's own description field** (`AppGuard\|1\|Block\|C:\path\a.exe\|自动解除=…`), so it survives restarts. A background 30-second timer removes expired filters and shows a tray notification. |
 
 ## Verifiable trust
 
@@ -181,7 +188,7 @@ indirect references and anything the framework drags in — and reports:
 ```
 Referenced assemblies         25, all from the .NET framework   → no third-party libraries
 Networking types referenced   2 — TcpClient / NetworkStream     → the IP ownership lookup only
-Native API calls (P/Invoke)   16
+Native API calls (P/Invoke)   29                                → 17 Win32 + 12 WFP
 Network-related native calls  none                              → nothing bypasses the managed check
 Registry access               none
 ```
@@ -194,7 +201,8 @@ Two notes on that output:
   while a network path hides behind it would be worse than no audit at all.
 - `--audit` needs no administrator rights, so it runs in CI too.
 
-Those 17 native calls are the complete set of unmanaged functions the program can reach:
+Those 29 native calls (17 Win32 + 12 WFP) are the complete set of unmanaged functions the program
+can reach; the list above shows the 17 Win32 ones:
 
 ```
 iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table
@@ -216,19 +224,19 @@ wintrust.dll!WTHelperGetProvSignerFromChain         read the signer
 wintrust.dll!WTHelperGetProvCertFromChain           read the signer's certificate
 ```
 
-16. It cannot reach anything else below the .NET runtime.
+29. It cannot reach anything else below the .NET runtime.
 
 ## Safety guards
 
-These are enforced **in the firewall layer**, not in the UI. Getting the UI logic wrong cannot
+These are enforced **where rules are written**, not in the UI. Getting the UI logic wrong cannot
 bypass them.
 
 | Guard | Where |
 |---|---|
-| Only rules named `AppGuard_*` may be deleted — everything else is rejected with an exception | `FirewallManager.DeleteRule` |
+| Only filters under its own sublayer GUID may be deleted — everything else is invisible and cannot be deleted | `WfpRuleStore` / `WfpEngine` |
 | Critical processes are refused before a rule is created | `FirewallManager.ValidateProgramPath` |
 | Missing file, non-`.exe`, or UNC path is refused | same |
-| Existing connections: the firewall blocks new ones; in practice the app drops offline immediately | — |
+| Existing connections: WFP blocks new ones; in practice the app drops offline immediately | — |
 | All dangerous actions require confirmation | `Forms/ConfirmForm.cs` |
 
 Full details, plus copy-pasteable verification steps for each claim:
@@ -256,10 +264,10 @@ project, not as noise.
 `tools/SelfCheck` is a development tool, not part of the shipped product. It can:
 
 ```powershell
-WinAppGuard.SelfCheck.exe                    # firewall: full automated test (creates then cleans up rules)
-WinAppGuard.SelfCheck.exe --status           # firewall: read-only
-WinAppGuard.SelfCheck.exe --leave            # firewall: create one demo rule and keep it, for inspecting in wf.msc
-WinAppGuard.SelfCheck.exe --cleanup          # firewall: delete all AppGuard_ rules
+WinAppGuard.SelfCheck.exe                    # WFP: full automated test (creates then cleans up filters)
+WinAppGuard.SelfCheck.exe --status           # WFP: read-only
+WinAppGuard.SelfCheck.exe --leave            # 1.x compatibility: create one legacy Windows Firewall rule and keep it
+WinAppGuard.SelfCheck.exe --cleanup          # delete all legacy AppGuard_ firewall rules
 WinAppGuard.SelfCheck.exe --autostart-test   # auto-start: create → check → delete
 WinAppGuard.SelfCheck.exe --audit            # audit the compiled assembly (no admin needed)
 ```
@@ -272,14 +280,15 @@ WinAppGuard.SelfCheck.exe --audit            # audit the compiled assembly (no a
 
 Because of what it legitimately does:
 
-- creates Windows Firewall rules,
+- writes WFP filters,
 - creates a scheduled task that runs **at logon with highest privileges** — which is, technically,
   privilege persistence,
 - reads the TCP connection table and resolves process paths.
 
 Heuristic engines react to exactly that combination. Everything it creates is visible and
-removable: the task is named `WinAppGuard` and is not hidden, and the firewall rules are all
-prefixed `AppGuard_`. Run `--audit` above if you want to check the binary's capabilities.
+removable: the task is named `WinAppGuard` and is not hidden, and the filters all live in a
+dedicated sublayer with a fixed GUID (one command cleans them up). Run `--audit` above if you
+want to check the binary's capabilities.
 
 ### SmartScreen says "unknown publisher"
 
@@ -288,17 +297,17 @@ Click *More info* → *Run anyway*, or verify the SHA-256 against the release no
 
 ### Why does it need administrator rights?
 
-Creating firewall rules and registering a scheduled task both require elevation. The app
+Writing WFP filters and registering a scheduled task both require elevation. The app
 declares `requireAdministrator` in its manifest, so Windows prompts for UAC at launch.
 
 ### I closed the window but it's still running
 
-By design. Closing the window minimises to the tray; quitting outright would leave firewall
-rules active with no visible way to undo them. Use **tray icon → Exit** to really quit.
+By design. Closing the window minimises to the tray; quitting outright would leave WFP
+filters active with no visible way to undo them. Use **tray icon → Exit** to really quit.
 
 ### Does quitting the app unblock everything?
 
-**No.** Quitting only ends the UI process. The firewall rules stay in force and the blocked
+**No.** Quitting only ends the UI process. The WFP filters stay in force and the blocked
 programs stay blocked. To unblock, use *Allow selected program* or *Delete all AppGuard rules*.
 The exit confirmation says this explicitly.
 
@@ -306,19 +315,20 @@ The exit confirmation says this explicitly.
 
 ```
 1. Open WinAppGuard
-2. "Rules" tab → Delete all AppGuard rules
+2. "Rules" tab → Delete all rules (or run: WinAppGuard.exe --recover)
 3. "Settings" tab → turn off auto-start
 4. Tray icon → Exit
 5. Delete WinAppGuard.exe
 6. (optional) delete %LOCALAPPDATA%\WinAppGuard
 ```
 
-Skipping steps 2 and 3 leaves rules and a scheduled task behind. If that happens, search for
-`AppGuard` in `wf.msc` and `WinAppGuard` in `taskschd.msc`.
+Skipping steps 2 and 3 leaves the filter sublayer and a scheduled task behind. If that happens,
+run `WinAppGuard.exe --recover` to clear the WFP objects, and delete `WinAppGuard` in
+`taskschd.msc`.
 
 ### Blocking works on paths, not PIDs
 
-Windows Firewall matches on the executable path, so:
+Rules match on program identity (the executable path), so:
 
 - all instances of that path are blocked together, regardless of arguments;
 - the same program run from a different directory is **not** affected;

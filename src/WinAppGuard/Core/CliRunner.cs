@@ -52,6 +52,10 @@ internal static class CliRunner
 
                 try
                 {
+                    // 命令行也可能面对一台从 1.x 升级上来的机器：
+                    // 先把旧规则迁过来，后面的读写才是完整的一幅图。
+                    StartupMigration.RunIfNeeded();
+
                     return options.Kind switch
                     {
                         CommandKind.Block => RunBlock(options.ProgramPath!),

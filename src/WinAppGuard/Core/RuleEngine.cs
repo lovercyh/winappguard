@@ -104,6 +104,41 @@ internal static class RuleEngine
         return count;
     }
 
+    /// <summary>
+    /// 删掉所有已到期的规则，返回被删掉的（规则名 + 目标程序）。
+    ///
+    /// 语义与 1.x 完全一致：只有"限期"和"下次重启"两类会到期，永久规则永远不动。
+    /// </summary>
+    internal static List<(string RuleName, string ProgramPath)> PurgeExpiredRules(
+        DateTime nowUtc,
+        DateTime currentBootTimeUtc,
+        bool freshLogonSession = false)
+    {
+        using var engine = OpenEngine();
+
+        var expired = WfpRuleStore.List(engine)
+            .Where(rule => !rule.Expiry.IsPermanent
+                           && rule.Expiry.IsExpired(nowUtc, currentBootTimeUtc, freshLogonSession))
+            .ToList();
+
+        var removed = new List<(string RuleName, string ProgramPath)>();
+
+        foreach (var rule in expired)
+        {
+            WfpRuleStore.Remove(engine, rule);
+            removed.Add((rule.DisplayName, rule.ApplicationPath));
+        }
+
+        return removed;
+    }
+
+    /// <summary>当前「允许联网」规则覆盖的程序路径（严格模式白名单用）。</summary>
+    internal static List<string> GetAllowRulePrograms()
+        => GetRules()
+            .Where(rule => rule.Action == FirewallAction.Allow)
+            .Select(rule => rule.ApplicationPath)
+            .ToList();
+
     // ------------------------------------------------------------------
     // 内部
     // ------------------------------------------------------------------

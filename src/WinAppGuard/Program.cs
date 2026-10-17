@@ -101,7 +101,10 @@ internal static class Program
             return 0;
         }
 
-        // 4) 启动界面。
+        // 4) 1.x → 2.0 规则迁移（没有旧规则时什么都不做；失败也不影响启动）。
+        StartupMigration.RunIfNeeded();
+
+        // 5) 启动界面。
         ApplicationConfiguration.Initialize();
         Application.Run(new MainForm(IsAutostart));
         return 0;

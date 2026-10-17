@@ -552,14 +552,14 @@ public partial class MainForm : Form
     // ==================================================================
 
     /// <summary>
-    /// 从 Windows 防火墙重新读取本工具创建的规则，刷新内存缓存和规则列表页。
+    /// 重新读取本工具创建的规则（2.0：来自 WFP），刷新内存缓存和规则列表页。
     /// 读取失败时不改变已有缓存，只提示用户。
     /// </summary>
     private void RefreshRulesFromFirewall()
     {
         try
         {
-            _appGuardRules = FirewallManager.GetAppGuardRules();
+            _appGuardRules = RuleEngine.GetRules();
 
             _blockedPaths.Clear();
             var allowRuleCount = 0;
@@ -648,7 +648,7 @@ public partial class MainForm : Form
             // freshLogonSession 传 _isAutostart：登录触发说明刚刚发生过一次登录，
             // 「直到下次重启」那类规则就该在这一刻解除（快速启动会让开机时长不归零，
             // 光靠开机时刻判断会漏掉，详见 RuleExpiry.IsExpired 的说明）。
-            var removed = FirewallManager.PurgeExpiredRules(
+            var removed = RuleEngine.PurgeExpiredRules(
                 DateTime.UtcNow, SystemUptime.BootTimeUtc, freshLogonSession: _isAutostart);
 
             NotifyExpiredBlocks(removed);
@@ -716,7 +716,7 @@ public partial class MainForm : Form
         try
         {
             var removed = await Task.Run(() =>
-                FirewallManager.PurgeExpiredRules(DateTime.UtcNow, SystemUptime.BootTimeUtc));
+                RuleEngine.PurgeExpiredRules(DateTime.UtcNow, SystemUptime.BootTimeUtc));
 
             // await 期间窗口可能已经被关了。
             if (IsDisposed || Disposing)
@@ -802,10 +802,17 @@ public partial class MainForm : Form
         try
         {
             var started = Environment.TickCount64;
+
+            // 2.0：本工具自己的规则已经搬到 WFP，白名单从这里读。
+            var ours = RuleEngine.GetAllowRulePrograms();
+
+            // 「别的软件 / 系统的允许规则」仍然来自 Windows 防火墙 ——
+            // 那部分不归我们管，读它们只是为了在连接列表里如实标注
+            // "这个程序本来就被别处放行"。2.0 的 block 能压过它们，所以只是参考信息。
             var targets = FirewallManager.GetOutboundAllowTargets();
 
             _whitelistedPaths.Clear();
-            _whitelistedPaths.UnionWith(targets.OurAllowRulePrograms);
+            _whitelistedPaths.UnionWith(ours);
 
             _otherAllowPaths.Clear();
             _otherAllowPaths.UnionWith(targets.OtherSoftwareAllowRulePrograms);
@@ -1628,7 +1635,7 @@ public partial class MainForm : Form
         }
 
         var connectionCount = _connections.Count(c => PathsEqual(c.ProcessPath, item.ProcessPath));
-        var ruleName = FirewallManager.BuildBlockRuleName(item.ProcessPath);
+        var ruleName = RuleNaming.BuildBlockRuleName(item.ProcessPath);
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -1661,7 +1668,7 @@ public partial class MainForm : Form
 
         try
         {
-            var createdRuleName = FirewallManager.CreateBlockRule(item.ProcessPath, chosenExpiry);
+            var createdRuleName = RuleEngine.CreateBlockRule(item.ProcessPath, chosenExpiry);
 
             LocalLog.Operation(
                 $"阻止联网：{item.ProcessPath}（规则 {createdRuleName}，时长：{chosenExpiry.DescribeSchedule()}）");
@@ -1751,7 +1758,7 @@ public partial class MainForm : Form
 
         try
         {
-            var deletedCount = FirewallManager.DeleteRulesForProgram(programPath);
+            var deletedCount = RuleEngine.DeleteRulesForProgram(programPath);
             LocalLog.Operation($"允许联网：{programPath}（删除 {deletedCount} 条规则）");
             AfterRulesChanged();
             return true;
@@ -1819,7 +1826,7 @@ public partial class MainForm : Form
     /// <summary>把程序加入白名单 —— 为它建一条「允许出站」的防火墙规则。</summary>
     private void AddToWhitelist(string programPath, string programName)
     {
-        var ruleName = FirewallManager.BuildAllowRuleName(programPath);
+        var ruleName = RuleNaming.BuildAllowRuleName(programPath);
 
         var warnings = new List<string>
         {
@@ -1856,7 +1863,7 @@ public partial class MainForm : Form
 
         try
         {
-            var created = FirewallManager.CreateAllowRule(programPath);
+            var created = RuleEngine.CreateAllowRule(programPath);
             LocalLog.Operation($"加入白名单：{programPath}（规则 {created}）");
             AfterRulesChanged();
         }
@@ -1870,11 +1877,11 @@ public partial class MainForm : Form
     /// 把程序移出白名单 —— 删掉**本工具为它建的那条**允许规则。
     ///
     /// 只会删以 AppGuard_Allow_ 开头、且属于这个程序的那一条：
-    /// 别人的规则我们碰都不碰（<see cref="FirewallManager.DeleteRule"/> 在底层就会拒）。
+    /// 别人的规则我们碰都不碰（<see cref="RuleEngine.DeleteRule"/> 只删本程序写进 WFP 的规则）。
     /// </summary>
     private void RemoveFromWhitelist(string programPath, string programName)
     {
-        var ruleName = FirewallManager.BuildAllowRuleName(programPath);
+        var ruleName = RuleNaming.BuildAllowRuleName(programPath);
 
         var warnings = new List<string>
         {
@@ -1913,7 +1920,7 @@ public partial class MainForm : Form
 
         try
         {
-            var deleted = FirewallManager.DeleteRule(ruleName);
+            var deleted = RuleEngine.DeleteRule(ruleName);
 
             if (!deleted)
             {
@@ -1978,7 +1985,7 @@ public partial class MainForm : Form
 
         try
         {
-            FirewallManager.DeleteRule(rule.Name);
+            RuleEngine.DeleteRule(rule.Name);
             LocalLog.Operation($"删除规则：{rule.Name}（程序 {rule.ApplicationPath}）");
             AfterRulesChanged();
         }
@@ -2081,7 +2088,7 @@ public partial class MainForm : Form
                 LocalLog.Operation($"删除全部规则前先关闭严格模式：{disableResult.Message}");
             }
 
-            var deleted = FirewallManager.DeleteAllAppGuardRules();
+            var deleted = RuleEngine.DeleteAllRules();
             LocalLog.Operation($"删除全部 AppGuard 规则：实际删除 {deleted} 条");
             AfterRulesChanged();
             RefreshStrictModeStatus();

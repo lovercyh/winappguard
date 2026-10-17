@@ -4,11 +4,14 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
+using WinAppGuard.Interop;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.SelfCheck;
@@ -39,6 +42,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --temp-block-status  临时阻断：只读，打印每条规则的到期解析结果
 ///   WinAppGuard.SelfCheck.exe --strict-mode-test  严格模式：**会真改全局出站默认动作**（但一定还原），验证真能拦、真能放行
 ///   WinAppGuard.SelfCheck.exe --strict-mode-lifecycle-test  严格模式：**同上**，验证开启 / 关闭 / 崩溃后兜底 / 拒绝覆盖别人的策略
+///   WinAppGuard.SelfCheck.exe --wfp-test        WFP：真实往返（建子层 → 加过滤器 → 枚举 → 删 → 删子层）+ 动态会话自动清理
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
@@ -194,6 +198,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--wfp-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpTest();
             }
             else if (args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3567,6 +3575,156 @@ internal static class Program
     /// 这里刻意保持**纯离线、零副作用**，所以它能进 CI、能随时复跑。
     /// 真实的 block → list → unblock 往返在虚拟机里人工验（见 <c>docs/验收清单.md</c> 的 K 组）。
     /// </summary>
+    /// <summary>
+    /// WFP 地基自检（2.0 的第一步）。
+    ///
+    /// 做的是**真实往返**而不是断言常量：开引擎 → 建子层 → 读回 → 加一条过滤器 →
+    /// 枚举 → 按 key 删 → 删子层；最后再验一次「动态会话关掉后自动清空」。
+    ///
+    /// 为什么过滤器的目标选成本程序自己：即使某一步清理失败，
+    /// 被拦的也只是这个自检工具（它本来也不联网），不会影响用户的其他程序。
+    /// </summary>
+    private static void RunWfpTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   WFP 地基自检（只碰本程序自己的子层与自身可执行文件）         #");
+        W("################################################################");
+        W();
+
+        // ---------------- 1. 结构体布局 ----------------
+        W("===== 1. 结构体布局（x64）=====");
+        W($"    FWPM_FILTER0   = {Marshal.SizeOf<WfpNativeMethods.FwpmFilter>()} 字节（应为 200）");
+        W($"    FWPM_SUBLAYER0 = {Marshal.SizeOf<WfpNativeMethods.FwpmSubLayer>()} 字节（应为 72）");
+
+        var layoutOk = true;
+        try
+        {
+            WfpNativeMethods.EnsureLayout();
+        }
+        catch (InvalidOperationException ex)
+        {
+            layoutOk = false;
+            W($"    {ex.Message}");
+        }
+
+        CheckAssertion(results, "结构体尺寸与官方定义一致", layoutOk);
+
+        W();
+        W($"    子层 GUID = {{{WfpEngine.SubLayerKey}}}");
+        W($"    子层权重 = 0x{WfpNativeMethods.OurSubLayerWeight:X4}");
+
+        var exePath = Environment.ProcessPath!;
+        var filterKey = WfpEngine.BuildFilterKey("wfp-test|" + exePath);
+        const ulong testWeight = 0x0FFFFFFF;
+
+        // ---------------- 2. 普通会话：完整往返 ----------------
+        W();
+        W("===== 2. 普通会话：建 → 读回 → 加过滤器 → 枚举 → 删 =====");
+
+        using (var engine = WfpEngine.Open())
+        {
+            // 从干净状态开始：万一上次中途失败，先把自家残留收拾掉。
+            var leftover = engine.DeleteAllOurFilters();
+            if (leftover > 0)
+            {
+                W($"    先清理了 {leftover} 条上次遗留的过滤器");
+            }
+
+            engine.EnsureSublayer(persistent: false);
+
+            var (weight, persistent) = engine.ReadSublayer();
+            W($"    子层读回：权重 0x{weight:X4}，持久化={persistent}");
+
+            CheckAssertion(results, $"子层权重读回是 0x{WfpNativeMethods.OurSubLayerWeight:X4}",
+                weight == WfpNativeMethods.OurSubLayerWeight);
+            CheckAssertion(results, "子层创建后能按 key 读回", true);
+
+            var filterId = engine.AddAppIdFilter(
+                filterKey,
+                "WinAppGuard 自检过滤器",
+                exePath,
+                WfpNativeMethods.FWP_ACTION_BLOCK,
+                testWeight,
+                persistent: false);
+
+            W($"    加过滤器成功：filterId = {filterId}");
+
+            var keys = engine.ListOurFilterKeys();
+            CheckAssertion(results, "枚举到 1 条属于我们的过滤器", keys.Count == 1);
+            CheckAssertion(results, "枚举出的 key 与写入的一致", keys.Count == 1 && keys[0] == filterKey);
+
+            engine.DeleteFilter(filterKey);
+            CheckAssertion(results, "按 key 删除后不再枚举到", engine.ListOurFilterKeys().Count == 0);
+
+            engine.DeleteSublayer();
+            CheckAssertion(results, "子层删除后读不到（FWP_E_SUBLAYER_NOT_FOUND）",
+                IsSublayerMissing(engine));
+        }
+
+        // ---------------- 3. 动态会话：关掉引擎就该全部消失 ----------------
+        W();
+        W("===== 3. 动态会话：引擎关闭后子层与过滤器自动消失 =====");
+
+        var dynamicKey = WfpEngine.BuildFilterKey("wfp-test-dynamic|" + exePath);
+
+        using (var dynamicEngine = WfpEngine.Open(dynamicSession: true))
+        {
+            CheckAssertion(results, "打开动态会话", dynamicEngine.IsDynamic);
+
+            dynamicEngine.EnsureSublayer(persistent: false);
+            dynamicEngine.AddAppIdFilter(
+                dynamicKey,
+                "WinAppGuard 自检（动态会话）",
+                exePath,
+                WfpNativeMethods.FWP_ACTION_BLOCK,
+                testWeight,
+                persistent: false);
+
+            CheckAssertion(results, "动态会话里枚举到 1 条", dynamicEngine.ListOurFilterKeys().Count == 1);
+        }
+
+        using (var checkEngine = WfpEngine.Open())
+        {
+            CheckAssertion(results, "会话关闭后过滤器 0 条（不需要任何还原逻辑）",
+                checkEngine.ListOurFilterKeys().Count == 0);
+            CheckAssertion(results, "会话关闭后子层也消失", IsSublayerMissing(checkEngine));
+
+            // 兜底：万一上面有残留，再收一次，保证系统恢复原样。
+            var leftover = checkEngine.DeleteAllOurFilters();
+            try
+            {
+                checkEngine.DeleteSublayer();
+            }
+            catch (WfpException)
+            {
+                // 子层本来就不存在，忽略。
+            }
+
+            if (leftover > 0)
+            {
+                W($"    兜底清理了 {leftover} 条残留过滤器");
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>子层是否已经不存在（只读判断，不抛异常）。</summary>
+    private static bool IsSublayerMissing(WfpEngine engine)
+    {
+        try
+        {
+            engine.ReadSublayer();
+            return false;
+        }
+        catch (WfpException ex)
+        {
+            return ex.Code == WfpNativeMethods.FWP_E_SUBLAYER_NOT_FOUND;
+        }
+    }
+
     private static void RunCliTest()
     {
         var results = new List<(string Title, bool Passed)>();

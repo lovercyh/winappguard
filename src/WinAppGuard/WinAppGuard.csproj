@@ -75,4 +75,15 @@
     <EmbeddedResource Include="Resources\app.ico" LogicalName="WinAppGuard.AppIcon.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      自检工具（tools/SelfCheck）要直接调用 WFP 封装做真实往返测试。
+      那些类型是 internal（不对外暴露），所以只对这一个开发期工具开放可见性。
+      这不是把接口变成公开 API —— 产品程序集外部依然看不到它们。
+    -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuard.SelfCheck</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

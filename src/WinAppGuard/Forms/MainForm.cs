@@ -1,4 +1,5 @@
 using WinAppGuard.Core;
+using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Forms;
@@ -609,6 +610,18 @@ public partial class MainForm : Form
     /// </summary>
     private void AfterRulesChanged()
     {
+        // 严格模式的放行清单是会话建立时算好的：白名单增删后必须重建会话，
+        // 否则新加的白名单程序在严格模式下仍然上不了网。
+        // 放在"读规则"之前做 —— 重建失败时下面的读取仍然能看到最新规则。
+        if (StrictModeManager.IsEnabled)
+        {
+            var refreshed = StrictModeManager.RefreshIfEnabled();
+            if (refreshed is { Success: false })
+            {
+                LocalLog.Error($"严格模式：白名单变化后重建会话失败：{refreshed.Message}");
+            }
+        }
+
         RefreshRulesFromFirewall();
 
         // 规则变了，白名单也可能变了（加入/移出白名单、删除规则、严格模式开关）。
@@ -2880,45 +2893,31 @@ public partial class MainForm : Form
     /// "该说清的都说了"（这类"如实说明"的文字一旦被改掉，必须有人立刻发现）。
     /// </summary>
     /// <param name="enabled">严格模式当前是否生效。</param>
-    /// <param name="actual">**实际读回来**的三套配置文件默认出站动作。</param>
-    private string BuildStrictModeDetailText(bool enabled, OutboundDefaultState actual)
+    private string BuildStrictModeDetailText(bool enabled)
     {
         var lines = new List<string>();
 
         if (enabled)
         {
-            lines.Add("现在：只有白名单里的程序能上网，其它程序的新连接会被拦掉。");
-            lines.Add("程序退出（或崩溃后下次启动）时会自动还原 —— 严格模式是「会话级」的。");
+            lines.Add($"现在：只放行 {StrictModeManager.PermittedPrograms.Count} 个程序，其它程序的新连接会被拦掉。");
+            lines.Add("这是「会话内」的临时限制：关闭严格模式、或程序退出/崩溃，限制立刻消失。");
         }
         else
         {
             lines.Add("开启后：所有没加白名单的程序都上不了网（新连接会被拦掉），只放行白名单。");
-            lines.Add("它改的是 Windows 的「默认出站动作」，三套网络配置文件一起改。");
-            lines.Add("这是本工具唯一会修改全局防火墙策略的地方。它是「会话级」的：" +
-                      "程序退出（或崩溃后下次启动）时会自动还原。");
+            lines.Add("白名单 = 本工具的允许规则 + 本程序 + 系统必需程序（DNS、时间同步、Windows 更新等）。");
+            lines.Add("2.0 是「真白名单」：Windows 自带和别的软件的允许规则不再自动放行。");
+            lines.Add("限制只存在于本次运行（会话内）：程序退出或崩溃时会自动撤销，不需要还原。");
+            lines.Add("它不会修改 Windows 防火墙的任何设置。");
         }
 
         lines.Add(string.Empty);
-
         lines.Add($"本工具白名单：{_whitelistedPaths.Count} 个程序" +
-                  (SelfIsWhitelisted() ? "（含本工具自己，否则它查不了 IP 归属）" : string.Empty));
+                  (SelfIsWhitelisted() ? "（含本工具自己）" : "（本程序会自动放行自己）"));
+        lines.Add($"系统必需程序：{SystemAllowList.GetPaths().Count} 个（内置清单，保证 DNS / 更新等基础功能）");
         lines.Add($"系统/其它软件为具体程序建的允许规则：{_otherAllowPaths.Count} 个程序" +
-                  "（严格模式挡不住这些 —— 本工具不碰别人的规则，只能如实显示）");
-        lines.Add($"另有 {_programlessAllowRuleCount} 条「不限程序」的允许规则（系统自带的多是这类），" +
-                  "它们也会放行一部分流量。");
-
-        lines.Add(string.Empty);
-
-        if (!enabled && !actual.AllAllowed)
-        {
-            lines.Add($"⚠ 现在不能开启：三套配置文件的默认出站动作是 {actual.Describe()}，" +
-                      "不是全部「允许」。这说明机器上已经有别的「默认阻止出站」策略" +
-                      "（可能是别的安全软件），本工具不会去覆盖它。");
-        }
-        else
-        {
-            lines.Add($"三套配置文件的默认出站动作：{actual.Describe()}");
-        }
+                  "（严格模式下不再自动放行 —— 这是与 1.x 最大的区别）");
+        lines.Add($"另有 {_programlessAllowRuleCount} 条「不限程序」的允许规则（严格模式下同样不生效，这里只作参考）");
 
         return string.Join(Environment.NewLine, lines);
     }
@@ -2933,20 +2932,18 @@ public partial class MainForm : Form
     {
         try
         {
-            var actual = FirewallManager.GetOutboundDefaultAllowed();
             var enabled = StrictModeManager.IsEnabled;
 
             _strictModeStatusLabel.Text = enabled
-                ? "当前状态：严格模式生效中（本次会话）"
+                ? $"当前状态：严格模式生效中（放行 {StrictModeManager.PermittedPrograms.Count} 个程序）"
                 : "当前状态：未开启，默认放行";
 
             _strictModeToggleButton.Text = enabled ? "恢复默认放行" : "开启严格模式…";
 
-            // 没开、而且当前状态不是「三套全允许」时，开启必然会被拒绝（不能覆盖别人的策略），
-            // 那就别让按钮看起来可点 —— 但说明里会写清"为什么不能开"。
-            _strictModeToggleButton.Enabled = enabled || actual.AllAllowed;
+            // 2.0 的严格模式不改任何全局设置，所以不存在"不能开启"的情况。
+            _strictModeToggleButton.Enabled = true;
 
-            _strictModeDetailLabel.Text = BuildStrictModeDetailText(enabled, actual);
+            _strictModeDetailLabel.Text = BuildStrictModeDetailText(enabled);
         }
         catch (Exception ex)
         {
@@ -2970,24 +2967,20 @@ public partial class MainForm : Form
     /// <summary>关闭严格模式。这是"安全方向"的操作，所以只要一次确认。</summary>
     private void DisableStrictMode()
     {
-        var selfWasWhitelisted = SelfIsWhitelisted();
-
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "恢复默认放行",
             question: "确定要关闭严格模式吗？",
             details: new[]
             {
-                new KeyValuePair<string, string>("将要做的", "把三套配置文件的默认出站动作还原成「允许」"),
+                new KeyValuePair<string, string>("将要做的", "结束严格模式会话，撤销全部拦截"),
                 new KeyValuePair<string, string>("影响", "所有程序恢复联网（白名单规则本身保留）"),
             },
             warnings: new[]
             {
-                "严格模式本来就是「会话级」的：程序退出时也会自动还原，这一步只是提前做而已。",
+                "严格模式是会话级的：程序退出时也会自动撤销，这一步只是提前做而已。",
                 "白名单（AppGuard_Allow_ 规则）不会被删，下次开启严格模式时直接生效。",
-                selfWasWhitelisted
-                    ? "本程序自己那条由严格模式自动加的白名单规则会被删掉。"
-                    : "本程序自己本来就在白名单里（是你自己加的），不会被删。",
+                "不会修改 Windows 防火墙的任何设置。",
             },
             confirmText: "恢复默认放行");
 
@@ -3004,7 +2997,7 @@ public partial class MainForm : Form
             AfterRulesChanged();
             RefreshStrictModeStatus();
 
-            ShowTrayBalloon("严格模式已关闭", "默认出站动作已还原成「允许」，所有程序恢复联网。");
+            ShowTrayBalloon("严格模式已关闭", "限制已撤销，所有程序恢复联网。");
         }
         catch (Exception ex)
         {
@@ -3029,6 +3022,8 @@ public partial class MainForm : Form
             "想先放行某些程序：取消这个对话框 → 到「联网连接」页选中它 → 右键「加入白名单」→ 再回来开启。";
 
         // ---------------- 第一次确认：讲清后果 ----------------
+        var systemCount = SystemAllowList.GetPaths().Count;
+
         var firstConfirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "开启严格模式（第 1/2 步）",
@@ -3036,18 +3031,17 @@ public partial class MainForm : Form
             details: new[]
             {
                 new KeyValuePair<string, string>(
-                    "将要做的", "把 Windows 的「默认出站动作」改成「阻止」（三套网络配置文件）"),
+                    "将要做的", "建立一个会话内的拦截（不改 Windows 防火墙的任何设置）"),
                 new KeyValuePair<string, string>(
-                    "将会放行", $"本工具白名单里的 {_whitelistedPaths.Count} 个程序"),
+                    "将会放行", $"本工具白名单 {_whitelistedPaths.Count} 个程序 + 本程序 + {systemCount} 个系统必需程序"),
                 new KeyValuePair<string, string>(
                     "会被影响", $"{affected.Count} 个正在联网、但没加白名单的程序"),
             },
             warnings: new[]
             {
-                "这是本工具唯一会修改全局防火墙策略的地方。",
-                "程序退出（或崩溃后下次启动）时会自动还原成「允许」—— 严格模式是会话级的。",
-                "Windows 自带的允许规则、以及别的软件为某些程序建的允许规则仍然会放行；" +
-                "本工具不碰别人的规则，所以严格模式不是绝对白名单。",
+                "2.0 是「真白名单」：Windows 自带的允许规则、别的软件建的允许规则都不再生效。",
+                $"为了不让 DNS / 时间同步 / Windows 更新被一起挡掉，内置放行了 {systemCount} 个系统必需程序（以 svchost 为主）。",
+                "程序退出、崩溃或被强杀时会自动撤销 —— 不需要任何还原操作。",
                 howToWhitelist,
             },
             confirmText: "下一步");
@@ -3080,7 +3074,7 @@ public partial class MainForm : Form
             }
 
             warnings.Add("（已经连上的连接要等它自己断开，不会被立刻掐断。）");
-            warnings.Add("注意：系统或其它软件的「不限程序」允许规则也会放行一部分流量，实际影响可能比这个清单小。");
+            warnings.Add("注意：系统必需程序（DNS / 更新等）仍然会被放行，实际影响可能比这个清单小。");
         }
 
         warnings.Add(howToWhitelist);
@@ -3104,7 +3098,7 @@ public partial class MainForm : Form
 
             if (!result.Success)
             {
-                // 例如：机器上已经有别人的「默认阻止出站」策略 —— 如实说明，不覆盖。
+                // 例如：建立 WFP 会话失败（没有管理员权限、BFE 异常）。
                 MessageBox.Show(
                     this, result.Message, AppConstants.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 RefreshStrictModeStatus();
@@ -3113,14 +3107,13 @@ public partial class MainForm : Form
 
             LocalLog.Operation($"严格模式已开启：{result.Message}");
 
-            // 规则变了（多了本程序自己那条白名单规则），两个页面都要跟上。
-            AfterRulesChanged();
+            // 严格模式不改规则，只建立了会话；状态文字要立刻更新。
             RefreshStrictModeStatus();
 
             ShowTrayBalloon(
                 "严格模式已开启",
-                $"只有白名单里的 {_whitelistedPaths.Count} 个程序能上网，其它程序的新连接会被拦掉。" +
-                "程序退出时会自动还原。");
+                $"只放行 {StrictModeManager.PermittedPrograms.Count} 个程序，其它程序的新连接会被拦掉。" +
+                "程序退出时会自动撤销。");
         }
         catch (Exception ex)
         {
@@ -3139,12 +3132,17 @@ public partial class MainForm : Form
     private List<string> BuildProgramsThatWillLoseAccess()
     {
         var names = new List<string>();
+        var systemPaths = new HashSet<string>(SystemAllowList.GetPaths(), StringComparer.OrdinalIgnoreCase);
+        var selfPath = Environment.ProcessPath;
 
         foreach (var item in _scannedConnections)
         {
+            // 2.0 是「真白名单」：别的软件/系统为它建的允许规则**不再**能救它，
+            // 所以这里不能再按 _otherAllowPaths 排除 —— 否则会少报、把用户吓不到点上。
             if (string.IsNullOrEmpty(item.ProcessPath)
                 || _whitelistedPaths.Contains(item.ProcessPath)
-                || _otherAllowPaths.Contains(item.ProcessPath))
+                || systemPaths.Contains(item.ProcessPath)
+                || (selfPath is not null && PathsEqual(item.ProcessPath, selfPath)))
             {
                 continue;
             }

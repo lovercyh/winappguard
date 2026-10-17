@@ -2619,427 +2619,261 @@ internal static class Program
     }
 
     /// <summary>
-    /// 严格模式的**底层能力**自检（需要管理员，**会真改全局防火墙策略，但一定还原**）。
+    /// 严格模式自检（2.0 产品级）：动态会话 + 真白名单，不改任何系统设置。
     ///
-    /// 这是严格模式的第一阶段：只证明底层三件事 ——
-    /// **真能拦住、真能放行、真能还原**。界面与策略层不在这个模式里。
-    ///
-    /// 为什么必须真连一次，而不是只做单元断言：
-    ///   - 「默认出站动作」是 COM 索引属性，**写回去的语法到底生不生效**，只能实测；
-    ///   - 「改了默认动作之后，没放行的程序是不是真的被拦住」—— 这是整个功能的命门，
-    ///     只有真连一次才算证明，光看代码注释不算。
-    ///
-    /// 探测设计：用 TCP 43 连 <c>whois.cymru.com</c>。
-    ///   - 选这个端口，是因为**系统自带的允许规则不管它**（自带规则管的是 DNS、DHCP 这类），
-    ///     所以能不能连上，只可能取决于**我们自己的允许规则**；
-    ///   - 域名在**改默认动作之前**就解析好，把 DNS 的允许规则从等式里排除掉。
-    ///
-    /// 三重安全措施：
-    ///   1. 开始前三套配置文件的默认出站动作**必须都是「允许」**，否则直接中止 ——
-    ///      那说明机器上已经有别的默认阻止策略，去改它就是覆盖别人的设置；
-    ///   2. 探测（解析域名、基线连接）**在动任何东西之前**先跑一遍，不通就中止，一个字节都不改；
-    ///   3. 原值记下来，`finally` 里**一定还原**（哪怕中途抛异常），并再连一次证明网络真的回来了。
+    /// 验证：能开（放行清单正确）、重复开被拒、能关（过滤器由系统自动删除）、重复关被拒。
     /// </summary>
     private static void RunStrictModeTest()
     {
         var results = new List<(string Title, bool Passed)>();
 
         W("################################################################");
-        W("#   严格模式：底层能力自检（会真改全局策略，但一定还原）          #");
+        W("#   严格模式自检（2.0：动态会话 + 真白名单，不改系统设置）       #");
         W("################################################################");
         W();
-        W("⚠ 本模式会短暂改动全局策略。如果在运行期间被强杀（Ctrl+C / 关窗口），");
-        W("   三套配置文件的「默认出站动作」可能停在「阻止」。手工恢复方法：");
-        W("   Win+R → 输入 wf.msc → 右键「属性」→ 三套配置文件的「出站连接」都改成「允许」。");
-        W();
 
-        // ---------------- 0. 前置：原值必须是「全部允许」----------------
-        var original = FirewallManager.GetOutboundDefaultAllowed();
-
-        W("================= 0. 前置检查 =================");
-        W($"开始前三套配置文件的默认出站动作 = {original.Describe()}");
-        W($"防火墙规则总数                     = {FirewallManager.GetTotalRuleCount()}（本自检不会动别人的规则）");
-        W();
-
-        if (!original.AllAllowed)
-        {
-            W("!!! 中止：不改任何东西 !!!");
-            W();
-            W("要跑这个自检，三套配置文件的「默认出站动作」必须**都是「允许」**。");
-            W("现在不是 —— 说明这台机器上**已经有别的「默认阻止出站」策略**");
-            W("（可能是别的安全软件，也可能是别人手工设的）。");
-            W("本自检**绝不会**去覆盖它。请先把它恢复成「允许」，或者换一台干净的机器。");
-            W();
-            W("只想看看现状的话，用只读模式：");
-            W("    WinAppGuard.SelfCheck.exe --status");
-            results.Add(("前置：三套配置文件的默认出站动作都是「允许」（否则本自检无法安全进行）", false));
-            PrintSummary(results, showFirewallResidue: true);
-            return;
-        }
-
-        results.Add(("前置：三套配置文件的默认出站动作都是「允许」", true));
-
-        // ---------------- 1. 探测目标（改任何东西之前）----------------
-        W("================= 1. 探测目标（此时还没改任何东西）================");
-
-        IPAddress? target = null;
-        try
-        {
-            target = Dns.GetHostAddresses(AppConstants.OwnershipLookupHost)
-                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
-        }
-        catch (Exception ex)
-        {
-            W($"  解析 {AppConstants.OwnershipLookupHost} 时出错：{ex.Message}");
-        }
-
-        if (target is null)
-        {
-            W();
-            W("!!! 中止：不改任何东西 !!!");
-            W($"解析不出 {AppConstants.OwnershipLookupHost} 的 IPv4 地址，说明这台机器现在连 DNS 都不通，");
-            W("后面「拦住了 / 放行了」的结论就都没有意义。请先把网络弄通再跑。");
-            results.Add(($"前置：能解析出 {AppConstants.OwnershipLookupHost} 的 IPv4 地址", false));
-            PrintSummary(results, showFirewallResidue: true);
-            return;
-        }
-
-        var selfPath = Environment.ProcessPath ?? string.Empty;
-        W($"  探测目标 = {target}:{AppConstants.OwnershipLookupPort}（TCP）");
-        W($"  探测程序 = {selfPath}");
-
-        // 先看看有没有「本来就存在」的、针对探测程序的允许规则 —— 有的话要如实说明，
-        // 因为它会让第 2 步的「应该被拦住」失效。
-        var preexistingAllow = FirewallManager.GetAppGuardRules().Any(rule =>
-            rule.Action == FirewallAction.Allow &&
-            string.Equals(rule.ApplicationPath, selfPath, StringComparison.OrdinalIgnoreCase));
-
-        if (preexistingAllow)
-        {
-            W();
-            W("  注意：探测程序**本来就有**一条 AppGuard 允许规则。");
-            W("        第 2 步「应该被拦住」会因此不成立 —— 本自检会把它先删掉，最后不再恢复");
-            W("        （它就是本工具自己建的，删掉不影响任何人）。");
-        }
-
-        W();
-
-        var baseline = ProbeTcp(target, AppConstants.OwnershipLookupPort, AppConstants.OwnershipConnectTimeoutMs, out var baselineDetail);
-        W($"  基线连接 = {(baseline ? "成功" : "失败")}   （{baselineDetail}）");
-
-        if (!baseline)
-        {
-            W();
-            W("!!! 中止：不改任何东西 !!!");
-            W("默认允许的情况下都连不上，说明这台机器现在本来就不通或者目标不可达，");
-            W("那「拦住 / 放行」的对比就没有意义。请先确认网络。");
-            results.Add(("前置：默认允许时能连上探测目标（证明网络本来就通）", false));
-            PrintSummary(results, showFirewallResidue: true);
-            return;
-        }
-
-        results.Add(("前置：默认允许时能连上探测目标（证明网络本来就通）", true));
-
-        string? allowRuleName = null;
-        Exception? stepError = null;
+        var targetExe = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+        var createdRule = string.Empty;
 
         try
         {
-            // ---------------- 2. 写入：默认出站 → 阻止 ----------------
+            using (var engine = WfpEngine.Open())
+            {
+                engine.DeleteAllOurFilters();
+                engine.DeleteSublayer();
+            }
+
+            // 严格模式的放行清单来自"本工具的允许规则"，先造一条。
+            createdRule = RuleEngine.CreateAllowRule(targetExe);
+            W($"    已创建白名单规则：{createdRule}");
+
             W();
-            W("================= 2. 把三套配置文件的默认出站动作改成「阻止」================");
-            FirewallManager.SetOutboundDefaultAllowed(false);
+            W("===== 1. 开启 =====");
 
-            var afterBlock = FirewallManager.GetOutboundDefaultAllowed();
-            W($"  读回 = {afterBlock.Describe()}");
+            var enable = StrictModeManager.Enable();
+            W($"    {enable.Message}");
 
-            // 这条断言同时覆盖两种可能的 API 语义：
-            // 若这个属性是「全局一个值」，三套会一起变；
-            // 若是「每套一个值」，三次写入也应当三套都变。
-            // 无论哪种解释，只要读回来是「三套都阻止」，就说明我们确实拦住了所有配置文件。
-            results.Add(("写入生效：三套配置文件读回来都是「阻止」",
-                !afterBlock.DomainAllowed && !afterBlock.PrivateAllowed && !afterBlock.PublicAllowed));
+            CheckAssertion(results, "开启成功", enable.Success);
+            CheckAssertion(results, "IsEnabled = true", StrictModeManager.IsEnabled);
 
-            // ---------------- 3. 没有放行规则 → 必须连不上 ----------------
+            var permitted = StrictModeManager.PermittedPrograms;
+            W($"    放行 {permitted.Count} 个程序：");
+            foreach (var path in permitted.Take(10))
+            {
+                W($"      {path}");
+            }
+
+            if (permitted.Count > 10)
+            {
+                W($"      …… 以及另外 {permitted.Count - 10} 个");
+            }
+
+            CheckAssertion(results, "白名单里的记事本被放行",
+                permitted.Any(path => string.Equals(path, targetExe, StringComparison.OrdinalIgnoreCase)));
+            CheckAssertion(results, "本程序自己被自动放行",
+                permitted.Any(path => string.Equals(path, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase)));
+            CheckAssertion(results, "系统必需程序被放行（svchost）",
+                permitted.Any(path => string.Equals(
+                    Path.GetFileName(path), "svchost.exe", StringComparison.OrdinalIgnoreCase)));
+
+            using (var engine = WfpEngine.Open())
+            {
+                var filterCount = engine.ListOurFilters().Count;
+                var expected = permitted.Count * 2 + 2;
+                W($"    过滤器 = {filterCount} 条（预期 {expected} = 放行程序 × 2 层 + 阻止全部 × 2 层）");
+                CheckAssertion(results, "过滤器条数正确", filterCount == expected);
+            }
+
             W();
-            W("================= 3. 没有放行规则时，应当被拦住 ================");
-            var blocked = ProbeTcp(target, AppConstants.OwnershipLookupPort, AppConstants.OwnershipConnectTimeoutMs, out var blockedDetail);
-            W($"  连接结果 = {(blocked ? "成功   <<< 不应该成功！" : "失败（被拦住）")}");
-            W($"  说明     = {blockedDetail}");
-            results.Add(("没放行的程序被拦住（连不上）", !blocked));
+            W("===== 2. 重复开启应被拒绝 =====");
+            var second = StrictModeManager.Enable();
+            W($"    {second.Message}");
+            CheckAssertion(results, "已在生效时再开 → 拒绝", !second.Success);
 
-            // ---------------- 4. 放行之后 → 必须连得上 ----------------
             W();
-            W("================= 4. 给探测程序建一条 AppGuard_Allow 之后，应当能连上 ================");
-            allowRuleName = FirewallManager.CreateAllowRule(selfPath);
-            W($"  允许规则名 = {allowRuleName}");
+            W("===== 3. 关闭 =====");
+            var disable = StrictModeManager.Disable();
+            W($"    {disable.Message}");
 
-            var allowed = ProbeTcp(target, AppConstants.OwnershipLookupPort, AppConstants.OwnershipConnectTimeoutMs, out var allowedDetail);
-            W($"  连接结果 = {(allowed ? "成功（放行了）" : "失败   <<< 应该成功！")}");
-            W($"  说明     = {allowedDetail}");
-            results.Add(("放行之后能连上（白名单真的放行）", allowed));
+            CheckAssertion(results, "关闭成功", disable.Success);
+            CheckAssertion(results, "IsEnabled = false", !StrictModeManager.IsEnabled);
 
-            // ---------------- 5. 删掉放行规则 → 又必须连不上 ----------------
-            W();
-            W("================= 5. 删掉那条放行规则之后，应当又被拦住 ================");
-            var deleted = FirewallManager.DeleteRule(allowRuleName);
-            allowRuleName = null;
-            W($"  删除结果 = {deleted}");
+            using (var engine = WfpEngine.Open())
+            {
+                CheckAssertion(results, "关闭后过滤器全部消失（系统自动删除）",
+                    engine.ListOurFilters().Count == 0);
+            }
 
-            var blockedAgain = ProbeTcp(target, AppConstants.OwnershipLookupPort, AppConstants.OwnershipConnectTimeoutMs, out var blockedAgainDetail);
-            W($"  连接结果 = {(blockedAgain ? "成功   <<< 应该失败！" : "失败（又被拦住）")}");
-            W($"  说明     = {blockedAgainDetail}");
-            results.Add(("删掉放行规则后又被拦住", !blockedAgain));
-        }
-        catch (Exception ex)
-        {
-            // 步骤里出错也要**继续往下走**，让收尾验证照跑。
-            //
-            // 这条是第一次实测补上的：当时第 4 步抛了异常，整段被跳过，
-            // 虽然 finally 里确实还原了，但输出里**看不到任何"已还原"的证据** ——
-            // 一个自检工具如果自己出事就闭嘴，那它就没法用来定位问题。
-            stepError = ex;
-            W();
-            W($"!!! 步骤执行中出错：{ex.GetType().Name}：{ex.Message}");
+            CheckAssertion(results, "没开时再关 → 拒绝", !StrictModeManager.Disable().Success);
         }
         finally
         {
-            // ---------------- 无论如何都要还原 ----------------
-            if (allowRuleName is not null)
+            StrictModeManager.Disable();
+
+            try
             {
-                try { FirewallManager.DeleteRule(allowRuleName); } catch { /* 收尾，忽略 */ }
+                if (!string.IsNullOrEmpty(createdRule))
+                {
+                    RuleEngine.DeleteRule(createdRule);
+                }
+            }
+            catch (Exception)
+            {
+                // 忽略清理失败：这是自检，不影响结论。
             }
 
             try
             {
-                FirewallManager.SetOutboundDefaultAllowed(true);
+                using var engine = WfpEngine.Open();
+                engine.DeleteAllOurFilters();
+                engine.DeleteSublayer();
             }
-            catch (Exception ex)
+            catch (WfpException)
             {
-                W();
-                W($"!!! 还原默认出站动作时出错：{ex.Message}");
-                W("    请手工恢复：wf.msc → 右键「属性」→ 各配置文件的「出站连接」改回「允许」。");
+                // 已经干净。
             }
         }
 
-        if (stepError is not null)
-        {
-            results.Add(($"步骤执行中不应抛异常（实际：{stepError.GetType().Name}）", false));
-        }
-
-        // ---------------- 6. 收尾：证明真的还原了 ----------------
-        W();
-        W("================= 6. 收尾（证明已还原、网络已恢复）================");
-
-        var afterRestore = FirewallManager.GetOutboundDefaultAllowed();
-        W($"  还原后 = {afterRestore.Describe()}");
-
-        // 只允许「全允许」，因为前置检查已经保证过原值就是全允许。
-        results.Add(("已还原成「全部允许」（和开始前一致）", afterRestore.AllAllowed));
-
-        var finalOk = ProbeTcp(target, AppConstants.OwnershipLookupPort, AppConstants.OwnershipConnectTimeoutMs, out var finalDetail);
-        W($"  还原后连接 = {(finalOk ? "成功" : "失败   <<< 网络没恢复！")}");
-        W($"  说明       = {finalDetail}");
-        results.Add(("还原之后连接恢复正常（用户不会被锁在断网状态）", finalOk));
-
-        W();
-        W("收尾后残留的 AppGuard 规则 = " + FirewallManager.GetAppGuardRules().Count + " 条（应为 0）");
-
-        PrintSummary(results, showFirewallResidue: true);
+        PrintSummary(results, showFirewallResidue: false);
     }
 
     /// <summary>
-    /// 用 TCP 连一次指定地址，判断「这个程序现在到底能不能出网」。
-    ///
-    /// 判定依据：Windows 防火墙拦出站时通常是**静默丢弃**（不回 RST），
-    /// 所以「超时」和「socket 报错」都算**不通**，只有真连上才算通。
-    /// </summary>
-    /// <param name="address">目标地址（用 IP，不走 DNS，避免把 DNS 允许规则牵扯进来）。</param>
-    /// <param name="port">目标端口。</param>
-    /// <param name="timeoutMs">等待毫秒数。</param>
-    /// <param name="detail">给人和给报告看的说明。</param>
-    /// <returns>true = 连上了。</returns>
-    private static bool ProbeTcp(IPAddress address, int port, int timeoutMs, out string detail)
-    {
-        using var client = new TcpClient();
-
-        try
-        {
-            using var cts = new CancellationTokenSource(timeoutMs);
-            client.ConnectAsync(address, port, cts.Token).GetAwaiter().GetResult();
-            detail = "连接成功";
-            return true;
-        }
-        catch (OperationCanceledException)
-        {
-            detail = $"{timeoutMs} 毫秒内没有任何回应 —— 被静默丢弃，典型的防火墙拦截";
-            return false;
-        }
-        catch (SocketException ex)
-        {
-            detail = $"socket 错误 {ex.SocketErrorCode}：{ex.Message}";
-            return false;
-        }
-        catch (Exception ex)
-        {
-            detail = $"{ex.GetType().Name}：{ex.Message}";
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// 严格模式的**策略层**自检（需要管理员，**会真改全局防火墙策略，但一定还原**）。
-    ///
-    /// 与 <c>--strict-mode-test</c> 的分工：
-    ///   <c>--strict-mode-test</c>            证明**底层动作**本身能拦、能放行、能还原；
-    ///   <c>--strict-mode-lifecycle-test</c>  证明**策略层**（Core/StrictModeManager.cs）的安全网 ——
-    ///       开启 / 正常关闭 / 崩溃后启动兜底 / 拒绝覆盖别人的策略。
-    ///
-    /// 用**临时设置文件**：绝不碰用户真正的 settings.json
-    /// （那个文件里有 IP 归属查询开关之类属于用户的选择）。
-    ///
-    /// 断言重点全在「还原」上：这个功能的风险只有一个 —— **改了没还原**，
-    /// 所以每条路径都要证明"不仅做了该做的，还把不该留的清干净了"。
+    /// 严格模式生命周期自检（2.0）。重点验证两件与 1.x 完全不同的事：
+    ///   1. 白名单变化后必须重建会话 —— 否则新加的程序在严格模式下仍然上不了网；
+    ///   2. 2.0 不再写 1.x 的「没还原」标志 —— 动态会话不需要启动兜底。
     /// </summary>
     private static void RunStrictModeLifecycleTest()
     {
         var results = new List<(string Title, bool Passed)>();
-        var tempSettings = Path.Combine(Path.GetTempPath(), $"wag-strict-{Guid.NewGuid():N}.json");
 
         W("################################################################");
-        W("#   严格模式：策略层自检（会真改全局策略；用临时设置文件）        #");
+        W("#   严格模式生命周期自检（白名单变化 → 重建会话；不写 1.x 标志） #");
         W("################################################################");
         W();
-        W("⚠ 本模式会短暂改动全局策略。如果在运行期间被强杀（Ctrl+C / 关窗口），");
-        W("   三套配置文件的「默认出站动作」可能停在「阻止」。手工恢复方法：");
-        W("   Win+R → 输入 wf.msc → 右键「属性」→ 三套配置文件的「出站连接」都改成「允许」。");
-        W();
 
-        var original = FirewallManager.GetOutboundDefaultAllowed();
-        W($"开始前三套配置文件的默认出站动作 = {original.Describe()}");
-        W($"临时设置文件（不碰用户真正的设置）= {tempSettings}");
-        W();
-
-        if (!original.AllAllowed)
-        {
-            W("!!! 中止：不改任何东西 !!!");
-            W("三套必须都是「允许」才能安全地跑这个自检（否则会覆盖别人的策略）。");
-            results.Add(("前置：三套配置文件的默认出站动作都是「允许」", false));
-            PrintSummary(results, showFirewallResidue: true);
-            return;
-        }
-
-        results.Add(("前置：三套配置文件的默认出站动作都是「允许」", true));
+        var settingsPath = Path.Combine(Path.GetTempPath(), $"wag-strict-{Guid.NewGuid():N}.json");
+        var firstExe = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+        var secondExe = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        var firstRule = string.Empty;
+        var secondRule = string.Empty;
 
         try
         {
-            // ---------------- 1. 开启 ----------------
-            W("================= 1. 开启严格模式 =================");
-            var enable = StrictModeManager.Enable(tempSettings);
-            W($"  Enable() = 成功={enable.Success}");
-            W($"  {enable.Message}");
-            results.Add(("Enable() 应当成功", enable.Success));
-            results.Add(("IsEnabled 变成 true", StrictModeManager.IsEnabled));
+            using (var engine = WfpEngine.Open())
+            {
+                engine.DeleteAllOurFilters();
+                engine.DeleteSublayer();
+            }
 
-            var afterEnable = FirewallManager.GetOutboundDefaultAllowed();
-            W($"  三套 = {afterEnable.Describe()}");
-            results.Add(("开启后三套都变成「阻止」",
-                !afterEnable.DomainAllowed && !afterEnable.PrivateAllowed && !afterEnable.PublicAllowed));
+            firstRule = RuleEngine.CreateAllowRule(firstExe);
+            W($"    第一条白名单规则：{firstRule}");
 
-            W($"  本程序自己的放行规则 = {StrictModeManager.SelfAllowRuleName}");
-            results.Add(("本程序自己被放行了（否则严格模式下它连 IP 归属都查不了）",
-                StrictModeManager.IsSelfWhitelisted()));
-
-            var flags = AppSettings.Load(tempSettings);
-            W($"  临时设置文件：StrictModeLeftOn={flags.StrictModeLeftOn}  SelfAllowCreated={flags.StrictModeSelfAllowCreated}");
-            results.Add(("「没还原就退出」的标志已落盘（崩溃后能否救回来全靠它）", flags.StrictModeLeftOn));
-            results.Add(("「自己那条放行规则是我建的」标志已落盘", flags.StrictModeSelfAllowCreated));
-
-            // ---------------- 2. 模拟崩溃 → 启动兜底 ----------------
             W();
-            W("================= 2. 模拟崩溃：不调 Disable，直接跑启动兜底 =================");
-            var recover = StrictModeManager.RecoverIfLeftOn(tempSettings);
-            W($"  RecoverIfLeftOn() = WasLeftOn={recover.WasLeftOn}  Restored={recover.Restored}");
-            W($"  {recover.Message}");
+            W("===== 1. 只放行第一个程序 =====");
+            var enable = StrictModeManager.Enable();
+            CheckAssertion(results, "开启成功", enable.Success);
 
-            results.Add(("兜底认得出来「上次没正常退出」", recover.WasLeftOn));
-            results.Add(("兜底成功还原", recover.Restored));
+            var before = StrictModeManager.PermittedPrograms.Count;
+            W($"    放行 {before} 个程序");
 
-            var afterRecover = FirewallManager.GetOutboundDefaultAllowed();
-            W($"  三套 = {afterRecover.Describe()}");
-            results.Add(("兜底后三套都回到「允许」", afterRecover.AllAllowed));
-            results.Add(("兜底把本程序自己的放行规则也删掉了", !StrictModeManager.IsSelfWhitelisted()));
+            CheckAssertion(results, "第一个程序在清单里",
+                StrictModeManager.PermittedPrograms.Any(path =>
+                    string.Equals(path, firstExe, StringComparison.OrdinalIgnoreCase)));
+            CheckAssertion(results, "第二个程序还不在清单里",
+                !StrictModeManager.PermittedPrograms.Any(path =>
+                    string.Equals(path, secondExe, StringComparison.OrdinalIgnoreCase)));
 
-            var flagsAfterRecover = AppSettings.Load(tempSettings);
-            results.Add(("兜底后标志被清掉（不会每次启动都重复动手）",
-                !flagsAfterRecover.StrictModeLeftOn && !flagsAfterRecover.StrictModeSelfAllowCreated));
-            results.Add(("兜底后 IsEnabled 是 false", !StrictModeManager.IsEnabled));
-
-            // ---------------- 3. 幂等 ----------------
             W();
-            W("================= 3. 幂等：没有残留时再跑一次兜底 =================");
-            var second = StrictModeManager.RecoverIfLeftOn(tempSettings);
-            W($"  WasLeftOn = {second.WasLeftOn}（应为 False）");
-            results.Add(("没有残留时兜底什么都不做（幂等）", !second.WasLeftOn));
+            W("===== 2. 白名单变化 → 重建会话 =====");
 
-            // ---------------- 4. 正常路径：开启 → 关闭 ----------------
+            secondRule = RuleEngine.CreateAllowRule(secondExe);
+            W($"    第二条白名单规则：{secondRule}");
+
+            var refreshed = StrictModeManager.RefreshIfEnabled();
+            CheckAssertion(results, "重建会话成功", refreshed is { Success: true });
+
+            var after = StrictModeManager.PermittedPrograms;
+            W($"    放行 {after.Count} 个程序（之前 {before} 个）");
+
+            CheckAssertion(results, "新加的程序进入了放行清单",
+                after.Any(path => string.Equals(path, secondExe, StringComparison.OrdinalIgnoreCase)));
+            CheckAssertion(results, "清单正好多出 1 个", after.Count == before + 1);
+
+            using (var engine = WfpEngine.Open())
+            {
+                CheckAssertion(results, "重建后过滤器条数同步更新",
+                    engine.ListOurFilters().Count == after.Count * 2 + 2);
+            }
+
             W();
-            W("================= 4. 正常路径：开启 → Disable() =================");
-            var enable2 = StrictModeManager.Enable(tempSettings);
-            W($"  Enable() = 成功={enable2.Success}");
-            results.Add(("第二次 Enable() 也应当成功", enable2.Success));
+            W("===== 3. 2.0 不该再写 1.x 的标志 =====");
 
-            var disable = StrictModeManager.Disable(tempSettings);
-            W($"  Disable() = 成功={disable.Success}");
-            W($"  {disable.Message}");
-            results.Add(("Disable() 应当成功", disable.Success));
+            var settings = AppSettings.Load(settingsPath);
+            W($"    StrictModeLeftOn = {settings.StrictModeLeftOn}，" +
+              $"SelfAllowCreated = {settings.StrictModeSelfAllowCreated}");
 
-            var afterDisable = FirewallManager.GetOutboundDefaultAllowed();
-            W($"  三套 = {afterDisable.Describe()}");
-            results.Add(("关闭后三套都回到「允许」", afterDisable.AllAllowed));
-            results.Add(("关闭后本程序自己的放行规则被删掉", !StrictModeManager.IsSelfWhitelisted()));
-            results.Add(("关闭后 IsEnabled 是 false", !StrictModeManager.IsEnabled));
+            CheckAssertion(results, "不写「严格模式没还原」标志", !settings.StrictModeLeftOn);
+            CheckAssertion(results, "不写「自建放行规则」标志", !settings.StrictModeSelfAllowCreated);
 
-            var flagsAfterDisable = AppSettings.Load(tempSettings);
-            results.Add(("关闭后标志被清掉",
-                !flagsAfterDisable.StrictModeLeftOn && !flagsAfterDisable.StrictModeSelfAllowCreated));
-
-            // ---------------- 5. 拒绝覆盖别人的策略 ----------------
             W();
-            W("================= 5. 机器上已经有「默认阻止」时，必须拒绝开启 =================");
-            FirewallManager.SetOutboundDefaultAllowed(false);
-            W($"  先把默认动作手工设成「阻止」（模拟别的安全软件）：{FirewallManager.GetOutboundDefaultAllowed().Describe()}");
+            W("===== 4. 关闭 =====");
 
-            var refused = StrictModeManager.Enable(tempSettings);
-            W($"  Enable() = 成功={refused.Success}（应为 False）");
-            W($"  {refused.Message.Replace("\n", " ")}");
-            results.Add(("已有别人的默认阻止策略时拒绝开启（绝不覆盖别人的设置）", !refused.Success));
-            results.Add(("被拒绝时 IsEnabled 仍然是 false", !StrictModeManager.IsEnabled));
+            CheckAssertion(results, "关闭成功", StrictModeManager.Disable().Success);
 
-            var flagsAfterRefusal = AppSettings.Load(tempSettings);
-            results.Add(("被拒绝时不该留下任何标志", !flagsAfterRefusal.StrictModeLeftOn));
+            using (var engine = WfpEngine.Open())
+            {
+                CheckAssertion(results, "关闭后过滤器 0 条", engine.ListOurFilters().Count == 0);
+            }
 
-            // 手工撤掉"别人的策略"，模拟用户自己改回去。
-            FirewallManager.SetOutboundDefaultAllowed(true);
+            CheckAssertion(results, "没开启时 RefreshIfEnabled 返回 null",
+                StrictModeManager.RefreshIfEnabled() is null);
         }
         finally
         {
-            // 无论如何都要把全局策略和临时文件收拾干净。
-            try { FirewallManager.SetOutboundDefaultAllowed(true); } catch { /* 收尾，忽略 */ }
-            try { if (File.Exists(tempSettings)) File.Delete(tempSettings); } catch { /* 收尾，忽略 */ }
+            StrictModeManager.Disable();
+
+            foreach (var ruleName in new[] { firstRule, secondRule })
+            {
+                if (string.IsNullOrEmpty(ruleName))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    RuleEngine.DeleteRule(ruleName);
+                }
+                catch (Exception)
+                {
+                    // 忽略清理失败。
+                }
+            }
+
+            try
+            {
+                using var engine = WfpEngine.Open();
+                engine.DeleteAllOurFilters();
+                engine.DeleteSublayer();
+            }
+            catch (WfpException)
+            {
+                // 已经干净。
+            }
+
+            try
+            {
+                if (File.Exists(settingsPath))
+                {
+                    File.Delete(settingsPath);
+                }
+            }
+            catch (Exception)
+            {
+                // 忽略。
+            }
         }
 
-        // ---------------- 6. 收尾 ----------------
-        W();
-        W("================= 6. 收尾（证明没把用户锁在断网状态）================");
-        var finalState = FirewallManager.GetOutboundDefaultAllowed();
-        W($"  三套 = {finalState.Describe()}");
-        results.Add(("收尾后三套是「允许」", finalState.AllAllowed));
-
-        W($"  本程序自己的放行规则 = {(StrictModeManager.IsSelfWhitelisted() ? "还在 <<< 不应残留" : "已清理")}");
-        results.Add(("收尾后没有残留的放行规则", !StrictModeManager.IsSelfWhitelisted()));
-
-        PrintSummary(results, showFirewallResidue: true);
+        PrintSummary(results, showFirewallResidue: false);
     }
 
     /// <summary>
@@ -3430,27 +3264,21 @@ internal static class Program
         results.Add(("未开启时开关按钮是「开启严格模式…」", toggle.Text == "开启严格模式…"));
 
         // ---------- 说明文字（纯函数，可以直接调）----------
-        var allowed = new OutboundDefaultState(true, true, true);
-        var blocked = new OutboundDefaultState(false, false, false);
-
-        var textOff = InvokePrivateWithResult<string>(form, "BuildStrictModeDetailText", false, allowed);
-        var textOn = InvokePrivateWithResult<string>(form, "BuildStrictModeDetailText", true, allowed);
-        var textCantEnable = InvokePrivateWithResult<string>(form, "BuildStrictModeDetailText", false, blocked);
+        var textOff = InvokePrivateWithResult<string>(form, "BuildStrictModeDetailText", false);
+        var textOn = InvokePrivateWithResult<string>(form, "BuildStrictModeDetailText", true);
 
         W($"    说明文字（未开启，共 {textOff?.Length ?? 0} 字）首行 = {textOff?.Split('\n')[0].Trim()}");
 
         results.Add(("说明文字能生成", !string.IsNullOrEmpty(textOff)));
         results.Add(("未开启时说明里写了「开启后会拦掉没放行的程序」",
             textOff?.Contains("上不了网") == true || textOff?.Contains("会被拦掉") == true));
-        results.Add(("说明里写明了「会话级 / 退出即还原」",
-            textOff?.Contains("会话级") == true && textOff.Contains("自动还原")));
-        results.Add(("说明里写明了「这是唯一会改全局策略的地方」",
-            textOff?.Contains("唯一") == true));
-        results.Add(("说明里写明了「挡不住别人的允许规则」（诚实性底线）",
-            textOff?.Contains("挡不住") == true));
+        results.Add(("说明里写明了「会话内 / 退出即撤销」",
+            textOff?.Contains("会话内") == true && textOff.Contains("自动撤销")));
+        results.Add(("说明里写明了「不改 Windows 防火墙设置」",
+            textOff?.Contains("不会修改 Windows 防火墙") == true));
+        results.Add(("说明里写明了「真白名单：别人的允许规则不再生效」（诚实性底线）",
+            textOff?.Contains("不再自动放行") == true));
         results.Add(("生效中的说明写的是「现在」而不是「开启后」", textOn?.Contains("现在：") == true));
-        results.Add(("三套不是全允许时，说明里写清了「为什么不能开启」",
-            textCantEnable?.Contains("不能开启") == true));
 
         // 设置页这一屏（说明文字 / 按钮 / 页签 / 分组框标题）也不允许出现 Markdown 强调符。
         CheckNoMarkdownInUiText(results, form, "设置页");
@@ -3490,7 +3318,8 @@ internal static class Program
 
         results.Add(("能调用 BuildProgramsThatWillLoseAccess", affected is not null));
         results.Add(("清单里不含已被本工具放行的程序", affected?.Contains("w1.exe") == false));
-        results.Add(("清单里不含已被其它软件放行的程序", affected?.Contains("w2.exe") == false));
+        results.Add(("清单里包含「已被其它软件放行」的程序（2.0 不再自动放行）",
+            affected?.Contains("w2.exe") == true));
         results.Add(("清单里不含拿不到路径的程序（否则会威胁到不该威胁的）", affected?.Contains("nopath.exe") == false));
         results.Add(("同一个程序的多个连接只算一次", affected?.Count(n => n == "w3.exe") == 1));
         results.Add(("该进清单的都进了（w3.exe / w4.exe）",

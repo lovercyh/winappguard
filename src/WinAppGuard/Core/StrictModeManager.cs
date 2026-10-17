@@ -1,3 +1,5 @@
+using WinAppGuard.Core.Wfp;
+
 namespace WinAppGuard.Core;
 
 /// <summary>开启 / 关闭严格模式的结果。</summary>
@@ -12,48 +14,46 @@ public sealed record StrictModeChangeResult(bool Success, string Message);
 public sealed record StrictModeRecoveryResult(bool WasLeftOn, bool Restored, string Message);
 
 /// <summary>
-/// 「严格模式」的策略层：把 Windows 防火墙的**默认出站动作**临时改成「阻止」，
-/// 于是「没匹配到任何允许规则」的出站流量全部被拦掉，只有白名单能上网。
+/// 「严格模式」的策略层（2.0：WFP 动态会话 + 真白名单）。
 ///
-/// 白名单 = 本工具建的 <c>AppGuard_Allow_*</c> 规则（用户在界面上「加入白名单」）
-///          + Windows 自带的允许规则 + 其它软件建的允许规则。
-/// 最后那一项**必须在界面上如实可见** —— 它意味着"严格模式"不是绝对白名单，
-/// 而挡不住"别人早就放行过"的程序（详见 docs/安全说明.md）。
+/// ==================== 它做什么 ====================
+/// 在一个**动态** WFP 会话里放两样东西：
+///   - 白名单程序的放行过滤器（权重 0x1000）；
+///   - 一条不带条件的「阻止全部」（权重 0）。
+/// 于是只有白名单能上网，其它程序的新连接一律被拦。
 ///
-/// ==================== 为什么这个类必须写得这么小心 ====================
-/// 「默认出站动作」是**系统级设置，不随本程序退出而恢复**。一旦改了又没还原，
-/// 用户会直接上不了网 —— 而他很可能正是不敢碰 wf.msc 的那类人。
-/// 所以本类把「还原」当成第一公民，靠四件事兜住：
+/// 白名单 = 本工具建的允许规则（界面上的「加入白名单」）
+///          + 本程序自己（否则它查不了 IP 归属）
+///          + <see cref="SystemAllowList"/> 里的系统必需程序（DNS、时间同步、Windows 更新…）。
 ///
-///   1. **只从「三套全允许」开启**：只要有一套本来就不是允许，说明机器上已经有
-///      别人的「默认阻止出站」策略（多半是别的安全软件），我们**拒绝开启**，
-///      绝不覆盖别人的设置；
-///   2. **先落盘意图，再动系统**：先把「我开启了」写进 settings.json，再去改防火墙。
-///      这样即使刚改完就断电，下次启动也知道要还原；
-///   3. **三条还原路径**：正常关闭、启动兜底（上次没正常退出）、
-///      `--cleanup` / 界面上的「删除全部规则」（后者会先把白名单删光，不还原就等于断网）；
-///   4. **本身就是会话级的**：程序退出即不再生效（产品负责人的决定）。
-///      这既符合"本工具是手动运行的工具"这个定位，
-///      也把「崩溃把人锁在断网状态」的时间窗压到最短。
-/// ======================================================================
+/// ==================== 为什么不再需要"三条还原路径" ====================
+/// 1.x 改的是 Windows 防火墙的**全局默认出站动作**，那是系统级设置、不随程序退出恢复，
+/// 所以必须落盘意图、启动兜底、删除全部规则前先还原……
+/// 2.0 把这些全换成**会话内**的过滤器：进程一结束（正常退出 / 崩溃 / 被强杀），
+/// BFE 就把它们全部删掉（POC 实测）。**进程不在了，限制就不在了。**
 ///
-/// 线程要求：与 <see cref="FirewallManager"/> 相同，只应在界面线程（STA）上调用。
+/// 唯一保留的兜底是给**从 1.x 升级上来**的机器用的：
+/// 如果设置文件里还留着"上次开了严格模式没还原"的标志，启动时把全局策略还原成「允许」。
+/// 2.0 自己永远不会写那两个标志。
+///
+/// 线程要求：只应在界面线程（STA）上调用。
 /// </summary>
 public static class StrictModeManager
 {
+    private static WfpStrictSession? _session;
+
     /// <summary>严格模式当前是否生效（本次会话）。</summary>
-    public static bool IsEnabled { get; private set; }
+    public static bool IsEnabled => _session is not null;
 
     /// <summary>
-    /// 本次开启时记下的原值，只用于**显示与日志**。
-    ///
-    /// 还原不依赖它：因为只允许从「三套全允许」开启，所以还原动作永远是「三套全允许」。
-    /// 不落盘也是同理 —— 一个"本来就一定是 true"的布尔值没有存的价值。
+    /// 当前实际放行的程序（会话建立时算好的一份快照）。
+    /// 白名单变了要调用 <see cref="RefreshIfEnabled"/> 重建会话，否则清单不会更新。
     /// </summary>
-    public static OutboundDefaultState? OriginalState { get; private set; }
+    public static IReadOnlyList<string> PermittedPrograms
+        => _session?.PermittedPrograms ?? Array.Empty<string>();
 
     /// <summary>
-    /// 本程序自身在严格模式下那条放行规则的名字；拿不到自身路径时返回 null。
+    /// 本程序自身在 1.x 里那条放行规则的名字（只在「从 1.x 升级」的兜底里用到）。
     /// </summary>
     public static string? SelfAllowRuleName
     {
@@ -62,143 +62,110 @@ public static class StrictModeManager
             var selfPath = Environment.ProcessPath;
             return string.IsNullOrEmpty(selfPath)
                 ? null
-                : FirewallManager.BuildAllowRuleName(selfPath);
+                : RuleNaming.BuildAllowRuleName(selfPath);
         }
     }
 
-    /// <summary>本程序自身当前是否已经在白名单里。</summary>
-    public static bool IsSelfWhitelisted()
-    {
-        var name = SelfAllowRuleName;
-        return name is not null && FirewallManager.GetAppGuardRules()
-            .Any(rule => string.Equals(rule.Name, name, StringComparison.OrdinalIgnoreCase));
-    }
-
     /// <summary>
-    /// 开启严格模式：默认出站动作 → 「阻止」，并放行本程序自己。
+    /// 开启严格模式：建立一个动态会话，放进「白名单放行 + 阻止全部」。
     /// </summary>
-    /// <param name="settingsPath">
-    /// 设置文件路径，仅自检工具用来指向临时文件。产品传 null（用用户的真实设置）。
-    /// </param>
-    public static StrictModeChangeResult Enable(string? settingsPath = null)
+    public static StrictModeChangeResult Enable()
     {
         if (IsEnabled)
         {
             return new StrictModeChangeResult(false, "严格模式已经在生效了。");
         }
 
-        // ---- 1. 先看现状：三套必须都是「允许」----
-        var original = FirewallManager.GetOutboundDefaultAllowed();
+        // ---- 收集白名单 ----
+        List<string> candidates;
 
-        if (!original.AllAllowed)
+        try
         {
-            var refused =
-                $"拒绝开启：三套网络配置文件的「默认出站动作」现在是 {original.Describe()}，" +
-                "不是全部「允许」。\n\n" +
-                "这说明这台机器上已经有别的「默认阻止出站」策略（可能是别的安全软件，" +
-                "也可能是手工设置的）。WinAppGuard 不会去覆盖别人的设置，" +
-                "所以这种情况下不能开启严格模式。";
-
-            LocalLog.Warning($"严格模式开启被拒绝：原值 {original.Describe()}");
-            return new StrictModeChangeResult(false, refused);
+            candidates = RuleEngine.GetAllowRulePrograms();
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Error("严格模式：读取白名单失败", ex);
+            return new StrictModeChangeResult(false, $"读取白名单失败：{ex.Message}");
         }
 
-        // ---- 2. 判断要不要替自己建放行规则（用户早就加过的话就不动它）----
-        var needCreateSelfAllow = !IsSelfWhitelisted();
-
-        // ---- 3. 先落盘意图，再动系统 ----
-        //
-        // 顺序不能反：如果先改防火墙、再落盘，那么「刚改完就断电」这种情形下
-        // 下次启动就不知道要还原了 —— 用户会被永久锁在断网状态。
-        var settings = AppSettings.Load(settingsPath);
-        settings.StrictModeLeftOn = true;
-        settings.StrictModeSelfAllowCreated = needCreateSelfAllow;
-        settings.Save(settingsPath);
-
-        // ---- 4. 动系统：默认出站 → 阻止 ----
-        FirewallManager.SetOutboundDefaultAllowed(false);
-
-        // ---- 5. 放行本程序自己，否则严格模式下它连 IP 归属都查不了 ----
-        string selfAllowNote;
-
-        if (needCreateSelfAllow)
+        var selfPath = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(selfPath))
         {
-            try
-            {
-                var ruleName = FirewallManager.CreateAllowRule(Environment.ProcessPath!);
-                selfAllowNote = $"并已把本程序自己加入白名单（{ruleName}）—— " +
-                                "否则严格模式下它连 IP 归属都查不了";
-            }
-            catch (Exception ex)
-            {
-                // 这一条失败不影响严格模式本身（拦的目的已经达到），但要如实记下来。
-                LocalLog.Error("严格模式：放行本程序自己失败（IP 归属查询将不可用）", ex);
-                selfAllowNote = "但没能把本程序自己加入白名单（严格模式下 IP 归属查询会失败）";
-            }
-        }
-        else
-        {
-            selfAllowNote = "本程序自己早就在白名单里，未改动";
+            candidates.Add(selfPath);
         }
 
-        IsEnabled = true;
-        OriginalState = original;
+        var systemPaths = SystemAllowList.GetPaths();
+        candidates.AddRange(systemPaths);
 
-        LocalLog.Operation($"严格模式已开启（原值 {original.Describe()}）；{selfAllowNote}");
-        return new StrictModeChangeResult(true, $"严格模式已开启。{selfAllowNote}。");
+        // ---- 建会话 ----
+        try
+        {
+            _session = WfpStrictSession.Start(candidates);
+        }
+        catch (Exception ex)
+        {
+            _session?.Dispose();
+            _session = null;
+            LocalLog.Error("严格模式：建立会话失败", ex);
+            return new StrictModeChangeResult(false, $"开启严格模式失败：{ex.Message}");
+        }
+
+        var message =
+            $"严格模式已开启：只放行 {_session.PermittedPrograms.Count} 个程序" +
+            $"（白名单 + 本程序 + {systemPaths.Count} 个系统必需程序）。" +
+            "程序退出或崩溃时会自动撤销。";
+
+        LocalLog.Operation(message);
+        return new StrictModeChangeResult(true, message);
     }
 
     /// <summary>
-    /// 关闭严格模式：默认出站动作 → 「允许」，并把我们替自己建的那条放行规则删掉。
-    ///
-    /// 只有在 <see cref="IsEnabled"/> 为 true 时才动系统 —— 没开却去改全局策略，
-    /// 可能覆盖掉别人（或用户手工）的设置。
+    /// 关闭严格模式：结束会话即可 —— 限制由系统自动删除，不需要"还原"。
     /// </summary>
-    /// <param name="settingsPath">同 <see cref="Enable"/>。</param>
-    public static StrictModeChangeResult Disable(string? settingsPath = null)
+    public static StrictModeChangeResult Disable()
     {
-        if (!IsEnabled)
+        if (_session is null)
         {
             return new StrictModeChangeResult(false, "严格模式当前没有生效，无需关闭。");
         }
 
-        var settings = AppSettings.Load(settingsPath);
-        var notes = new List<string>();
+        _session.Dispose();
+        _session = null;
 
-        // 先还原全局策略。这一步抛异常的话，下面的清除标志**不会**执行 ——
-        // 这正是我们要的：下次启动还能靠标志再试一次。
-        FirewallManager.SetOutboundDefaultAllowed(true);
-        notes.Add("默认出站动作已还原为「允许」");
-
-        if (DeleteSelfAllowIfWeCreatedIt(settings))
-        {
-            notes.Add("已删掉本程序自己的白名单规则");
-        }
-
-        ClearPersistedFlags(settings, settingsPath);
-
-        IsEnabled = false;
-        OriginalState = null;
-
-        var message = string.Join("；", notes);
-        LocalLog.Operation($"严格模式已关闭：{message}");
-        return new StrictModeChangeResult(true, $"严格模式已关闭：{message}。");
+        LocalLog.Operation("严格模式已关闭（会话结束，限制由系统自动删除）");
+        return new StrictModeChangeResult(true, "严格模式已关闭：所有程序恢复联网（白名单规则本身保留）。");
     }
 
     /// <summary>
-    /// 启动兜底：如果上次「开了严格模式却没还原就退出」（崩溃 / 被强杀 / 断电），
-    /// 现在把「默认出站动作」还原成「允许」。
-    ///
-    /// 本方法**总是从设置文件重新读**，不依赖内存状态 —— 因为它天生要跨进程生效。
+    /// 白名单变了就重建会话 —— 动态会话里的放行清单是**建立时算好**的，
+    /// 不重建的话，新加的白名单程序在严格模式下仍然上不了网。
+    /// 重建期间有毫秒级的空档，可以忽略。
     /// </summary>
-    /// <param name="settingsPath">同 <see cref="Enable"/>。</param>
+    public static StrictModeChangeResult? RefreshIfEnabled()
+    {
+        if (!IsEnabled)
+        {
+            return null;
+        }
+
+        Disable();
+        return Enable();
+    }
+
+    /// <summary>
+    /// 启动兜底（**只为从 1.x 升级上来的机器保留**）：
+    /// 如果设置文件里还留着"上次开了严格模式没还原"的标志，
+    /// 把 Windows 防火墙的全局「默认出站动作」还原成「允许」。
+    ///
+    /// 2.0 自己不再写这两个标志，所以新机器上这个方法永远什么都不做。
+    /// </summary>
     public static StrictModeRecoveryResult RecoverIfLeftOn(string? settingsPath = null)
     {
         var settings = AppSettings.Load(settingsPath);
 
         if (!settings.StrictModeLeftOn)
         {
-            // 上次是正常退出，什么都不用做（这是绝大多数情况）。
             return new StrictModeRecoveryResult(false, false, string.Empty);
         }
 
@@ -210,11 +177,8 @@ public static class StrictModeManager
         var deletedSelfAllow = DeleteSelfAllowIfWeCreatedIt(settings);
         ClearPersistedFlags(settings, settingsPath);
 
-        IsEnabled = false;
-        OriginalState = null;
-
         var message =
-            "上次没有正常退出，严格模式留下的「默认阻止出站」已经被自动还原。" +
+            "上次（1.x）没有正常退出，严格模式留下的「默认阻止出站」已经被自动还原。" +
             $"（{before.Describe()} → {after.Describe()}）" +
             (deletedSelfAllow ? " 本程序自己的白名单规则也已删掉。" : string.Empty);
 
@@ -233,13 +197,10 @@ public static class StrictModeManager
     }
 
     // ==================================================================
-    // 内部实现
+    // 1.x 遗留的收尾（只被 RecoverIfLeftOn 使用）
     // ==================================================================
 
-    /// <summary>
-    /// 删掉「我们替本程序自己建」的那条放行规则。
-    /// 返回是否真的删掉了一条（用户自己加的白名单不会被误删，因为标志区分了来源）。
-    /// </summary>
+    /// <summary>删掉 1.x「我们替本程序自己建」的那条放行规则。</summary>
     private static bool DeleteSelfAllowIfWeCreatedIt(AppSettings settings)
     {
         if (!settings.StrictModeSelfAllowCreated)
@@ -255,10 +216,10 @@ public static class StrictModeManager
 
         try
         {
+            // 2.0 的规则在 WFP 里，1.x 的规则在 Windows 防火墙里 —— 这条只在后者。
             if (!FirewallManager.DeleteRule(name))
             {
-                // 规则已经不在（用户手工删过）—— 不算失败，记一笔就够。
-                LocalLog.Info($"严格模式收尾：本程序自身的白名单规则 {name} 已不存在，无需删除");
+                LocalLog.Info($"严格模式收尾：1.x 留下的自身白名单规则 {name} 已不存在，无需删除");
                 return false;
             }
 
@@ -266,12 +227,12 @@ public static class StrictModeManager
         }
         catch (Exception ex)
         {
-            LocalLog.Error($"严格模式收尾：删除本程序自身的白名单规则失败（{name}）", ex);
+            LocalLog.Error($"严格模式收尾：删除 1.x 自身白名单规则失败（{name}）", ex);
             return false;
         }
     }
 
-    /// <summary>把「我开着严格模式」这两个标志清掉。</summary>
+    /// <summary>把 1.x 的两个标志清掉。</summary>
     private static void ClearPersistedFlags(AppSettings settings, string? settingsPath)
     {
         settings.StrictModeLeftOn = false;

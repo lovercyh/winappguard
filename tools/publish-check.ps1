@@ -70,13 +70,13 @@ Write-Host "    .\dist-tools\$exeName --connection-filter-test  连接列表：�
 Write-Host "    .\dist-tools\$exeName --temp-block-test   临时阻断：离线，到期信息的编码 / 解析 / 判定"
 Write-Host "    .\dist-tools\$exeName --temp-block-status 临时阻断：只读，打印每条规则的到期解析结果"
 Write-Host "    .\dist-tools\$exeName --ui-check          界面：离线，布局与各种接线（会短暂闪一下窗口）"
-Write-Host "    .\dist-tools\$exeName --strict-mode-test  严格模式：**会真改全局出站默认动作**（但一定还原，需管理员）"
-Write-Host "    .\dist-tools\$exeName --strict-mode-lifecycle-test  严格模式：同上，验证开启/关闭/崩溃兜底/拒绝覆盖别人"
+Write-Host "    .\dist-tools\$exeName --strict-mode-test  严格模式：**会短暂断开未放行程序的网络**（会话级，结束即恢复，需管理员）"
+Write-Host "    .\dist-tools\$exeName --strict-mode-lifecycle-test  严格模式：同上，验证白名单变化后重建会话、且不写 1.x 标志"
 Write-Host "    .\dist-tools\$exeName --render-docs [目录]  生成 README 用的界面截图（离线，不需要管理员）"
 Write-Host "    .\dist-tools\$exeName --audit [dll]       出厂审计：读编译产物元数据"
 Write-Host ''
 Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 5 项离线检查依次跑一遍。）"
-Write-Host "  两个 --strict-mode-* 刻意不在那个启动器里：它们需要管理员、而且会真改全局策略，只适合手动单独跑。"
+Write-Host "  两个 --strict-mode-* 刻意不在那个启动器里：它们需要管理员、而且会真的断开网络，只适合手动单独跑。"
 
 # 生成一个双击即可运行的启动器，方便在虚拟机里验证。
 #

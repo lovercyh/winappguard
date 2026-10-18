@@ -43,6 +43,10 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
   keep working. The whitelist is what you add via *Add to whitelist*.
 - **Keeps a list of everything it manages**, so you can always undo — even if the program
   is not running any more.
+- **Records page** — what connected to what over the last few days and whether it was blocked:
+  kind (connect / blocked), process, remote endpoint, **domain (guessed)**, and **which rule
+  matched**; search, blocked-only filter, one-click clear. Stored locally only, kept for 7 days,
+  enabled by default.
 - **Optionally auto-starts at logon**, to the system tray.
 - **Every rule lands in a dedicated WFP sublayer with a fixed GUID** — manage them on the *Rules*
   page; `wf.msc` will not show them (it only lists Windows Firewall's own rules).
@@ -59,7 +63,7 @@ Being explicit about this matters, because the tool needs administrator rights.
   filters under its own sublayer GUID.
 - ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …) —
   this guard applies to **blocking** only, never to allowing (an allow can never lock anyone out).
-- ⚠️ It **does** reach the network by default, for two specific purposes (see below).
+- ⚠️ It **does** reach the network by default, for three specific purposes (see below).
   It sends **no telemetry, no analytics, no usage data**, and there is no update check.
 
 ### About "no network" — the honest version
@@ -68,15 +72,22 @@ Being explicit about this matters, because the tool needs administrator rights.
 Up to 1.1 it *was* — the app's own code contained zero networking APIs. 1.2 added the IP ownership
 lookup, so that claim was **retired** rather than kept alive with careful wording.
 
-There are exactly **two** things that touch the network. Both are on by default, and **both can be
-switched off** in *Settings → Data & privacy*:
+There are exactly **three** things that touch the network. All are on by default, and **all three
+can be switched off** in the UI — the first two in *Settings → Data & privacy*, the third on the
+**Records** page:
 
-| | Who initiates it | What is sent | Where it goes |
-|---|---|---|---|
-| **IP ownership lookup** | WinAppGuard's own code | the **remote IP** only | `whois.cymru.com:43` |
-| **Certificate revocation check** | Windows' certificate service (Crypt32) | a CRL/OCSP lookup | that certificate's CA |
+| | Who initiates it | What is sent | Where it goes | How to turn it off |
+|---|---|---|---|---|
+| **IP ownership lookup** | WinAppGuard's own code | the **remote IP** only | `whois.cymru.com:43` | Settings → Data & privacy |
+| **Certificate revocation check** | Windows' certificate service (Crypt32) | a CRL/OCSP lookup | that certificate's CA | Settings → Data & privacy |
+| **Domain guessing** | WinAppGuard's own code | DNS lookups (**only names already in the system cache**) | your configured DNS server | Records page toggle |
 
-Turn both off and WinAppGuard makes **no network traffic at all**.
+Turn all three off and WinAppGuard makes **no network traffic at all**.
+
+> About domain guessing: it reads the Windows DNS cache; when an entry has just expired,
+> Windows may send a lookup to your configured DNS server. With it switched off the app sends
+> **no DNS queries at all** — the cost is that domain coverage in the Records page drops from
+> about 29% to about 8%.
 
 **About the IP ownership lookup** (new in 1.2). It resolves each connection's remote IP to a country
 and an autonomous system, so the connection list answers *"who am I talking to?"* and not just
@@ -171,9 +182,10 @@ its full path, the scope of the change, and the rule that is about to be created
 | Process path lookup | `QueryFullProcessImageNameW` (no `System.Diagnostics.Process` objects, so no handle leak while refreshing) |
 | Auto-start | One Task Scheduler task named `WinAppGuard`, logon trigger, highest privileges, no execution time limit |
 | Single instance | Named mutex + a broadcast window message, so launching it twice focuses the existing window |
-| IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the app's **only** outbound endpoint, batched and cached in memory, on by default, switchable off |
+| IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the only endpoint this app actively connects to (DNS lookups and certificate revocation are separate, see above), batched and cached in memory, on by default, switchable off |
 | Strict mode | Opens a **dynamic WFP session inside the process**: whitelist permit (high weight) + block all (low weight). **Revoked automatically** on exit or crash; changes no system setting |
 | Timed blocks | The expiry is stored **in the filter's own description field** (`AppGuard\|1\|Block\|C:\path\a.exe\|自动解除=…`), so it survives restarts. A background 30-second timer removes expired filters and shows a tray notification. |
+| Records | WFP net events for blocked connections (with filter ID → rule name); 3-second polling + DNS-cache snapshots for normal connections; JSONL files, 8 MB segments, 7-day retention |
 
 ## Verifiable trust
 

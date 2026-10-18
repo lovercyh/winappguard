@@ -261,6 +261,124 @@ internal sealed class WfpEngine : IDisposable
     internal IReadOnlyList<Guid> ListOurFilterKeys()
         => ListOurFilters().Select(filter => filter.Key).ToList();
 
+    /// <summary>
+    /// 加一条"按远端 IP 匹配"的过滤器（封禁 IP 用）。
+    ///
+    /// IPv4 走 <c>ALE_AUTH_CONNECT_V4</c>、IPv6 走 <c>ALE_AUTH_CONNECT_V6</c>；
+    /// 条件值：IPv4 = FWP_UINT32（主机序），IPv6 = FWP_BYTE_ARRAY16（16 字节原样）。
+    /// </summary>
+    internal ulong AddIpFilter(
+        Guid filterKey,
+        string displayName,
+        string? description,
+        System.Net.IPAddress address,
+        uint action,
+        ulong weight,
+        bool persistent)
+    {
+        ThrowIfDisposed();
+
+        var isV4 = address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
+        var layerKey = isV4
+            ? WfpNativeMethods.LayerAleAuthConnectV4
+            : WfpNativeMethods.LayerAleAuthConnectV6;
+
+        var bytes = address.GetAddressBytes();
+
+        // IPv4 的 FWP_UINT32 是"主机序"：把点分地址当成一个大端整数存进 uint。
+        // （POC 实测：这样写才能命中；反过来会完全匹配不上。）
+        var v4Value = isV4
+            ? (uint)((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3])
+            : 0u;
+
+        var namePtr = Marshal.StringToHGlobalUni(displayName);
+        var descriptionPtr = description is null ? IntPtr.Zero : Marshal.StringToHGlobalUni(description);
+        var weightPtr = Marshal.AllocHGlobal(sizeof(ulong));
+        var conditionPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>());
+        var addressPtr = IntPtr.Zero;
+
+        try
+        {
+            Marshal.WriteInt64(weightPtr, unchecked((long)weight));
+
+            WfpNativeMethods.FwpConditionValue value;
+
+            if (isV4)
+            {
+                value = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT32,
+                    Value = (IntPtr)(long)v4Value,
+                };
+            }
+            else
+            {
+                addressPtr = Marshal.AllocHGlobal(16);
+                Marshal.Copy(bytes, 0, addressPtr, 16);
+
+                value = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_BYTE_ARRAY16_TYPE,
+                    Value = addressPtr,
+                };
+            }
+
+            var condition = new WfpNativeMethods.FwpmFilterCondition
+            {
+                FieldKey = WfpNativeMethods.ConditionIpRemoteAddress,
+                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                ConditionValue = value,
+            };
+            Marshal.StructureToPtr(condition, conditionPtr, false);
+
+            var filter = new WfpNativeMethods.FwpmFilter
+            {
+                FilterKey = filterKey,
+                DisplayData = new WfpNativeMethods.FwpmDisplayData
+                {
+                    Name = namePtr,
+                    Description = descriptionPtr,
+                },
+                Flags = persistent ? WfpNativeMethods.FWPM_FILTER_FLAG_PERSISTENT : 0,
+                LayerKey = layerKey,
+                SubLayerKey = WfpNativeMethods.OurSubLayerKey,
+                Weight = new WfpNativeMethods.FwpValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT64,
+                    Value = weightPtr,
+                },
+                NumFilterConditions = 1,
+                FilterCondition = conditionPtr,
+                Action = new WfpNativeMethods.FwpmAction { Type = action },
+            };
+
+            var rc = WfpNativeMethods.FwpmFilterAdd0(_handle, ref filter, IntPtr.Zero, out var id);
+            if (rc != WfpNativeMethods.ERROR_SUCCESS)
+            {
+                throw new WfpException($"添加 IP 过滤器（{address}）", rc);
+            }
+
+            return id;
+        }
+        finally
+        {
+            if (addressPtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(addressPtr);
+            }
+
+            Marshal.FreeHGlobal(conditionPtr);
+            Marshal.FreeHGlobal(weightPtr);
+
+            if (descriptionPtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(descriptionPtr);
+            }
+
+            Marshal.FreeHGlobal(namePtr);
+        }
+    }
+
     /// <summary>按 key 删除一条过滤器。不存在时抛 <see cref="WfpException"/>。</summary>
     internal void DeleteFilter(Guid filterKey)
     {

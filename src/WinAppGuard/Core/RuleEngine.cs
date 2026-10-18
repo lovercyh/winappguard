@@ -19,7 +19,11 @@ internal static class RuleEngine
     internal static List<FirewallRuleItem> GetRules()
     {
         using var engine = OpenEngine();
-        return WfpRuleStore.List(engine).Select(ToRuleItem).ToList();
+
+        var items = WfpRuleStore.List(engine).Select(ToRuleItem).ToList();
+        items.AddRange(WfpRuleStore.ListIpRules(engine).Select(ToRuleItem));
+
+        return items;
     }
 
     /// <summary>这个程序当前是不是被阻止。</summary>
@@ -48,6 +52,21 @@ internal static class RuleEngine
         => Save(programPath, FirewallAction.Allow, RuleExpiry.Never);
 
     /// <summary>
+    /// 创建一条「封禁 IP」规则（直接按远端 IP 拦，不做域名解析）。
+    /// </summary>
+    /// <param name="address">IPv4 或 IPv6 地址。</param>
+    /// <returns>规则名，例如 <c>AppGuard_BlockIp_216.31.12.15</c>。</returns>
+    internal static string CreateIpBlockRule(string address)
+    {
+        var rule = new WfpIpRule(address);
+
+        using var engine = OpenEngine();
+        WfpRuleStore.AddIp(engine, rule);
+
+        return rule.DisplayName;
+    }
+
+    /// <summary>
     /// 按规则名删除一条规则。
     /// 规则名由 <see cref="RuleNaming"/> 从路径确定性生成，所以先按名字找出规则、再按规则删。
     /// </summary>
@@ -62,7 +81,18 @@ internal static class RuleEngine
 
         if (rule is null)
         {
-            return false;
+            // 也可能是「封禁 IP」规则：它没有程序路径，只按名字匹配。
+            var ipRule = WfpRuleStore.ListIpRules(engine)
+                .FirstOrDefault(candidate => string.Equals(
+                    candidate.DisplayName, ruleName, StringComparison.OrdinalIgnoreCase));
+
+            if (ipRule is null)
+            {
+                return false;
+            }
+
+            WfpRuleStore.RemoveIp(engine, ipRule);
+            return true;
         }
 
         WfpRuleStore.Remove(engine, rule);
@@ -146,12 +176,19 @@ internal static class RuleEngine
 
         foreach (var filter in engine.ListOurFilters())
         {
-            if (filter.FilterId == 0 || !WfpRule.TryParse(filter.Description, out var rule))
+            if (filter.FilterId == 0)
             {
                 continue;
             }
 
-            map[filter.FilterId] = rule.DisplayName;
+            if (WfpRule.TryParse(filter.Description, out var rule))
+            {
+                map[filter.FilterId] = rule.DisplayName;
+            }
+            else if (WfpIpRule.TryParse(filter.Description, out var ipRule))
+            {
+                map[filter.FilterId] = ipRule.DisplayName;
+            }
         }
 
         return map;
@@ -239,6 +276,23 @@ internal static class RuleEngine
         Direction = FirewallDirection.Outbound,
         Protocol = 256,
         Expiry = rule.Expiry,
+    };
+
+    /// <summary>把「封禁 IP」规则映射成界面使用的规则项。</summary>
+    private static FirewallRuleItem ToRuleItem(WfpIpRule rule) => new()
+    {
+        Name = rule.DisplayName,
+
+        // 路径列也放 IP：表格里两列都显示同一个地址，比留空更好认。
+        ApplicationPath = rule.Address,
+        IpAddress = rule.Address,
+        Description = rule.Description,
+        Grouping = AppConstants.RuleGroupingName,
+        Enabled = true,
+        Action = FirewallAction.Block,
+        Direction = FirewallDirection.Outbound,
+        Protocol = 256,
+        Expiry = RuleExpiry.Never,
     };
 
     private static string? TryGetFullPath(string programPath)

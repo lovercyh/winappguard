@@ -214,6 +214,10 @@ internal static class Program
             {
                 RunRenderDocs();
             }
+            else if (args.Contains("--wfp-ip-rule-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpIpRuleTest();
+            }
             else if (args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunAuditUiTest();
@@ -5014,6 +5018,8 @@ internal static class Program
         var buttons = Descendants<Button>(tab).Select(button => button.Text).ToList();
         W($"    按钮 = {string.Join(" / ", buttons)}");
         CheckAssertion(results, "有「清空」按钮", buttons.Any(text => text.Contains("清空")));
+        CheckAssertion(results, "有「拦截此 IP」按钮", buttons.Any(text => text.Contains("拦截此 IP")));
+        CheckAssertion(results, "有「添加 IP」按钮", buttons.Any(text => text.Contains("添加 IP")));
 
         PrintSummary(results, showFirewallResidue: false);
     }
@@ -5032,6 +5038,108 @@ internal static class Program
             {
                 yield return nested;
             }
+        }
+    }
+
+    /// <summary>
+    /// 「封禁 IP」规则自检（需要管理员、需要能连外网）。
+    ///
+    /// 用 whois.cymru.com 的两个 A 记录做对照：只封禁其中一个，
+    /// 验证"目标被拦 + 邻居正常"，最后删除规则并确认过滤器消失。
+    /// </summary>
+    private static void RunWfpIpRuleTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   封禁 IP 规则（只拦目标、不误伤邻居；IPv4）                   #");
+        W("################################################################");
+        W();
+
+        var addresses = Dns.GetHostAddresses("whois.cymru.com")
+            .Where(address => address.AddressFamily == AddressFamily.InterNetwork)
+            .Select(address => address.ToString())
+            .Distinct()
+            .ToList();
+
+        if (addresses.Count < 2)
+        {
+            W("    解析不到两个 A 记录，无法做对照实验（跳过）。");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        var target = addresses[0];
+        var neighbor = addresses[1];
+        W($"    目标 = {target}，邻居 = {neighbor}");
+
+        var baselineTarget = ProbeConnect(target, 43);
+        var baselineNeighbor = ProbeConnect(neighbor, 43);
+        W($"    基线：目标={baselineTarget}，邻居={baselineNeighbor}");
+
+        var ruleName = string.Empty;
+
+        try
+        {
+            ruleName = RuleEngine.CreateIpBlockRule(target);
+            W($"    已创建规则：{ruleName}");
+
+            var rule = RuleEngine.GetRules()
+                .FirstOrDefault(item => string.Equals(item.Name, ruleName, StringComparison.OrdinalIgnoreCase));
+
+            CheckAssertion(results, "规则列表里有这条 IP 规则", rule is not null);
+            CheckAssertion(results, "规则里带着 IP 地址", rule?.IpAddress == target);
+            CheckAssertion(results, "规则名是 AppGuard_BlockIp_ 前缀",
+                ruleName.StartsWith("AppGuard_BlockIp_", StringComparison.Ordinal));
+
+            var idMap = RuleEngine.GetFilterIdToRuleName();
+            CheckAssertion(results, "过滤器 ID 能映射到这条 IP 规则",
+                idMap.Values.Any(name => string.Equals(name, ruleName, StringComparison.OrdinalIgnoreCase)));
+
+            if (baselineTarget && baselineNeighbor)
+            {
+                var blockedTarget = !ProbeConnect(target, 43);
+                var blockedNeighbor = !ProbeConnect(neighbor, 43);
+
+                W($"    封禁后：目标可连={!blockedTarget}，邻居可连={!blockedNeighbor}");
+
+                CheckAssertion(results, "目标 IP 被拦住", blockedTarget);
+                CheckAssertion(results, "邻居 IP 不受影响", !blockedNeighbor);
+            }
+            else
+            {
+                W("    ⚠️ 基线就不通，跳过连通性断言（只验证规则本身）。");
+            }
+        }
+        finally
+        {
+            if (!string.IsNullOrEmpty(ruleName))
+            {
+                var deleted = RuleEngine.DeleteRule(ruleName);
+                W($"    删除规则 = {deleted}");
+
+                CheckAssertion(results, "删除规则成功", deleted);
+                CheckAssertion(results, "删除后规则列表里没有它",
+                    !RuleEngine.GetRules().Any(item =>
+                        string.Equals(item.Name, ruleName, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>能不能建立一条 TCP 连接（快速失败）。</summary>
+    private static bool ProbeConnect(string host, int port, int timeoutMs = 3000)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            var task = client.ConnectAsync(host, port);
+            return task.Wait(timeoutMs) && client.Connected;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 

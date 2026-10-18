@@ -82,6 +82,22 @@ public sealed partial class MainForm
         };
         openFolderButton.Click += OnAuditOpenFolderClick;
 
+        var blockIpButton = new Button
+        {
+            Location = new Point(640, 6),
+            Width = 104,
+            Text = "拦截此 IP…",
+        };
+        blockIpButton.Click += OnBlockSelectedIpClick;
+
+        var addIpButton = new Button
+        {
+            Location = new Point(752, 6),
+            Width = 92,
+            Text = "添加 IP…",
+        };
+        addIpButton.Click += OnAddIpRuleClick;
+
         _auditEnabledCheck = new CheckBox
         {
             Location = new Point(0, 42),
@@ -113,6 +129,8 @@ public sealed partial class MainForm
             refreshButton,
             clearButton,
             openFolderButton,
+            blockIpButton,
+            addIpButton,
             _auditEnabledCheck,
             _auditDomainCheck,
             _auditStatusLabel,
@@ -288,6 +306,7 @@ public sealed partial class MainForm
         string ProcessName,
         string ProcessPath,
         string Remote,
+        string RemoteAddress,
         string Domain,
         string Rule,
         string Detail);
@@ -339,6 +358,7 @@ public sealed partial class MainForm
                     processName,
                     item.ProcessPath,
                     $"{item.RemoteAddress}:{item.RemotePort}",
+                    item.RemoteAddress,
                     domain,
                     rule,
                     $"{item.TimeUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}  " +
@@ -498,9 +518,108 @@ public sealed partial class MainForm
         }
     }
 
+    /// <summary>「拦截此 IP…」：取当前选中行的远端 IP。</summary>
+    private void OnBlockSelectedIpClick(object? sender, EventArgs e)
+    {
+        if (_auditGrid.SelectedRows.Count == 0 || _auditGrid.SelectedRows[0].Tag is not AuditRow row)
+        {
+            MessageBox.Show(
+                this,
+                "先在上面选中一行记录，再点「拦截此 IP…」。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(row.RemoteAddress))
+        {
+            MessageBox.Show(
+                this,
+                "这条记录没有可用的远端 IP。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        BlockIpWithConfirmation(row.RemoteAddress);
+    }
+
+    /// <summary>「添加 IP…」：手动输入一个 IP。</summary>
+    private void OnAddIpRuleClick(object? sender, EventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox(
+            "输入要封禁的 IP（IPv4 或 IPv6）：",
+            "封禁 IP",
+            string.Empty);
+
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return;
+        }
+
+        BlockIpWithConfirmation(input.Trim());
+    }
+
+    /// <summary>
+    /// 确认并创建一条「封禁 IP」规则。
+    ///
+    /// 必须在确认框里写清"拦的是 IP，不是网站"：同一个 IP 上的其它服务会一起被拦。
+    /// </summary>
+    private void BlockIpWithConfirmation(string ipText)
+    {
+        if (!System.Net.IPAddress.TryParse(ipText, out var address))
+        {
+            MessageBox.Show(
+                this,
+                $"不是合法的 IP 地址：{ipText}",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var normalized = address.ToString();
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "封禁 IP",
+            question: $"确定要封禁 IP「{normalized}」吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("目标 IP", normalized),
+                new KeyValuePair<string, string>("影响", "所有程序发往这个 IP 的新连接都会被拦"),
+            },
+            warnings: new[]
+            {
+                "拦的是 IP，不是网站：同一个 IP 上的其它服务可能一起被拦。",
+                "大网站（CDN）会经常更换 IP，封禁某个 IP 不一定能封住整个网站。",
+                "「记录」页里能看到它拦下了哪些连接，随时可以删除这条规则。",
+            },
+            confirmText: "封禁");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            var created = RuleEngine.CreateIpBlockRule(normalized);
+            LocalLog.Operation($"封禁 IP：{normalized}（规则 {created}）");
+
+            AfterRulesChanged();
+            RefreshAudit();
+        }
+        catch (Exception ex)
+        {
+            ShowError("封禁 IP 失败", ex);
+        }
+    }
+
     private static bool Contains(string? text, string keyword)
         => !string.IsNullOrEmpty(text) && text.Contains(keyword, StringComparison.OrdinalIgnoreCase);
-
     /// <summary>过滤器 ID → 规则名。取不到（例如没有管理员权限）时返回空表，不影响列表显示。</summary>
     private static Dictionary<ulong, string> TryGetFilterIdMap()
     {

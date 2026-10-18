@@ -131,4 +131,50 @@ internal static class WfpRuleStore
 
     /// <summary>删光所有规则（= 本子层下所有过滤器）。</summary>
     internal static int RemoveAll(WfpEngine engine) => engine.DeleteAllOurFilters();
+
+    // ==================================================================
+    // 封禁 IP
+    // ==================================================================
+
+    /// <summary>IP 规则的过滤器 key（确定性）。</summary>
+    internal static Guid IpFilterKey(WfpIpRule rule)
+        => WfpEngine.BuildFilterKey($"iprule|{rule.Address}");
+
+    /// <summary>写入一条"封禁 IP"规则（IPv4 走 V4 层、IPv6 走 V6 层，只写一条）。</summary>
+    internal static void AddIp(WfpEngine engine, WfpIpRule rule)
+    {
+        var key = IpFilterKey(rule);
+        var persistent = !engine.IsDynamic && engine.SublayerPersistent;
+
+        engine.TryDeleteFilter(key);
+        engine.AddIpFilter(
+            key,
+            rule.DisplayName,
+            rule.Description,
+            rule.ToIPAddress(),
+            WfpNativeMethods.FWP_ACTION_BLOCK,
+            WeightBlock,
+            persistent);
+    }
+
+    /// <summary>删除一条 IP 规则，返回删掉的过滤器条数。</summary>
+    internal static int RemoveIp(WfpEngine engine, WfpIpRule rule)
+        => engine.TryDeleteFilter(IpFilterKey(rule)) ? 1 : 0;
+
+    /// <summary>列出所有 IP 规则（按地址去重）。</summary>
+    internal static IReadOnlyList<WfpIpRule> ListIpRules(WfpEngine engine)
+    {
+        var rules = new List<WfpIpRule>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var filter in engine.ListOurFilters())
+        {
+            if (WfpIpRule.TryParse(filter.Description, out var rule) && seen.Add(rule.Address))
+            {
+                rules.Add(rule);
+            }
+        }
+
+        return rules;
+    }
 }

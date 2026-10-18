@@ -30,7 +30,11 @@
   补发一次查询；可在记录页关闭（关闭后**零发包**，代价是域名覆盖率明显下降）。
 - 记录默认开启、保留 **7 天**、按 **8 MB** 分段，只写本机
   `%LOCALAPPDATA%\WinAppGuard\audit`，可一键清空。
-- 自检新增：`--audit-store-test` / `--audit-dns-test` / `--audit-service-test` / `--audit-ui-test`。
+- **封禁 IP**：从「记录」页选中一条连接 → 「拦截此 IP…」，或手动「添加 IP…」。
+  规则直接按**远端 IP** 拦截（IPv4 / IPv6 都支持），不经过域名解析；
+  确认框会写明"拦的是 IP，同一 IP 上的其它服务可能一起被拦"。
+- 自检新增：`--audit-store-test` / `--audit-dns-test` / `--audit-service-test` /
+  `--audit-ui-test` / `--wfp-ip-rule-test`。
 
 ### 已知限制
 

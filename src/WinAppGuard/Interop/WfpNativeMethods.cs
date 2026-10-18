@@ -66,6 +66,9 @@ internal static class WfpNativeMethods
     /// <summary>FWP_BYTE_BLOB_TYPE。</summary>
     internal const uint FWP_BYTE_BLOB_TYPE = 12;
 
+    /// <summary>FWP_BYTE_ARRAY16_TYPE（IPv6 地址条件用）。数值来自 SDK 的 fwptypes.h。</summary>
+    internal const uint FWP_BYTE_ARRAY16_TYPE = 11;
+
     // ---------------- 错误码 ----------------
 
     /// <summary>成功。</summary>
@@ -115,6 +118,15 @@ internal static class WfpNativeMethods
 
     /// <summary>FWPM_CONDITION_ALE_APP_ID：按程序身份（可执行文件路径）匹配。</summary>
     internal static readonly Guid ConditionAleAppId = new("d78e1e87-8644-4ea5-9437-d809ecefc971");
+
+    /// <summary>
+    /// FWPM_CONDITION_IP_REMOTE_ADDRESS：按远端 IP 匹配。
+    ///
+    /// ★ GUID 取自 Windows SDK 的 <c>um\fwpmu.h</c>（不是凭记忆）：
+    ///   <c>C:\Program Files (x86)\Windows Kits\10\Include\&lt;版本&gt;\um\fwpmu.h</c>。
+    /// 值类型：IPv4 用 FWP_UINT32（**主机序**），IPv6 用 FWP_BYTE_ARRAY16。
+    /// </summary>
+    internal static readonly Guid ConditionIpRemoteAddress = new("b235ae9a-1d64-49b8-a44c-5ff3d9095045");
 
     /// <summary>
     /// 子层权重。WFP 在**不同子层之间**先比子层权重（数值大的优先）。

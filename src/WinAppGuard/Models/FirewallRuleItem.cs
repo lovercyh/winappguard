@@ -14,6 +14,12 @@ public sealed class FirewallRuleItem
     /// <summary>规则作用的程序完整路径。</summary>
     public required string ApplicationPath { get; init; }
 
+    /// <summary>
+    /// 「封禁 IP」规则里的 IP 地址；普通程序规则为 null。
+    /// 界面上程序名/路径两列都会显示这个 IP。
+    /// </summary>
+    public string? IpAddress { get; init; }
+
     /// <summary>规则说明。</summary>
     public required string Description { get; init; }
 
@@ -63,5 +69,7 @@ public sealed class FirewallRuleItem
 
     /// <summary>程序名的显示文本（只取文件名，路径太长不适合放在表格里）。</summary>
     public string ApplicationNameText =>
-        string.IsNullOrEmpty(ApplicationPath) ? "（所有程序）" : Path.GetFileName(ApplicationPath);
+        !string.IsNullOrEmpty(IpAddress)
+            ? IpAddress
+            : string.IsNullOrEmpty(ApplicationPath) ? "（所有程序）" : Path.GetFileName(ApplicationPath);
 }

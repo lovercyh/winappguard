@@ -126,7 +126,8 @@ internal static class Program
                          && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--program-history-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -213,6 +214,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--program-history-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunProgramHistoryTest();
             }
             else if (args.Contains("--wfp-ip-rule-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -5141,6 +5146,109 @@ internal static class Program
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 「已知程序」与「新程序告警」自检（离线、临时文件）。
+    /// </summary>
+    private static void RunProgramHistoryTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempFile = Path.Combine(Path.GetTempPath(), $"wag-known-{Guid.NewGuid():N}.json");
+
+        W("################################################################");
+        W("#   已知程序 / 新程序告警（离线：只碰临时文件）                 #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var now = DateTime.UtcNow;
+            var store = new KnownProgramStore(tempFile);
+
+            CheckAssertion(results, "初始为空", store.Count == 0);
+
+            // ---------------- 1. 第一次见到 ----------------
+            W("===== 1. 第一次见到 vs 已经见过 =====");
+
+            CheckAssertion(results, "第一次见到 a.exe → 需要告警", store.Observe(@"C:\a.exe", now));
+            CheckAssertion(results, "第一次见到 b.exe → 需要告警", store.Observe(@"C:\b.exe", now));
+            CheckAssertion(results, "再次见到 a.exe → 不再告警", !store.Observe(@"C:\a.exe", now.AddSeconds(3)));
+            CheckAssertion(results, "大小写不同视为同一个程序", !store.Observe(@"c:\A.EXE", now.AddSeconds(6)));
+            CheckAssertion(results, "记录数是 2", store.Count == 2);
+
+            // ---------------- 2. 告警与学习模式 ----------------
+            W();
+            W("===== 2. 告警触发与学习模式抑制 =====");
+
+            var watcher = new NewProgramWatcher(store);
+            var detected = new List<string>();
+            watcher.NewProgramDetected += path => detected.Add(path);
+
+            watcher.Observe(new[] { @"C:\c.exe", @"C:\d.exe" }, now);
+            CheckAssertion(results, "两个新程序各触发一次告警", detected.Count == 2);
+
+            detected.Clear();
+            watcher.SuppressAlerts = true;
+            watcher.Observe(new[] { @"C:\e.exe" }, now);
+
+            CheckAssertion(results, "学习模式不触发告警", detected.Count == 0);
+            CheckAssertion(results, "学习模式仍然记录（以后不会再问）",
+                store.Find(@"C:\e.exe") is not null);
+
+            watcher.SuppressAlerts = false;
+            watcher.Observe(new[] { @"C:\e.exe" }, now);
+            CheckAssertion(results, "退出学习模式后，已记录的程序不会再告警", detected.Count == 0);
+
+            // ---------------- 3. 决定与持久化 ----------------
+            W();
+            W("===== 3. 用户决定与持久化 =====");
+
+            store.SetDecision(@"C:\b.exe", ProgramDecision.Blocked, now);
+            store.SetDecision(@"C:\a.exe", ProgramDecision.Ignored, now);
+            store.Save();
+
+            var reloaded = new KnownProgramStore(tempFile);
+            CheckAssertion(results, "重新加载后条数一致", reloaded.Count == store.Count);
+            CheckAssertion(results, "阻止决定被保存",
+                reloaded.Find(@"C:\b.exe")?.Decision == ProgramDecision.Blocked);
+            CheckAssertion(results, "忽略决定被保存",
+                reloaded.Find(@"C:\a.exe")?.Decision == ProgramDecision.Ignored);
+            CheckAssertion(results, "仍然记得「不需要再问」",
+                reloaded.Find(@"C:\e.exe")?.Decision == ProgramDecision.Unknown);
+
+            // ---------------- 4. 文件损坏 ----------------
+            W();
+            W("===== 4. 文件损坏时回落到空表 =====");
+
+            File.WriteAllText(tempFile, "{ 这不是合法 json", Encoding.UTF8);
+
+            var corrupted = new KnownProgramStore(tempFile);
+            CheckAssertion(results, "损坏文件不抛异常，按空表处理", corrupted.Count == 0);
+            CheckAssertion(results, "损坏后仍可继续记录", corrupted.Observe(@"C:\new.exe", now));
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                {
+                    File.Delete(tempFile);
+                }
+
+                var temp = tempFile + ".tmp";
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
     }
 
     /// <summary>子层是否已经不存在（只读判断，不抛异常）。</summary>

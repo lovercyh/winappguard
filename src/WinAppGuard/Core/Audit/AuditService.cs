@@ -22,6 +22,8 @@ internal sealed class AuditService : IDisposable
     private readonly AuditStore _store;
     private readonly DomainIndex _domains = new();
     private readonly ConnectionTracker _connections = new();
+    private readonly NewProgramWatcher _newPrograms =
+        new(new KnownProgramStore());
     private readonly object _writeGate = new();
     private readonly object _filterIdGate = new();
 
@@ -68,6 +70,16 @@ internal sealed class AuditService : IDisposable
 
     /// <summary>最近一次错误（供界面如实显示，不影响其它功能）。</summary>
     internal string? LastError { get; private set; }
+
+    /// <summary>新程序检测器（界面订阅它的 NewProgramDetected）。</summary>
+    internal NewProgramWatcher NewPrograms => _newPrograms;
+
+    /// <summary>学习模式：只记录新程序、不弹告警。</summary>
+    internal bool LearningMode
+    {
+        get => _newPrograms.SuppressAlerts;
+        set => _newPrograms.SuppressAlerts = value;
+    }
 
     /// <summary>当前识别到的"本工具过滤器"数量（0 表示拦截事件不会被记录）。</summary>
     internal int OurFilterIdCount
@@ -150,6 +162,9 @@ internal sealed class AuditService : IDisposable
         _cancellation = null;
         _store.Dispose();
 
+        // 退出前把"已知程序"落盘（最多丢最后不到一分钟的新增）。
+        _newPrograms.Store.Save();
+
         LocalLog.Info($"审计已停止：共写入 {EventsWritten} 条，其中拦截 {DropsSeen} 条");
     }
 
@@ -186,6 +201,16 @@ internal sealed class AuditService : IDisposable
                 if (added.Count > 0)
                 {
                     _domains.Update(DnsCacheReader.ReadSnapshot(AllowDomainLookup), DateTime.UtcNow);
+
+                    // 新程序检测：学习模式下只记录、不弹窗（由 NewProgramWatcher 内部决定）。
+                    _newPrograms.Observe(added.Select(item => item.ProcessPath), nowUtc);
+                }
+
+                // 每 20 轮（约 1 分钟）落一次"已知程序"，避免每 3 秒写文件。
+                if (++_loopsSinceSave >= 20)
+                {
+                    _loopsSinceSave = 0;
+                    _newPrograms.Store.Save();
                 }
 
                 foreach (var connection in added)
@@ -305,4 +330,5 @@ internal sealed class AuditService : IDisposable
 
     private int _eventsWritten;
     private int _dropCounter;
+    private int _loopsSinceSave;
 }

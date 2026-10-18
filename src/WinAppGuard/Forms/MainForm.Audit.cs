@@ -621,31 +621,20 @@ public sealed partial class MainForm
 
         try
         {
-            switch (choice)
+            var ruleName = ApplyNewProgramChoice(
+                store, path, choice, RuleEngine.CreateBlockRule, DateTime.UtcNow);
+
+            LocalLog.Operation(choice switch
             {
-                case NewProgramChoice.Allow:
-                    store?.SetDecision(path, ProgramDecision.Allowed, DateTime.UtcNow);
-                    LocalLog.Operation($"新程序：允许联网 {path}");
-                    break;
+                NewProgramChoice.Allow => $"新程序：允许联网 {path}",
+                NewProgramChoice.Ignore => $"新程序：忽略 {path}",
+                NewProgramChoice.Block => $"新程序：阻止联网 {path}（规则 {ruleName}）",
+                _ => $"新程序：稍后再问 {path}",
+            });
 
-                case NewProgramChoice.Ignore:
-                    store?.SetDecision(path, ProgramDecision.Ignored, DateTime.UtcNow);
-                    LocalLog.Operation($"新程序：忽略 {path}");
-                    break;
-
-                case NewProgramChoice.Block:
-                    store?.SetDecision(path, ProgramDecision.Blocked, DateTime.UtcNow);
-
-                    var ruleName = RuleEngine.CreateBlockRule(path);
-                    LocalLog.Operation($"新程序：阻止联网 {path}（规则 {ruleName}）");
-
-                    AfterRulesChanged();
-                    break;
-
-                default:
-                    // 「稍后」= 忘掉它，下次联网再问（不是"永不询问"）。
-                    store?.Forget(path);
-                    break;
+            if (choice == NewProgramChoice.Block)
+            {
+                AfterRulesChanged();
             }
 
             store?.Save();
@@ -653,6 +642,42 @@ public sealed partial class MainForm
         catch (Exception ex)
         {
             ShowError("处理新程序失败", ex);
+        }
+    }
+
+    /// <summary>
+    /// 把用户的选择落到「已知程序表 + 规则」上。**这是 2.2 里唯一会真的改系统状态的一段**。
+    ///
+    /// 为什么抽成静态方法、并把"建规则"做成可注入：手动点一遍很容易只看到"窗口关掉了"
+    /// 就以为对了。自检用一个假动作来验证 —— **只有「阻止」才会去建规则**，
+    /// 其余三种选择一条规则都不许建（「允许」也不建允许规则，2.0 起默认就是放行）。
+    /// </summary>
+    /// <returns>「阻止」时由 <paramref name="createBlockRule"/> 返回的规则名；其它选择返回 null。</returns>
+    internal static string? ApplyNewProgramChoice(
+        KnownProgramStore? store,
+        string path,
+        NewProgramChoice choice,
+        Func<string, string> createBlockRule,
+        DateTime nowUtc)
+    {
+        switch (choice)
+        {
+            case NewProgramChoice.Allow:
+                store?.SetDecision(path, ProgramDecision.Allowed, nowUtc);
+                return null;
+
+            case NewProgramChoice.Ignore:
+                store?.SetDecision(path, ProgramDecision.Ignored, nowUtc);
+                return null;
+
+            case NewProgramChoice.Block:
+                store?.SetDecision(path, ProgramDecision.Blocked, nowUtc);
+                return createBlockRule(path);
+
+            default:
+                // 「稍后」= 忘掉它，下次联网再问（不是"永不询问"）。
+                store?.Forget(path);
+                return null;
         }
     }
 

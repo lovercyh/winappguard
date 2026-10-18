@@ -5371,6 +5371,84 @@ internal static class Program
         learningActive.SetValue(form, false);
         settings.NewProgramAlertEnabled = true;
 
+        // ---------------- 4. 四个选择各自会做什么 ----------------
+        W();
+        W("===== 4. 选择 → 实际动作（只有「阻止」才建规则）=====");
+
+        var tempKnown = Path.Combine(Path.GetTempPath(), $"wag-apply-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            var store = new KnownProgramStore(tempKnown);
+            var calls = new List<string>();
+
+            string FakeRule(string programPath)
+            {
+                calls.Add(programPath);
+                return "FAKE_RULE";
+            }
+
+            const string exe = @"C:\apply\demo.exe";
+            var nowUtc = DateTime.UtcNow;
+
+            // 「允许」：不建规则，只是记住已允许。
+            var rule = MainForm.ApplyNewProgramChoice(
+                store, exe, NewProgramChoice.Allow, FakeRule, nowUtc);
+
+            CheckAssertion(results, "「允许」不建任何规则", rule is null && calls.Count == 0);
+            CheckAssertion(results, "「允许」记为 Allowed",
+                store.Find(exe)?.Decision == ProgramDecision.Allowed);
+            CheckAssertion(results, "「允许」之后不再询问", !store.Observe(exe, nowUtc));
+
+            // 「忽略」：不建规则，也不再问。
+            store.Forget(exe);
+            rule = MainForm.ApplyNewProgramChoice(
+                store, exe, NewProgramChoice.Ignore, FakeRule, nowUtc);
+
+            CheckAssertion(results, "「忽略」不建任何规则", rule is null && calls.Count == 0);
+            CheckAssertion(results, "「忽略」记为 Ignored",
+                store.Find(exe)?.Decision == ProgramDecision.Ignored);
+
+            // 「阻止」：**唯一**会去建规则的那一个。
+            store.Forget(exe);
+            rule = MainForm.ApplyNewProgramChoice(
+                store, exe, NewProgramChoice.Block, FakeRule, nowUtc);
+
+            CheckAssertion(results, "「阻止」会建规则（且只建一条）",
+                rule == "FAKE_RULE" && calls.Count == 1 && calls[0] == exe);
+            CheckAssertion(results, "「阻止」记为 Blocked",
+                store.Find(exe)?.Decision == ProgramDecision.Blocked);
+
+            // 「稍后」：不建规则、不留记录（下次还会问）。
+            store.Forget(exe);
+            rule = MainForm.ApplyNewProgramChoice(
+                store, exe, NewProgramChoice.Later, FakeRule, nowUtc);
+
+            CheckAssertion(results, "「稍后」不建规则、也不留在表里",
+                rule is null && calls.Count == 1 && store.Find(exe) is null);
+            CheckAssertion(results, "「稍后」之后下次联网仍会询问", store.Observe(exe, nowUtc));
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempKnown))
+                {
+                    File.Delete(tempKnown);
+                }
+
+                var temp = tempKnown + ".tmp";
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件删不掉不影响结论。
+            }
+        }
+
         PrintSummary(results, showFirewallResidue: false);
     }
 
@@ -5554,12 +5632,29 @@ internal static class Program
             CheckAssertion(results, "学习模式仍然把它记进已知程序表（结束后不再补问）",
                 service.NewPrograms.Store.Find(selfPath) is not null);
 
-            // 退出学习模式后也不该"补问"：它已经被记过了。
+            // 学习期间记下来的所有程序 —— 退出学习后它们一个都不许"补问"。
+            // ⚠️ 这里同样不能断言"提醒总数 = 0"：机器上随时可能有**新**程序第一次联网，
+            //    那本来就该提醒。不变量是"已记录的不会补问"。
+            var learnedPaths = service.NewPrograms.Store.All()
+                .Select(program => program.Path)
+                .ToList();
+
+            W($"    学习期间记录了 {learnedPaths.Count} 个程序");
+
             service.LearningMode = false;
             HoldConnection("whois.cymru.com", 43, keepSeconds: 4);
             Thread.Sleep(3000);
 
-            CheckAssertion(results, "退出学习模式后不会补问", Snapshot(learningDetected).Count == 0);
+            var afterLearning = Snapshot(learningDetected);
+            var askedAgain = afterLearning
+                .Where(path => learnedPaths.Any(learned => PathsEqual(learned, path)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            W($"    退出学习后提醒了 {afterLearning.Count} 个，其中" +
+              $"是学习期间记录过的 = {askedAgain.Count} 个");
+
+            CheckAssertion(results, "退出学习模式后不会补问已记录的程序", askedAgain.Count == 0);
         }
         catch (Exception ex)
         {

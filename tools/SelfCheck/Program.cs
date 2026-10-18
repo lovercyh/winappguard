@@ -9,6 +9,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
 using WinAppGuard.Interop;
@@ -47,6 +48,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条记事本规则 → 迁移 → 核对 → 清理）
 ///   WinAppGuard.SelfCheck.exe --wfp-status      WFP：只读，打印当前 2.0 规则与子层状态
 ///   WinAppGuard.SelfCheck.exe --wfp-strict-test WFP：严格模式（动态会话 + 白名单 + 阻止全部，验证真能拦、退出即恢复）
+///   WinAppGuard.SelfCheck.exe --audit-store-test 审计：事件模型与落盘（往返 / 轮转 / 清理 / 半行容错，离线）
 ///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
@@ -116,7 +118,8 @@ internal static class Program
                          && !args.Contains("--ui-check", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-render", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -203,6 +206,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuditStoreTest();
             }
             else if (args.Contains("--wfp-strict-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4184,6 +4191,225 @@ internal static class Program
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 审计存储自检（离线、零副作用，全部在临时目录里做）。
+    ///
+    /// 重点验证四件事：
+    ///   1. 一条记录的字段能**原样**存回来（含中文路径）；
+    ///   2. 断电留下的**半行**不会毁掉整个文件；
+    ///   3. 超过体积上限会**自动分段**；
+    ///   4. 超过保留期的文件会被清掉，而 7 天内的不会。
+    /// </summary>
+    private static void RunAuditStoreTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"wag-audit-{Guid.NewGuid():N}");
+
+        W("################################################################");
+        W("#   审计存储自检（离线：往返 / 半行容错 / 轮转 / 保留期清理）    #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Directory.CreateDirectory(tempDirectory);
+
+            // ---------------- 1. 往返 ----------------
+            W("===== 1. 写入与读回 =====");
+
+            var now = DateTime.UtcNow;
+            var events = new[]
+            {
+                new AuditEvent
+                {
+                    TimeUtc = now.AddSeconds(-2),
+                    Kind = AuditEventKind.Connect,
+                    ProcessPath = @"C:\Program Files\测试 工具\a.exe",
+                    ProcessId = 1234,
+                    RemoteAddress = "140.82.112.3",
+                    RemotePort = 443,
+                    Protocol = 6,
+                    Domain = "github.com",
+                },
+                new AuditEvent
+                {
+                    TimeUtc = now.AddSeconds(-1),
+                    Kind = AuditEventKind.Blocked,
+                    ProcessPath = @"C:\Windows\System32\notepad.exe",
+                    ProcessId = 5678,
+                    RemoteAddress = "216.31.12.15",
+                    RemotePort = 43,
+                    Protocol = 6,
+                    FilterId = 71735,
+                },
+                new AuditEvent
+                {
+                    TimeUtc = now,
+                    Kind = AuditEventKind.Connect,
+                    ProcessPath = @"C:\Tools\b.exe",
+                    ProcessId = 9012,
+                    RemoteAddress = "2001:db8::1",
+                    RemotePort = 8443,
+                    Protocol = 6,
+                    Domain = "a.com / b.com",
+                },
+            };
+
+            using (var store = new AuditStore(tempDirectory))
+            {
+                foreach (var item in events)
+                {
+                    store.Append(item);
+                }
+
+                var readBack = store.ReadRecent(10);
+                W($"    写入 3 条，读回 {readBack.Count} 条");
+                CheckAssertion(results, "读回条数一致", readBack.Count == 3);
+
+                var first = readBack[0];
+                CheckAssertion(results, "顺序按写入先后（时间正序）", first.ProcessId == 1234);
+                CheckAssertion(results, "中文路径原样保留",
+                    first.ProcessPath == @"C:\Program Files\测试 工具\a.exe");
+                CheckAssertion(results, "远端地址与端口正确",
+                    first.RemoteAddress == "140.82.112.3" && first.RemotePort == 443);
+                CheckAssertion(results, "域名与「推测」标记保留",
+                    first.Domain == "github.com" && first.DomainIsGuess);
+
+                var blocked = readBack[1];
+                CheckAssertion(results, "拦截事件保留了命中规则 ID",
+                    blocked.Kind == AuditEventKind.Blocked && blocked.FilterId == 71735);
+                CheckAssertion(results, "没有域名时是 null（不是空字符串）",
+                    blocked.Domain is null);
+
+                CheckAssertion(results, "IPv6 地址原样保留",
+                    readBack[2].RemoteAddress == "2001:db8::1");
+
+                _ = store.GetFiles().Single();
+            }
+
+            // ---------------- 2. 半行容错 ----------------
+            W();
+            W("===== 2. 断电留下半行 =====");
+
+            var halfLineFile = Directory.GetFiles(tempDirectory, "audit-*.jsonl").Single();
+            File.AppendAllText(
+                halfLineFile,
+                "{\"t\":\"2026-10-18T00:00:00Z\",\"k\":0,\"p\":\"C:\\\\x.exe\",\"a\":\"1.2.3.4\"",
+                Encoding.UTF8);
+
+            using (var reopen = new AuditStore(tempDirectory))
+            {
+                var afterHalfLine = reopen.ReadRecent(10);
+                W($"    追加半行后读回 {afterHalfLine.Count} 条（预期仍是 3）");
+                CheckAssertion(results, "半行被跳过，其余记录不受影响", afterHalfLine.Count == 3);
+            }
+
+            // ---------------- 3. 轮转 ----------------
+            W();
+            W("===== 3. 超过体积上限自动分段 =====");
+
+            using (var small = new AuditStore(tempDirectory, maxFileBytes: 300))
+            {
+                for (var i = 0; i < 12; i++)
+                {
+                    small.Append(new AuditEvent
+                    {
+                        TimeUtc = now.AddSeconds(i),
+                        Kind = AuditEventKind.Connect,
+                        ProcessPath = $@"C:\Tools\rotate{i}.exe",
+                        RemoteAddress = "10.0.0.1",
+                        RemotePort = (ushort)(1000 + i),
+                        Protocol = 6,
+                    });
+                }
+
+                var files = small.GetFiles();
+                W($"    分段文件数 = {files.Count}");
+                foreach (var path in files)
+                {
+                    W($"      {Path.GetFileName(path)}  {new FileInfo(path).Length} 字节");
+                }
+
+                CheckAssertion(results, "确实分成了多个文件", files.Count >= 2);
+
+                var all = small.ReadRecent(100);
+                CheckAssertion(results, "跨文件读取条数正确（3 旧 + 12 新）", all.Count == 15);
+            }
+
+            // ---------------- 4. 保留期 ----------------
+            W();
+            W("===== 4. 保留期清理 =====");
+
+            var today = DateTime.Now.Date;
+            var recentFile = Path.Combine(tempDirectory, $"audit-{today.AddDays(-3):yyyyMMdd}-99.jsonl");
+            var oldFile = Path.Combine(tempDirectory, $"audit-{today.AddDays(-30):yyyyMMdd}-99.jsonl");
+            File.WriteAllText(recentFile, string.Empty, Encoding.UTF8);
+            File.WriteAllText(oldFile, string.Empty, Encoding.UTF8);
+
+            using (var store = new AuditStore(tempDirectory, retentionDays: 7))
+            {
+                var deleted = store.PurgeExpired(DateTime.Now);
+                W($"    删除 {deleted} 个过期文件（预期 1）");
+
+                CheckAssertion(results, "超过 7 天的被删掉", !File.Exists(oldFile));
+                CheckAssertion(results, "7 天内的保留", File.Exists(recentFile));
+            }
+
+            // ---------------- 5. 关闭记录与清空 ----------------
+            W();
+            W("===== 5. 关闭记录与清空 =====");
+
+            using (var store = new AuditStore(tempDirectory))
+            {
+                var bytesBefore = store.GetFiles().Sum(path => new FileInfo(path).Length);
+
+                store.Enabled = false;
+                store.Append(new AuditEvent
+                {
+                    TimeUtc = now,
+                    Kind = AuditEventKind.Connect,
+                    ProcessPath = @"C:\x.exe",
+                    RemoteAddress = "1.1.1.1",
+                    RemotePort = 80,
+                    Protocol = 6,
+                });
+
+                var bytesAfter = store.GetFiles().Sum(path => new FileInfo(path).Length);
+                CheckAssertion(results, "关闭后不再写入", bytesAfter == bytesBefore);
+
+                store.Enabled = true;
+                store.Clear();
+                CheckAssertion(results, "清空后没有审计文件", store.GetFiles().Count == 0);
+            }
+
+            // ---------------- 6. 摘要文本 ----------------
+            W();
+            W("===== 6. 摘要文本 =====");
+
+            var line = events[1].Describe();
+            W($"    {line}");
+            CheckAssertion(results, "摘要里写明了「拦截」", line.Contains("拦截"));
+            CheckAssertion(results, "摘要里写明了程序名与远端", line.Contains("notepad.exe") && line.Contains("216.31.12.15"));
+            CheckAssertion(results, "没有域名时写明「域名未知」", line.Contains("域名未知"));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
     }
 
     /// <summary>子层是否已经不存在（只读判断，不抛异常）。</summary>

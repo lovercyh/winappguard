@@ -50,6 +50,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --wfp-strict-test WFP：严格模式（动态会话 + 白名单 + 阻止全部，验证真能拦、退出即恢复）
 ///   WinAppGuard.SelfCheck.exe --audit-store-test 审计：事件模型与落盘（往返 / 轮转 / 清理 / 半行容错，离线）
 ///   WinAppGuard.SelfCheck.exe --audit-dns-test   审计：读本机 DNS 缓存 + 域名索引（离线、不联网）
+///   WinAppGuard.SelfCheck.exe --audit-live-test  审计：实时采集（连接差集 + WFP 拦截事件，约 12 秒，需管理员）
 ///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
@@ -121,7 +122,8 @@ internal static class Program
                          && !args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -208,6 +210,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuditLiveTest(seconds: 12);
             }
             else if (args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4558,6 +4564,146 @@ internal static class Program
             CheckAssertion(results, "抽查的 IP 能查到刚写入的域名",
                 guessed.Domain is not null
                 && guessed.Domain.Contains(pick.Name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 审计实时采集自检（需要管理员）。
+    ///
+    /// 先离线验证"连接差集"逻辑，再真的启动 WFP 网络事件订阅 + 每 3 秒扫一次连接表，
+    /// 跑十几秒看能不能采到东西。
+    /// </summary>
+    private static void RunAuditLiveTest(int seconds)
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   审计实时采集（连接差集 + WFP 拦截事件，需要管理员）          #");
+        W("################################################################");
+        W();
+
+        // ---------------- 1. 差集逻辑（离线） ----------------
+        W("===== 1. 连接差集逻辑 =====");
+
+        var tracker = new ConnectionTracker();
+        var a = new ConnectionKey(@"C:\a.exe", 1, "1.1.1.1", 443, 6);
+        var b = new ConnectionKey(@"C:\b.exe", 2, "2.2.2.2", 80, 6);
+        var c = new ConnectionKey(@"C:\c.exe", 3, "3.3.3.3", 53, 6);
+
+        CheckAssertion(results, "首轮全部算新连接", tracker.Update(new[] { a, b }).Count == 2);
+
+        var second = tracker.Update(new[] { a, b, c });
+        CheckAssertion(results, "重复出现的连接不算新连接",
+            second.Count == 1 && second[0].ProcessPath == @"C:\c.exe");
+
+        _ = tracker.Update(new[] { a });
+        var back = tracker.Update(new[] { a, b });
+        CheckAssertion(results, "连接消失后再出现会重新算新连接",
+            back.Count == 1 && back[0].ProcessPath == @"C:\b.exe");
+
+        // ---------------- 2. 设备路径映射 ----------------
+        W();
+        W("===== 2. 设备路径映射 =====");
+
+        var mapped = DevicePathMapper.ToDosPath(@"\device\harddiskvolume3\windows\notepad.exe");
+        W($"    \\device\\harddiskvolume3\\windows\\notepad.exe → {mapped}");
+        CheckAssertion(results, "设备路径能映射（映射不到时原样返回也不算崩）", !string.IsNullOrEmpty(mapped));
+
+        // ---------------- 3. 启动拦截事件订阅 ----------------
+        W();
+        W("===== 3. WFP 拦截事件订阅 =====");
+
+        var drops = new List<WfpDropEvent>();
+        WfpDropCollector? collector = null;
+        var isAdmin = AdminHelper.IsRunningAsAdmin();
+
+        try
+        {
+            collector = WfpDropCollector.Start();
+            collector.DropDetected += drop =>
+            {
+                lock (drops)
+                {
+                    drops.Add(drop);
+                }
+            };
+
+            CheckAssertion(results, "订阅 WFP 网络事件成功", true);
+        }
+        catch (Exception ex)
+        {
+            if (isAdmin)
+            {
+                CheckAssertion(results, "订阅 WFP 网络事件成功", false);
+                W($"    {ex.Message}");
+            }
+            else
+            {
+                W("    非管理员：跳过 WFP 事件订阅（在虚拟机里用管理员终端跑这一项）。");
+            }
+        }
+
+        try
+        {
+            // ---------------- 4. 轮询连接表 ----------------
+            W();
+            W("===== 4. 连接轮询（每 3 秒一轮）=====");
+
+            var rounds = Math.Max(1, seconds / 3);
+            var liveTracker = new ConnectionTracker();
+            var newConnections = new List<ConnectionKey>();
+
+            for (var i = 0; i < rounds; i++)
+            {
+                try
+                {
+                    var snapshot = ConnectionScanner.Scan();
+                    var added = liveTracker.Update(ConnectionTracker.FromSnapshot(snapshot));
+                    newConnections.AddRange(added);
+                    W($"    第 {i + 1}/{rounds} 轮：当前 {snapshot.Count} 条连接，新增 {added.Count} 条");
+                }
+                catch (Exception ex)
+                {
+                    W($"    第 {i + 1} 轮扫描失败：{ex.Message}");
+                }
+
+                if (i < rounds - 1)
+                {
+                    Thread.Sleep(3000);
+                }
+            }
+
+            // ---------------- 5. 汇总 ----------------
+            W();
+            W("===== 5. 汇总 =====");
+
+            foreach (var item in newConnections.Take(10))
+            {
+                W($"    新连接 {Path.GetFileName(item.ProcessPath)} → {item.Address}:{item.Port}");
+            }
+
+            if (newConnections.Count > 10)
+            {
+                W($"    …… 以及另外 {newConnections.Count - 10} 条");
+            }
+
+            lock (drops)
+            {
+                foreach (var drop in drops.Take(10))
+                {
+                    W($"    拦截 {Path.GetFileName(drop.ProcessPath)} → {drop.RemoteAddress}:{drop.RemotePort}" +
+                      $"（filterId={drop.FilterId}）");
+                }
+
+                W($"    新连接 {newConnections.Count} 条，拦截事件 {drops.Count} 条");
+                CheckAssertion(results, "采样期间没有让程序崩溃", true);
+            }
+        }
+        finally
+        {
+            collector?.Dispose();
         }
 
         PrintSummary(results, showFirewallResidue: false);

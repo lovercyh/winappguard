@@ -38,6 +38,25 @@ public sealed class AppSettings
     public bool IpOwnershipNoticeShown { get; set; }
 
     /// <summary>
+    /// 审计的「域名推测」是否开启，默认**开启**（产品负责人确认过）。
+    ///
+    /// 开启时：读本机 DNS 缓存用「缓存优先」模式 —— 缓存里有就直接用；
+    /// 条目刚好过期时，Windows 可能向**本机配置的 DNS 服务器**补发一次查询。
+    /// 关闭时：只用 `DNS_QUERY_NO_WIRE_QUERY`，**绝不发包**，
+    /// 代价是域名覆盖率会明显下降（实测约 8%）。
+    ///
+    /// 为什么单独做成开关：这是本项目第二个会"发网络请求"的路径，
+    /// 用户必须能自己关掉，并且知道它和 whois 查询是两回事。
+    /// </summary>
+    public bool AuditDomainLookupEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 审计记录是否开启。默认**开启**；关闭后不再产生任何审计记录。
+    /// （已存在的记录不受影响，由「立即清空」单独处理。）
+    /// </summary>
+    public bool AuditEnabled { get; set; } = true;
+
+    /// <summary>
     /// 「严格模式」上一次开启之后**没有正常还原**（程序崩溃 / 被强杀 / 机器断电）。
     ///
     /// 它的唯一用途：下次启动时据此把「默认出站动作」还原成「允许」。

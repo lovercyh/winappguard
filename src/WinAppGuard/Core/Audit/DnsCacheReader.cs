@@ -77,6 +77,51 @@ internal static class DnsCacheReader
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern void DnsFree(IntPtr data, int freeType);
 
+    /// <summary>
+    /// 诊断：只走链表、不做任何查询，报告"表里到底有多少条目"。
+    /// 用来区分两种情况：缓存本来就是空的 vs 我们的 API 调用/遍历有问题。
+    /// </summary>
+    internal static (int Result, int Entries, int NamedEntries, string? FirstName) ProbeTable()
+    {
+        var entries = 0;
+        var named = 0;
+        string? firstName = null;
+        var table = IntPtr.Zero;
+
+        var result = DnsGetCacheDataTable(out table);
+
+        if (table == IntPtr.Zero)
+        {
+            return (result, 0, 0, null);
+        }
+
+        try
+        {
+            var node = table;
+            var guard = 0;
+
+            while (node != IntPtr.Zero && guard++ < 100_000)
+            {
+                entries++;
+                var entry = Marshal.PtrToStructure<DnsCacheEntry>(node);
+                var name = Marshal.PtrToStringUni(entry.Name);
+
+                if (!string.IsNullOrEmpty(name))
+                {
+                    named++;
+                    firstName ??= name;
+                }
+
+                node = entry.Next;
+            }
+        }
+        finally
+        {
+            DnsFree(table, DnsFreeFlat);
+        }
+
+        return (result, entries, named, firstName);
+    }
     /// <summary>启动时的结构体尺寸自检（防止又一次"整体偏移几字节"）。</summary>
     internal static void EnsureLayout()
     {
@@ -97,7 +142,7 @@ internal static class DnsCacheReader
     /// 读一遍当前缓存，返回所有 A / AAAA 记录。
     /// 任何一步失败都返回空列表（审计功能不能因此崩掉）。
     /// </summary>
-    internal static IReadOnlyList<DnsCacheRecord> ReadSnapshot()
+    internal static IReadOnlyList<DnsCacheRecord> ReadSnapshot(bool allowResolverQuery = true)
     {
         var result = new List<DnsCacheRecord>();
         var names = new List<string>();
@@ -154,7 +199,7 @@ internal static class DnsCacheReader
         {
             try
             {
-                CollectRecords(name, DNS_TYPE_A, DNS_TYPE_AAAA, result);
+                CollectRecords(name, DNS_TYPE_A, DNS_TYPE_AAAA, result, allowResolverQuery);
             }
             catch (Exception)
             {
@@ -164,15 +209,29 @@ internal static class DnsCacheReader
 
         return result;
     }
-    private static void CollectRecords(string name, ushort typeA, ushort typeAaaa, List<DnsCacheRecord> output)
+    private static void CollectRecords(
+        string name,
+        ushort typeA,
+        ushort typeAaaa,
+        List<DnsCacheRecord> output,
+        bool allowResolverQuery)
     {
-        CollectOne(name, typeA, output);
-        CollectOne(name, typeAaaa, output);
+        CollectOne(name, typeA, output, allowResolverQuery);
+        CollectOne(name, typeAaaa, output, allowResolverQuery);
     }
 
-    private static void CollectOne(string name, ushort type, List<DnsCacheRecord> output)
+    private static void CollectOne(
+        string name,
+        ushort type,
+        List<DnsCacheRecord> output,
+        bool allowResolverQuery)
     {
-        if (DnsQuery_W(name, type, DNS_QUERY_NO_WIRE_QUERY, IntPtr.Zero, out var records, IntPtr.Zero) != 0
+        // 开启「域名推测」时用缓存优先（0）：缓存有就直接返回；
+        // 条目刚好过期时，Windows 可能向本机 DNS 服务器补发一次查询。
+        // 关闭时用 NO_WIRE_QUERY：绝不发包，代价是覆盖率低。
+        var options = allowResolverQuery ? 0u : DNS_QUERY_NO_WIRE_QUERY;
+
+        if (DnsQuery_W(name, type, options, IntPtr.Zero, out var records, IntPtr.Zero) != 0
             || records == IntPtr.Zero)
         {
             return;

@@ -4464,7 +4464,11 @@ internal static class Program
         W();
         W("===== 1. 本机 DNS 缓存 =====");
 
+        var tableProbe = DnsCacheReader.ProbeTable();
+        W($"    [诊断] 缓存表：返回码={tableProbe.Result} 条目={tableProbe.Entries} 有名字={tableProbe.NamedEntries} 第一个={tableProbe.FirstName ?? "（空）"}");
         var snapshot = DnsCacheReader.ReadSnapshot();
+        var strictCacheOnly = DnsCacheReader.ReadSnapshot(allowResolverQuery: false);
+        W($"    两种模式：仅缓存(零发包) = {strictCacheOnly.Count} 条；缓存优先(可回源) = {snapshot.Count} 条");
         var distinctAddresses = snapshot.Select(record => record.Address)
             .Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var distinctNames = snapshot.Select(record => record.Name)
@@ -5734,7 +5738,7 @@ internal static class Program
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["dnsapi.dll!DnsGetCacheDataTable"] = "枚举本机 DNS 缓存（只读内存，不发包）",
-            ["dnsapi.dll!DnsQuery_W"] = "读缓存记录；调用处固定用 DNS_QUERY_NO_WIRE_QUERY，不发包",
+            ["dnsapi.dll!DnsQuery_W"] = "读缓存记录：缓存优先；开启「域名推测」时可能向本机 DNS 服务器补发查询（设置里可关闭）",
             ["dnsapi.dll!DnsFree"] = "释放上面两个 API 返回的内存",
         };
 

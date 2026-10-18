@@ -32,12 +32,20 @@ internal sealed class AuditService : IDisposable
     internal AuditService(
         string? directory = null,
         int pollSeconds = 3,
-        int retentionDays = AuditStore.DefaultRetentionDays)
+        int retentionDays = AuditStore.DefaultRetentionDays,
+        bool allowDomainLookup = true)
     {
         _store = new AuditStore(directory, retentionDays: retentionDays);
         PollSeconds = Math.Max(1, pollSeconds);
+        AllowDomainLookup = allowDomainLookup;
         _nextPurge = DateTime.Now.Date.AddDays(1);
     }
+
+    /// <summary>
+    /// 是否允许"缓存优先、必要时回源"的 DNS 读取（对应设置里的「域名推测」）。
+    /// false 时只用 NO_WIRE_QUERY：绝不发 DNS 包，覆盖率会明显下降。
+    /// </summary>
+    internal bool AllowDomainLookup { get; }
 
     /// <summary>连接/DNS 快照的间隔（秒）。</summary>
     internal int PollSeconds { get; }
@@ -143,7 +151,7 @@ internal sealed class AuditService : IDisposable
                 // ---- DNS 快照（决定"域名"这一列）----
                 if (nowUtc >= nextDns)
                 {
-                    _domains.Update(DnsCacheReader.ReadSnapshot(), nowUtc);
+                    _domains.Update(DnsCacheReader.ReadSnapshot(AllowDomainLookup), nowUtc);
                     nextDns = nowUtc.AddSeconds(PollSeconds);
                 }
 

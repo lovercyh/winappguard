@@ -4835,13 +4835,33 @@ internal static class Program
                     W($"      {item.Describe()}  域名={(item.Domain ?? "null")}");
                 }
 
-                CheckAssertion(results,
-                    "主动连接被记录，且命中了域名",
-                    probeEvents.Count > 0 && probeEvents.Any(item => !string.IsNullOrEmpty(item.Domain)));
+                // 先看"原始缓存里此刻到底有没有这条记录"——
+                // 没有的话是环境问题（TTL 到期 / DoH），不是我们的 bug。
+                var raw = DnsCacheReader.ReadSnapshot();
+                var rawHasAddress = raw.Any(record =>
+                    string.Equals(record.Address, probeAddress, StringComparison.OrdinalIgnoreCase));
 
-                if (probeEvents.Count > 0 && probeEvents.All(item => string.IsNullOrEmpty(item.Domain)))
+                W($"    [诊断] 直接读缓存：{raw.Count} 条记录，" +
+                  $"其中包含目标 IP = {(rawHasAddress ? "是" : "否")}");
+
+                foreach (var record in raw
+                             .Where(record => string.Equals(record.Address, probeAddress, StringComparison.OrdinalIgnoreCase))
+                             .Take(3))
                 {
-                    W("    ⚠️ 记录到了连接但没有域名 —— 说明 DNS 缓存里此刻没有这条解析。");
+                    W($"      [诊断] {record.Name} → {record.Address}（TTL {record.TtlSeconds}s）");
+                }
+
+                CheckAssertion(results, "主动连接被记录", probeEvents.Count > 0);
+
+                if (rawHasAddress)
+                {
+                    CheckAssertion(results,
+                        "缓存里有这条解析时，审计记录必须带域名",
+                        probeEvents.Any(item => !string.IsNullOrEmpty(item.Domain)));
+                }
+                else
+                {
+                    W("    ⚠️ 缓存里没有该 IP 的有效记录（TTL 到期或走 DoH），本轮跳过域名断言。");
                 }
             }
             else

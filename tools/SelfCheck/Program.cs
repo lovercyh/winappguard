@@ -1314,7 +1314,11 @@ internal static class Program
         {
             // 截图里要显示**产品**的版本，不能用 BuildVersionText()：
             // 它按当前进程取版本，自检进程取到的是 SelfCheck 自己的 1.0.0。
-            var productVersion = typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+            // 也不能用 Assembly.GetName().Version（那是 2.2.0.0，产品界面显示的是 2.2）。
+            var informational = typeof(MainForm).Assembly
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion;
+            var productVersion = (informational ?? "2.2").Split('+')[0];
             versionLabel.Text = $"版本 v{productVersion}";
         }
 

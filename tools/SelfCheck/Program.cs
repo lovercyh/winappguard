@@ -3842,6 +3842,15 @@ internal static class Program
         results.Add(($"界面文字里没有 Markdown 强调符（{where}）", offenders.Count == 0));
     }
 
+    /// <summary>调用产品的私有实例方法并取回值（自检用）。</summary>
+    private static T InvokeInstance<T>(MainForm form, string methodName, params object?[] args)
+    {
+        var method = typeof(MainForm).GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException($"找不到方法 {methodName}");
+
+        return (T)method.Invoke(form, args)!;
+    }
+
     /// <summary>调用产品的私有静态方法（自检用；找不到直接抛，不静默通过）。</summary>
     private static T InvokeStatic<T>(Type type, string methodName, params object?[] args)
     {
@@ -4821,6 +4830,30 @@ internal static class Program
                 CheckAssertion(results, "7 天内的保留", File.Exists(recentFile));
             }
 
+            // 2.1.3：保留期可调（1 / 3 / 7 / 30 天）。同一批文件在不同保留期下结果必须不同，
+            // 否则"改了设置却没生效"这种假开关不会被任何断言发现。
+            foreach (var days in new[] { 1, 3, 30 })
+            {
+                var file = Path.Combine(tempDirectory, $"audit-{today.AddDays(-3):yyyyMMdd}-98.jsonl");
+                File.WriteAllText(file, string.Empty, Encoding.UTF8);
+
+                using var store = new AuditStore(tempDirectory, retentionDays: days);
+                var deleted = store.PurgeExpired(DateTime.Now);
+
+                var expectedExists = days > 3;
+                W($"    保留 {days} 天：3 天前的文件" +
+                  $"{(File.Exists(file) ? "保留" : "被删")}（预期{(expectedExists ? "保留" : "删除")}），删除 {deleted} 个");
+
+                CheckAssertion(results,
+                    $"保留 {days} 天时，3 天前的文件{(expectedExists ? "保留" : "被删")}",
+                    File.Exists(file) == expectedExists);
+
+                if (File.Exists(file))
+                {
+                    File.Delete(file);
+                }
+            }
+
             // ---------------- 5. 关闭记录与清空 ----------------
             W();
             W("===== 5. 关闭记录与清空 =====");
@@ -5233,11 +5266,15 @@ internal static class Program
 
             Thread.Sleep(6000);
 
+            service.Dispose();
+            var stopped = !service.IsRunning;
+
+            // ⚠️ 计数必须在 Dispose **之后**读：Dispose 会等当前那一轮轮询跑完，
+            //    那一轮还会写入几条；先读计数再 Dispose 就会"读回比写入多"，
+            //    机器上有别的程序在联网时必然撞上（实测多出 2 条）—— 那是测量的竞态，不是丢数据。
             var written = service.EventsWritten;
             var drops = service.DropsSeen;
 
-            service.Dispose();
-            var stopped = !service.IsRunning;
             service = null;
 
             W();
@@ -5404,8 +5441,61 @@ internal static class Program
         CheckAssertion(results, "有「拦截此 IP」按钮", buttons.Any(text => text.Contains("拦截此 IP")));
         CheckAssertion(results, "有「添加 IP」按钮", buttons.Any(text => text.Contains("添加 IP")));
 
+        // ---- 记录保留期（2.1.3）----
+        var combo = Descendants<ComboBox>(tab).FirstOrDefault(item => item.Name == "_auditRetentionCombo");
+        CheckAssertion(results, "有「记录保留」下拉框", combo is not null);
+
+        if (combo is not null)
+        {
+            var items = combo.Items.Cast<object>().Select(item => item.ToString()).ToList();
+            W($"    保留期选项 = {string.Join(" / ", items)}");
+
+            CheckAssertion(results, "保留期有 1 / 3 / 7 / 30 天四个选项",
+                items.Contains("1 天") && items.Contains("3 天")
+                && items.Contains("7 天") && items.Contains("30 天"));
+
+            // 下拉索引 → 天数 的映射（接错会让"1 天"实际按 30 天清理）。
+            var expected = new[] { 1, 3, 7, 30 };
+            var mappingOk = true;
+
+            for (var index = 0; index < expected.Length; index++)
+            {
+                combo.SelectedIndex = index;
+                var days = InvokeInstance<int>(form, "SelectedAuditRetentionDays");
+
+                if (days != expected[index])
+                {
+                    W($"    ！下拉第 {index + 1} 项映射成 {days} 天，预期 {expected[index]}");
+                    mappingOk = false;
+                }
+
+                if (RetentionDaysToIndex(days) != index)
+                {
+                    W($"    ！{days} 天反查索引得到 {RetentionDaysToIndex(days)}，预期 {index}");
+                    mappingOk = false;
+                }
+            }
+
+            CheckAssertion(results, "保留期下拉与天数的映射正确（双向）", mappingOk);
+            CheckAssertion(results, "默认保留 7 天",
+                AppSettings.DefaultAuditRetentionDays == 7);
+
+            var addIpButton = Descendants<Button>(tab).FirstOrDefault(button => button.Text.Contains("添加 IP"));
+            CheckAssertion(results, "保留期下拉不和「添加 IP」按钮重叠",
+                addIpButton is null || !combo.Bounds.IntersectsWith(addIpButton.Bounds));
+        }
+
         PrintSummary(results, showFirewallResidue: false);
     }
+
+    /// <summary>天数 → 下拉索引（与产品同一套规则，自检里复算一遍做双向校验）。</summary>
+    private static int RetentionDaysToIndex(int days) => days switch
+    {
+        <= 1 => 0,
+        <= 3 => 1,
+        <= 7 => 2,
+        _ => 3,
+    };
 
     /// <summary>递归找出某类型的所有子控件。</summary>
     private static IEnumerable<T> Descendants<T>(Control root) where T : Control
@@ -6028,16 +6118,33 @@ internal static class Program
                 results.Add(("关闭 IP 归属后保存，重新读取仍然是关闭（关得掉，也记得住）",
                     !reloaded.IpOwnershipEnabled && reloaded.IpOwnershipNoticeShown));
 
-                // 9.3 文件里只允许有开关布尔值，不许夹带 IP / 路径
+                // 9.3 文件里只允许有开关布尔值 + 保留天数，不许夹带 IP / 路径
                 var text = File.ReadAllText(temp, Encoding.UTF8);
                 using var document = JsonDocument.Parse(text);
                 var properties = document.RootElement.EnumerateObject().ToList();
-                var onlyBooleans = properties.All(p =>
-                    p.Value.ValueKind == JsonValueKind.True || p.Value.ValueKind == JsonValueKind.False);
+                var onlySafeValues = properties.All(p =>
+                    p.Value.ValueKind == JsonValueKind.True
+                    || p.Value.ValueKind == JsonValueKind.False
+                    || (p.Name == nameof(AppSettings.AuditRetentionDays)
+                        && p.Value.ValueKind == JsonValueKind.Number
+                        && p.Value.GetInt32() is >= AppSettings.MinAuditRetentionDays
+                            and <= AppSettings.MaxAuditRetentionDays));
 
-                W($"    设置文件属性个数 = {properties.Count}，全部是布尔值 = {onlyBooleans}");
-                results.Add(("设置文件里只存开关布尔值，不存任何 IP / 路径",
-                    onlyBooleans && properties.Count > 0 && !text.Contains("8.8.8.8")));
+                W($"    设置文件属性个数 = {properties.Count}，只含布尔值 + 保留天数 = {onlySafeValues}");
+                results.Add(("设置文件里只有开关布尔值 + 保留天数，不存任何 IP / 路径",
+                    onlySafeValues && properties.Count > 0 && !text.Contains("8.8.8.8")));
+
+                // 9.3b 保留天数能存能读；手改成非法值时回落到 7 天
+                fresh.AuditRetentionDays = 3;
+                fresh.Save(temp);
+                results.Add(("保留期改成 3 天后重新读取仍是 3 天",
+                    AppSettings.Load(temp).AuditRetentionDays == 3));
+
+                var tampered = File.ReadAllText(temp, Encoding.UTF8)
+                    .Replace("\"AuditRetentionDays\": 3", "\"AuditRetentionDays\": 999");
+                File.WriteAllText(temp, tampered, Encoding.UTF8);
+                results.Add(("保留期被手改成 999 时回落到默认 7 天",
+                    AppSettings.Load(temp).AuditRetentionDays == AppSettings.DefaultAuditRetentionDays));
 
                 // 9.4 原子写入不残留 .tmp
                 results.Add(("保存后不残留 .tmp 临时文件", !File.Exists(temp + ".tmp")));

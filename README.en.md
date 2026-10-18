@@ -46,7 +46,7 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
 - **Records page** — what connected to what over the last few days and whether it was blocked:
   kind (connect / blocked), process, remote endpoint, **domain (guessed)**, and **which rule
   matched**; search, blocked-only filter, one-click clear. Stored locally only, kept for 7 days,
-  enabled by default.
+  enabled by default, and you can pick how long to keep them (1 / 3 / 7 / 30 days, default 7).
 - **Block an IP** — pick a connection on the *Records* page and hit *Block this IP*, or type one in
   manually. The rule matches the **remote IP** (IPv4 / IPv6) and does **not** go through DNS
   resolution, so other services on the same IP are blocked as well.

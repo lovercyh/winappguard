@@ -91,6 +91,22 @@ internal sealed class AuditService : IDisposable
             return;
         }
 
+        // 保留期在**启动时**先执行一次：用户把 7 天改成 1 天之后，
+        // 不能等到下一个零点才生效（那期间旧记录还在，用户会以为没生效）。
+        // 单独 try：清理失败不应该连累下面的拦截事件订阅。
+        try
+        {
+            var purged = _store.PurgeExpired(DateTime.Now);
+            if (purged > 0)
+            {
+                LocalLog.Operation($"记录：按保留期清理了 {purged} 个过期文件（保留 {_store.RetentionDays} 天）");
+            }
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"记录：按保留期清理失败（不影响记录）：{ex.Message}");
+        }
+
         try
         {
             // 先把这个"是不是我们拦的"的判据准备好，否则早期事件会被全部丢掉。

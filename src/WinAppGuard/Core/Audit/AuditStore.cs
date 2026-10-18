@@ -130,6 +130,8 @@ internal sealed class AuditStore : IDisposable
         }
     }
 
+    internal int RetentionDays => _retentionDays;
+
     /// <summary>删掉超过保留期的文件，返回删除个数。</summary>
     internal int PurgeExpired(DateTime nowLocal)
     {

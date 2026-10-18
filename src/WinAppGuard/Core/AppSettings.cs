@@ -57,6 +57,24 @@ public sealed class AppSettings
     public bool AuditEnabled { get; set; } = true;
 
     /// <summary>
+    /// 审计记录保留多少天（2.1.3 起可调：1 / 3 / 7 / 30）。
+    ///
+    /// 它是 **settings.json 里唯一的数字**：其余字段仍然是布尔值。
+    /// 允许它存在的前提是"它不携带任何隐私信息"—— 只是一个天数。
+    /// 自检会断言：除了这个字段，设置文件里不许出现字符串 / 路径 / IP。
+    /// </summary>
+    public int AuditRetentionDays { get; set; } = DefaultAuditRetentionDays;
+
+    /// <summary>保留期下限（1 天）。</summary>
+    public const int MinAuditRetentionDays = 1;
+
+    /// <summary>保留期上限（30 天）。</summary>
+    public const int MaxAuditRetentionDays = 30;
+
+    /// <summary>默认保留 7 天（与 2.1 的行为一致）。</summary>
+    public const int DefaultAuditRetentionDays = 7;
+
+    /// <summary>
     /// 「严格模式」上一次开启之后**没有正常还原**（程序崩溃 / 被强杀 / 机器断电）。
     ///
     /// 它的唯一用途：下次启动时据此把「默认出站动作」还原成「允许」。
@@ -97,7 +115,17 @@ public sealed class AppSettings
             }
 
             var json = File.ReadAllText(file, Encoding.UTF8);
-            return JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+
+            // 保留天数来自文件，可能是手改出来的 0 / 999 / 负数 —— 一律钳回默认，
+            // 否则清理逻辑会算出一个荒唐的截止日期（比如把所有记录立刻删光）。
+            if (settings.AuditRetentionDays < MinAuditRetentionDays
+                || settings.AuditRetentionDays > MaxAuditRetentionDays)
+            {
+                settings.AuditRetentionDays = DefaultAuditRetentionDays;
+            }
+
+            return settings;
         }
         catch (Exception)
         {

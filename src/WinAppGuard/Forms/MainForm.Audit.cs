@@ -18,6 +18,8 @@ public sealed partial class MainForm
 
     private TextBox _auditSearchBox = null!;
     private CheckBox _auditBlockedOnlyCheck = null!;
+    private Label _auditRetentionLabel = null!;
+    private ComboBox _auditRetentionCombo = null!;
     private CheckBox _auditEnabledCheck = null!;
     private CheckBox _auditDomainCheck = null!;
     private Label _auditStatusLabel = null!;
@@ -102,6 +104,26 @@ public sealed partial class MainForm
         };
         addIpButton.Click += OnAddIpRuleClick;
 
+        // 记录保留期：1 / 3 / 7 / 30 天。放第一行最右侧，和"清理"相关的按钮在同一行。
+        _auditRetentionLabel = new Label
+        {
+            Location = new Point(852, 10),
+            Width = 62,
+            Text = "记录保留",
+            ForeColor = SystemColors.GrayText,
+        };
+
+        _auditRetentionCombo = new ComboBox
+        {
+            Location = new Point(916, 8),
+            Width = 84,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Name = "_auditRetentionCombo",
+        };
+        _auditRetentionCombo.Items.AddRange(new object[] { "1 天", "3 天", "7 天", "30 天" });
+        _auditRetentionCombo.SelectedIndex = 2;
+        _auditRetentionCombo.SelectedIndexChanged += OnAuditRetentionChanged;
+
         _auditEnabledCheck = new CheckBox
         {
             Location = new Point(0, 42),
@@ -135,6 +157,8 @@ public sealed partial class MainForm
             openFolderButton,
             blockIpButton,
             addIpButton,
+            _auditRetentionLabel,
+            _auditRetentionCombo,
             _auditEnabledCheck,
             _auditDomainCheck,
             _auditStatusLabel,
@@ -237,6 +261,8 @@ public sealed partial class MainForm
         _auditEnabledCheck.Checked = _settings.AuditEnabled;
         _auditDomainCheck.Checked = _settings.AuditDomainLookupEnabled;
         _auditDomainCheck.Enabled = _settings.AuditEnabled;
+        _auditRetentionCombo.SelectedIndex = RetentionDaysToIndex(_settings.AuditRetentionDays);
+        _auditRetentionCombo.Enabled = _settings.AuditEnabled;
         _loadingAuditSettings = false;
 
         _auditTimer.Start();
@@ -266,6 +292,7 @@ public sealed partial class MainForm
         {
             _auditService = new AuditService(
                 pollSeconds: 3,
+                retentionDays: _settings.AuditRetentionDays,
                 allowDomainLookup: _settings.AuditDomainLookupEnabled);
 
             _auditService.Start();
@@ -303,11 +330,70 @@ public sealed partial class MainForm
         _settings.Save();
 
         _auditDomainCheck.Enabled = _settings.AuditEnabled;
+        _auditRetentionCombo.Enabled = _settings.AuditEnabled;
 
         StopAuditService();
 
         if (_settings.AuditEnabled)
         {
+            StartAuditIfEnabled();
+        }
+
+        RefreshAudit();
+    }
+
+    // ==================================================================
+    // 记录保留期（1 / 3 / 7 / 30 天）
+    // ==================================================================
+
+    /// <summary>下拉框 → 天数。</summary>
+    private int SelectedAuditRetentionDays() => _auditRetentionCombo.SelectedIndex switch
+    {
+        0 => 1,
+        1 => 3,
+        3 => 30,
+        _ => AppSettings.DefaultAuditRetentionDays,
+    };
+
+    /// <summary>天数 → 下拉框索引（设置里是 7 天时就选「7 天」）。</summary>
+    private static int RetentionDaysToIndex(int days) => days switch
+    {
+        <= 1 => 0,
+        <= 3 => 1,
+        <= 7 => 2,
+        _ => 3,
+    };
+
+    /// <summary>
+    /// 保留期改了：存盘 + 重建审计服务。
+    ///
+    /// 为什么必须重建：保留期是 <see cref="AuditStore"/> 的构造参数；
+    /// 不重建的话，界面显示"保留 1 天"、实际仍在按 7 天清理 —— 那就是**假开关**。
+    /// 重建时 <see cref="AuditService.Start"/> 会立刻按新保留期清一次，
+    /// 不需要等到下一个零点。
+    /// </summary>
+    private void OnAuditRetentionChanged(object? sender, EventArgs e)
+    {
+        if (_loadingAuditSettings)
+        {
+            return;
+        }
+
+        var days = SelectedAuditRetentionDays();
+
+        if (_settings.AuditRetentionDays == days)
+        {
+            return;
+        }
+
+        _settings.AuditRetentionDays = days;
+        _settings.Save();
+
+        LocalLog.Operation($"记录保留期：改为 {days} 天");
+
+        if (_settings.AuditEnabled)
+        {
+            StopAuditService();
             StartAuditIfEnabled();
         }
 
@@ -463,6 +549,7 @@ public sealed partial class MainForm
 
             _auditStatusLabel.Text =
                 $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
+                $" · 保留 {_settings.AuditRetentionDays} 天" +
                 (_auditService is null ? " · 记录未开启" : " · 记录中");
 
             _auditLastSignature = signature;

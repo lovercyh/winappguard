@@ -2,7 +2,11 @@
 
 **看清谁在联网，两次点击把它拦掉。**
 
+**开源防火墙** · 基于 WFP 的程序联网控制 · **源码公开，可自行审计与构建**
+
 简体中文 · [English](README.en.md)
+
+> 源码与许可证：[github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard)（MIT）
 
 WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类工具的入手方向相反：
 它不让你去翻程序列表，而是直接展示**当前正在联网的 TCP 连接** ——

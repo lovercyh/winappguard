@@ -2,7 +2,11 @@
 
 **See what's using your network, and block it in two clicks.**
 
+**An open-source firewall** · WFP-based program network control · **source available for audit and self-build**
+
 [简体中文](README.md) · English
+
+> Source & license: [github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard) (MIT)
 
 WinAppGuard is a Windows program network-control tool that works the other way round from most tools.
 Instead of browsing a list of executables, it shows you **live TCP connections** — so you start

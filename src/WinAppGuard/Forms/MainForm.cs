@@ -3603,6 +3603,34 @@ public partial class MainForm : Form
         }
     }
 
+    /// <summary>项目主页（开源标识点击后打开）。</summary>
+    internal const string ProjectUrl = "https://github.com/lovercyh/winappguard";
+
+    /// <summary>点开源标识：用默认浏览器打开项目主页。</summary>
+    private void OnOpenSourceLinkClicked(object? sender, LinkLabelLinkClickedEventArgs e)
+    {
+        try
+        {
+            _openSourceLink.LinkVisited = true;
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = ProjectUrl,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            // 打不开浏览器不是致命问题，但要让用户知道可以自己复制地址。
+            MessageBox.Show(
+                this,
+                $"打不开浏览器。可以手动访问：\n{ProjectUrl}\n\n（{ex.Message}）",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+    }
+
     private void LayoutSettingsSections()
     {
         // 留出竖向滚动条和一点边距的位置。

@@ -3244,6 +3244,26 @@ internal static class Program
             TryGetField<DataGridViewBuffered>(form, "_whitelistGrid", out var whitelistGrid)
             && !string.IsNullOrWhiteSpace(whitelistGrid.EmptyText));
 
+        // ---------------- 3b. 主界面上的开源标识 ----------------
+        W();
+        W("===== 3b. 开源标识 =====");
+
+        if (TryGetField<LinkLabel>(form, "_openSourceLink", out var openSource))
+        {
+            W($"    文字 = {openSource.Text}");
+
+            CheckAssertion(results, "标题旁有「开源防火墙」标识",
+                openSource.Text.Contains("开源") && openSource.Text.Contains("源码公开"));
+            CheckAssertion(results, "开源标识可点击且整段都是链接",
+                openSource.LinkArea.Length == openSource.Text.Length);
+            CheckAssertion(results, "链接指向项目仓库",
+                MainForm.ProjectUrl.Contains("github.com/lovercyh/winappguard"));
+        }
+        else
+        {
+            results.Add(("找得到开源标识 _openSourceLink", false));
+        }
+
         // ---------------- 4. 快捷键 ----------------
         W();
         W("===== 4. 快捷键 =====");

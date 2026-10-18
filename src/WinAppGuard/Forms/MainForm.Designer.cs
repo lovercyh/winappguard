@@ -20,6 +20,7 @@ partial class MainForm
     private System.ComponentModel.IContainer? components = null;
 
     private Label _titleLabel = null!;
+    private LinkLabel _openSourceLink = null!;
     private Label _safetyNoticeLabel = null!;
 
     // ================= 标签页 =================
@@ -171,6 +172,7 @@ partial class MainForm
         components = new System.ComponentModel.Container();
 
         _titleLabel = new Label();
+        _openSourceLink = new LinkLabel();
         _safetyNoticeLabel = new Label();
         _tabControl = new TabControl();
         _tabConnections = new TabPage();
@@ -300,6 +302,23 @@ partial class MainForm
         _titleLabel.Size = new Size(213, 28);
         _titleLabel.TabIndex = 0;
         _titleLabel.Text = "WinAppGuard";
+
+        // 开源标识：标题右边一行小字，点一下打开仓库。
+        // 为什么放这儿而不是设置页：用户第一眼就该知道这是开源软件、源码可审计 ——
+        // 这类工具需要管理员权限，"信任从哪来"必须一眼可见。
+        _openSourceLink.AutoSize = true;
+        _openSourceLink.Font = new Font("Microsoft YaHei UI", 9.75F, FontStyle.Bold, GraphicsUnit.Point);
+        _openSourceLink.LinkBehavior = LinkBehavior.HoverUnderline;
+        _openSourceLink.LinkColor = Color.FromArgb(0, 100, 160);
+        _openSourceLink.ActiveLinkColor = Color.FromArgb(0, 70, 120);
+        _openSourceLink.VisitedLinkColor = Color.FromArgb(0, 100, 160);
+        _openSourceLink.Location = new Point(252, 24);
+        _openSourceLink.Name = "_openSourceLink";
+        _openSourceLink.Size = new Size(260, 21);
+        _openSourceLink.TabIndex = 4;
+        _openSourceLink.TabStop = true;
+        _openSourceLink.Text = "开源防火墙 · 基于 WFP · 源码公开";
+        _openSourceLink.LinkClicked += OnOpenSourceLinkClicked;
 
         // ---------- 说明（常驻）----------
         //
@@ -1222,6 +1241,10 @@ partial class MainForm
             "2) 证书吊销检查 —— 「设置」页 → 数据与隐私；\n" +
             "3) 域名推测 —— 「记录」页 → 「域名推测（会向本机 DNS 服务器发查询）」。\n" +
             "三处都关掉之后，本程序不再产生任何网络流量。");
+        _toolTip.SetToolTip(_openSourceLink,
+            "WinAppGuard 是开源软件（MIT 许可证）。\n" +
+            "源码公开，可以自行审计、自行构建；点这里打开 GitHub 仓库。\n" +
+            "程序不会因为这一行文字而联网 —— 只有你点击时才会打开浏览器。");
         _toolTip.SetToolTip(_autoRefreshCheckBox,
             "每 3 秒自动重新扫描一次。勾选后会立刻先刷新一次。");
         _toolTip.SetToolTip(_connectionGrid,
@@ -1252,6 +1275,7 @@ partial class MainForm
         Controls.Add(_tabControl);
         Controls.Add(_safetyNoticeLabel);
         Controls.Add(_titleLabel);
+        Controls.Add(_openSourceLink);
         Controls.Add(_exitButton);
         Controls.Add(_statusStrip);
         MinimumSize = new Size(980, 640);

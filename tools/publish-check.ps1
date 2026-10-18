@@ -74,8 +74,22 @@ Write-Host "    .\dist-tools\$exeName --strict-mode-test  严格模式：**会�
 Write-Host "    .\dist-tools\$exeName --strict-mode-lifecycle-test  严格模式：同上，验证白名单变化后重建会话、且不写 1.x 标志"
 Write-Host "    .\dist-tools\$exeName --render-docs [目录]  生成 README 用的界面截图（离线，不需要管理员）"
 Write-Host "    .\dist-tools\$exeName --audit [dll]       出厂审计：读编译产物元数据"
+Write-Host "    .\dist-tools\$exeName --ui-polish-test    界面打磨：搜索 / 空状态 / 快捷键 / ui-state（离线）"
+Write-Host "    .\dist-tools\$exeName --ui-dpi-test       界面：150% 字体下的布局（离线）"
+Write-Host "    .\dist-tools\$exeName --wfp-status        WFP：只读，打印当前规则与子层状态"
+Write-Host "    .\dist-tools\$exeName --wfp-test          WFP：地基（结构体 / 子层 / 过滤器 / 动态会话，需管理员）"
+Write-Host "    .\dist-tools\$exeName --wfp-rule-test     WFP：规则模型（编码解析 / V4+V6 / 幂等，需管理员）"
+Write-Host "    .\dist-tools\$exeName --wfp-migrate-test  WFP：1.x → 2.0 迁移（需管理员）"
+Write-Host "    .\dist-tools\$exeName --wfp-recover-test  WFP：恢复（清自己的对象 + 不碰 Windows 防火墙，需管理员）"
+Write-Host "    .\dist-tools\$exeName --wfp-strict-test   WFP：严格模式会话（会真的拦，退出即恢复，需管理员）"
+Write-Host "    .\dist-tools\$exeName --wfp-ip-rule-test  封禁 IP：**会联网**（只封一个 IP，验证邻居不受影响，需管理员）"
+Write-Host "    .\dist-tools\$exeName --audit-store-test  记录：落盘（往返 / 轮转 / 保留期 / 半行容错，离线）"
+Write-Host "    .\dist-tools\$exeName --audit-dns-test    记录：读本机 DNS 缓存 + 域名索引（离线、不联网）"
+Write-Host "    .\dist-tools\$exeName --audit-service-test 记录：完整服务跑 12 秒（写临时目录）"
+Write-Host "    .\dist-tools\$exeName --audit-live-test   记录：实时采集（连接 + 拦截事件，需管理员）"
+Write-Host "    .\dist-tools\$exeName --audit-ui-test     记录：页结构（工具条 / 表格 / 开关，离线）"
 Write-Host ''
-Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 5 项离线检查依次跑一遍。）"
+Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 7 项离线检查依次跑一遍。）"
 Write-Host "  两个 --strict-mode-* 刻意不在那个启动器里：它们需要管理员、而且会真的断开网络，只适合手动单独跑。"
 
 # 生成一个双击即可运行的启动器，方便在虚拟机里验证。
@@ -101,7 +115,7 @@ if not exist "%EXE%" (
 
 echo.
 echo ============================================================
-echo   [1/5]  connection filter and sort  (offline, no UI)
+echo   [1/7]  connection filter and sort  (offline, no UI)
 echo          keyword matching / numeric port and IP sorting
 echo ============================================================
 echo.
@@ -109,7 +123,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [2/5]  temporary block expiry  (offline, no system changes)
+echo   [2/7]  temporary block expiry  (offline, no system changes)
 echo          encode / parse / expire judgement, incl. truncation
 echo ============================================================
 echo.
@@ -117,7 +131,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [3/5]  ownership core check  (offline, no network)
+echo   [3/7]  ownership core check  (offline, no network)
 echo          cache / expiry / capacity / switch / settings
 echo ============================================================
 echo.
@@ -125,7 +139,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [4/5]  ownership online lookup check
+echo   [4/7]  ownership online lookup check
 echo          NOTE: uses the network, only whois.cymru.com:43
 echo ============================================================
 echo.
@@ -133,12 +147,28 @@ echo.
 
 echo.
 echo ============================================================
-echo   [5/5]  UI layout check
+echo   [5/7]  UI layout check
 echo          NOTE: a window will flash briefly, then close
 echo          offline / no admin needed
 echo ============================================================
 echo.
 "%EXE%" --ui-check --no-pause
+
+echo.
+echo ============================================================
+echo   [6/7]  UI polish wiring  (offline)
+echo          rules search / empty states / shortcuts / ui-state
+echo ============================================================
+echo.
+"%EXE%" --ui-polish-test --no-pause
+
+echo.
+echo ============================================================
+echo   [7/7]  high-DPI layout at 150%%  (offline)
+echo          banner fit / toolbar overlap / button text fit
+echo ============================================================
+echo.
+"%EXE%" --ui-dpi-test --no-pause
 
 echo.
 echo ---- done. press any key to close ----

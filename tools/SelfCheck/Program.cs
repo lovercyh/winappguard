@@ -126,7 +126,9 @@ internal static class Program
                          && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -221,6 +223,14 @@ internal static class Program
             else if (args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunAuditUiTest();
+            }
+            else if (args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunUiDpiTest();
+            }
+            else if (args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunUiPolishTest();
             }
             else if (args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1280,8 +1290,10 @@ internal static class Program
             rules.Clear();
             rules.AddRange(appRules);
 
-            // 顺序同产品：RebuildView 重建显示列表，RebindGrid 才刷新表格。
-            InvokePrivate(form, "RebindRules", new object?[] { null });
+            // 顺序同产品：先把完整列表灌进筛选视图（ApplyRulesFilter 内部会 RebindRules），
+            // 再重建连接页的显示列表与表格。
+            // ⚠️ 2.2.1 起规则表格绑的是 _rulesView，直接调 RebindRules 会是空表。
+            InvokePrivate(form, "ApplyRulesFilter", new object?[] { null });
             InvokePrivate(form, "RebuildView", null);
             InvokePrivate(form, "RebindGrid", new object?[] { null });
         }
@@ -1289,7 +1301,10 @@ internal static class Program
         // ---- 状态栏与各种计数：让图看起来是"真的在跑" ----
         if (TryGetField<ToolStripStatusLabel>(form, "_versionLabel", out var versionLabel))
         {
-            versionLabel.Text = "版本 v1.3.0";
+            // 截图里要显示**产品**的版本，不能用 BuildVersionText()：
+            // 它按当前进程取版本，自检进程取到的是 SelfCheck 自己的 1.0.0。
+            var productVersion = typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+            versionLabel.Text = $"版本 v{productVersion}";
         }
 
         if (TryGetField<ToolStripStatusLabel>(form, "_adminStatusLabel", out var adminLabel))
@@ -3087,6 +3102,309 @@ internal static class Program
         };
 
     /// <summary>
+    /// 2.1.1 界面打磨项的接线自检（**离线**）：搜索、空状态、危险按钮、快捷键、
+    /// 右键菜单、窗口状态持久化、横幅提示。
+    ///
+    /// 这些都是"看起来有、其实没接上"最容易出问题的地方 ——
+    /// 比如搜索框画出来了但没订阅 TextChanged，空状态写了但表格没设置，
+    /// 危险按钮变红了但位置还在普通按钮旁边。
+    /// </summary>
+    private static void RunUiPolishTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   2.1.1 界面打磨自检（离线：搜索 / 空状态 / 快捷键 / 持久化）  #");
+        W("################################################################");
+        W();
+
+        MainForm.SuppressBackgroundServices = true;
+
+        using var form = new MainForm(isAutostart: false);
+        TrySetField(form, "_runtimeInitialized", true);
+        form.Show();
+        Application.DoEvents();
+
+        // ---------------- 1. 规则页搜索 ----------------
+        W("===== 1. 规则页搜索 =====");
+
+        results.Add(("规则页有搜索框", TryGetField<TextBox>(form, "_rulesSearchBox", out var rulesSearch)));
+
+        if (rulesSearch is not null)
+        {
+            results.Add(("搜索框提示写明了搜什么",
+                rulesSearch.PlaceholderText.Contains("路径") && rulesSearch.PlaceholderText.Contains("规则名")));
+        }
+
+        var sampleRule = MakeDocsRule(
+            "AppGuard_Block_chrome.exe_1a2b3c4d",
+            @"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            FirewallAction.Block,
+            RuleExpiry.Never);
+
+        CheckAssertion(results, "按程序名能搜到",
+            InvokeStatic<bool>(typeof(MainForm), "MatchesRule", sampleRule, "chrome"));
+        CheckAssertion(results, "按路径能搜到",
+            InvokeStatic<bool>(typeof(MainForm), "MatchesRule", sampleRule, @"Program Files\Google"));
+        CheckAssertion(results, "按规则名能搜到",
+            InvokeStatic<bool>(typeof(MainForm), "MatchesRule", sampleRule, "1a2b3c4d"));
+        CheckAssertion(results, "不相关词搜不到",
+            !InvokeStatic<bool>(typeof(MainForm), "MatchesRule", sampleRule, "notepad"));
+        CheckAssertion(results, "搜索不区分大小写",
+            InvokeStatic<bool>(typeof(MainForm), "MatchesRule", sampleRule, "CHROME"));
+
+        // ---------------- 2. 空状态 ----------------
+        W();
+        W("===== 2. 空状态提示 =====");
+
+        CheckAssertion(results, "连接表格有空状态文案",
+            TryGetField<DataGridViewBuffered>(form, "_connectionGrid", out var connectionGrid)
+            && !string.IsNullOrWhiteSpace(connectionGrid.EmptyText));
+
+        CheckAssertion(results, "规则表格有空状态文案",
+            TryGetField<DataGridViewBuffered>(form, "_rulesGrid", out var rulesGrid)
+            && !string.IsNullOrWhiteSpace(rulesGrid.EmptyText));
+
+        CheckAssertion(results, "记录表格有空状态文案",
+            TryGetField<DataGridViewBuffered>(form, "_auditGrid", out var auditGrid)
+            && !string.IsNullOrWhiteSpace(auditGrid.EmptyText));
+
+        // ---------------- 3. 危险按钮 ----------------
+        W();
+        W("===== 3. 「删除全部」是危险按钮 =====");
+
+        if (TryGetField<Button>(form, "_rulesDeleteAllButton", out var deleteAll))
+        {
+            W($"    位置 = {deleteAll.Location}，颜色 = {deleteAll.ForeColor}");
+
+            CheckAssertion(results, "「删除全部」是红色文字",
+                deleteAll.ForeColor.R > 150 && deleteAll.ForeColor.G < 100);
+            CheckAssertion(results, "「删除全部」不和普通按钮挤在同一行",
+                deleteAll.Location.Y < 30);
+            CheckAssertion(results, "「删除全部」被推到右侧",
+                deleteAll.Location.X > 800);
+            CheckAssertion(results, "「解除阻止」文字说清了它的作用",
+                TryGetField<Button>(form, "_rulesAllowButton", out var allowButton)
+                && allowButton.Text.Contains("解除阻止"));
+        }
+        else
+        {
+            results.Add(("找得到「删除全部」按钮", false));
+        }
+
+        // ---------------- 4. 快捷键 ----------------
+        W();
+        W("===== 4. 快捷键 =====");
+
+        CheckAssertion(results, "窗体开启了 KeyPreview（否则快捷键收不到）", form.KeyPreview);
+
+        // ---------------- 5. 记录页右键菜单 ----------------
+        W();
+        W("===== 5. 记录页右键复制 =====");
+
+        if (auditGrid?.ContextMenuStrip is { } menu)
+        {
+            var texts = menu.Items.Cast<ToolStripItem>().Select(item => item.Text).ToList();
+            W($"    菜单 = {string.Join(" / ", texts)}");
+
+            CheckAssertion(results, "右键菜单有三项",
+                texts.Contains("复制远端地址") && texts.Contains("复制程序路径") && texts.Contains("复制域名"));
+        }
+        else
+        {
+            results.Add(("记录表格有右键菜单", false));
+        }
+
+        // ---------------- 6. 顶部横幅的悬停提示 ----------------
+        W();
+        W("===== 6. 横幅说明了三个开关在哪 =====");
+
+        if (TryGetField<Label>(form, "_safetyNoticeLabel", out var banner)
+            && TryGetField<ToolTip>(form, "_toolTip", out var toolTip))
+        {
+            var tip = toolTip.GetToolTip(banner) ?? string.Empty;
+            W($"    提示长度 = {tip.Length} 字");
+
+            CheckAssertion(results, "横幅有悬停说明",
+                tip.Contains("设置") && tip.Contains("记录"));
+        }
+        else
+        {
+            results.Add(("横幅与 ToolTip 可读", false));
+        }
+
+        // ---------------- 7. 设置页 XML 默认折叠 ----------------
+        W();
+        W("===== 7. 任务计划 XML 默认折叠 =====");
+
+        CheckAssertion(results, "原始 XML 面板默认不显示",
+            TryGetField<Control>(form, "_taskXmlPanel", out var xmlPanel) && !xmlPanel.Visible);
+
+        CheckAssertion(results, "有「查看任务计划原始定义」按钮",
+            TryGetField<Button>(form, "_toggleTaskXmlButton", out var toggle)
+            && toggle.Text.Contains("原始定义"));
+
+        // ---------------- 8. 界面状态持久化 ----------------
+        W();
+        W("===== 8. 窗口/列宽持久化（ui-state.json）=====");
+
+        var tempState = Path.Combine(Path.GetTempPath(), $"wag-ui-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            var state = new UiState
+            {
+                Width = 1200,
+                Height = 800,
+                X = 40,
+                Y = 60,
+                Maximized = false,
+            };
+            state.ColumnWidths["_connectionGrid.ProcessName"] = 123;
+            state.Save(tempState);
+
+            var loaded = UiState.Load(tempState);
+            W($"    往返：{loaded.Width}×{loaded.Height} @({loaded.X},{loaded.Y})，列宽 {loaded.ColumnWidths.Count} 项");
+
+            CheckAssertion(results, "尺寸能往返", loaded.Width == 1200 && loaded.Height == 800);
+            CheckAssertion(results, "位置能往返", loaded.X == 40 && loaded.Y == 60);
+            CheckAssertion(results, "列宽能往返",
+                loaded.ColumnWidths.TryGetValue("_connectionGrid.ProcessName", out var width) && width == 123);
+            CheckAssertion(results, "落在屏幕内时判定为可用", loaded.HasUsableBounds());
+
+            File.WriteAllText(tempState, "{ 这不是合法 json", Encoding.UTF8);
+            var broken = UiState.Load(tempState);
+            CheckAssertion(results, "损坏文件回落到默认（不抛异常）", broken.Width == 0);
+
+            var offscreen = new UiState { Width = 800, Height = 600, X = -20000, Y = -20000 };
+            CheckAssertion(results, "屏幕外的坐标判定为不可用", !offscreen.HasUsableBounds());
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempState))
+                {
+                    File.Delete(tempState);
+                }
+
+                var temp = tempState + ".tmp";
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 高 DPI（150% 字体）布局自检。
+    ///
+    /// 为什么必须是**独立模式、独立进程**：WinForms 的 <c>AutoScaleMode.Font</c> 只在
+    /// **创建窗口时**按当时的默认字体缩放一次；窗口建好以后再改 <c>Font</c> 不会重新缩放，
+    /// 那样测出来的"没问题"是假的。所以这里必须在 new MainForm **之前**设默认字体。
+    /// </summary>
+    private static void RunUiDpiTest()
+    {
+        // 9pt × 150% ≈ 13.5pt，对应 Windows「150% 缩放」下的默认字号。
+        Application.SetDefaultFont(new Font("Microsoft YaHei UI", 13.5F));
+
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   高 DPI 布局自检（150% 字体；离线、不联网）                   #");
+        W("################################################################");
+        W();
+
+        MainForm.SuppressBackgroundServices = true;
+
+        using var form = new MainForm(isAutostart: false);
+
+        // 跳过读防火墙/扫描，只量布局。
+        TrySetField(form, "_runtimeInitialized", true);
+        form.Show();
+        Application.DoEvents();
+
+        W($"    字体 = {form.Font.Name} {form.Font.SizeInPoints}pt；客户区 = {form.ClientSize.Width}×{form.ClientSize.Height}");
+        W($"    屏幕工作区 = {Screen.PrimaryScreen?.WorkingArea}");
+
+        results.Add(("150% 下窗口仍能完整放进屏幕（宽度）",
+            Screen.PrimaryScreen is null || form.ClientSize.Width <= Screen.PrimaryScreen.WorkingArea.Width));
+        results.Add(("150% 下窗口仍能完整放进屏幕（高度）",
+            Screen.PrimaryScreen is null || form.ClientSize.Height <= Screen.PrimaryScreen.WorkingArea.Height));
+
+        // 1) 固定宽高的横幅最容易在缩放后截断。
+        CheckSafetyNoticeFits(results, form);
+
+        // 2) 各工具条内部不重叠。
+        if (TryGetField<Panel>(form, "_toolPanel", out var connectionToolPanel))
+        {
+            CheckNoOverlap(results, "[150%] 连接页工具栏互不重叠", connectionToolPanel.Controls);
+        }
+
+        if (TryGetField<Panel>(form, "_rulesToolPanel", out var rulesToolPanel))
+        {
+            CheckNoOverlap(results, "[150%] 规则页工具栏互不重叠", rulesToolPanel.Controls);
+
+            // 3) 按钮文字必须在按钮里放得下（缩放后按钮不会自动变宽）。
+            foreach (var name in new[] { "_rulesAllowButton", "_rulesDeleteButton", "_rulesDeleteAllButton" })
+            {
+                if (!TryGetField<Button>(form, name, out var button))
+                {
+                    continue;
+                }
+
+                var needed = TextRenderer.MeasureText(button.Text, button.Font).Width + 14;
+                W($"    {name}：文字需 {needed}px / 按钮宽 {button.Width}px");
+                results.Add(($"[150%] {button.Text} 放得下", needed <= button.Width));
+            }
+        }
+
+        // 4) 设置页四个分区不重叠。
+        var settingsParts = new List<Control>();
+        foreach (var name in new[] { "_autostartPanel", "_privacyPanel", "_strictModePanel", "_taskXmlPanel" })
+        {
+            if (TryGetField<Control>(form, name, out var part))
+            {
+                settingsParts.Add(part);
+            }
+        }
+
+        CheckNoOverlapList(results, "[150%] 设置页四个分区互不重叠", settingsParts);
+
+        // 5) 记录页第三行（开关 + 下拉框）不重叠。
+        if (TryGetField<TabPage>(form, "_tabAudit", out var auditTab))
+        {
+            var row3 = new List<Control>();
+            foreach (Control child in auditTab.Controls)
+            {
+                foreach (Control inner in child.Controls)
+                {
+                    if (inner is CheckBox { Text: "新程序提醒" or "学习模式" }
+                        || (inner is Label label && label.Location.Y >= 60))
+                    {
+                        row3.Add(inner);
+                    }
+                }
+            }
+
+            // 2.1 没有这一行控件时跳过（上面的 REVERT 说明见 docs）。
+            if (row3.Count > 0)
+            {
+                CheckNoOverlapList(results, "[150%] 记录页顶部控件互不重叠", row3);
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
     /// 顶部那条安全横幅必须**放得下**（它是固定宽高、不换行的标签）。
     ///
     /// 这条断言是被真实截断坑出来的：1.3 给它加了"除严格模式外"这个例外之后文本变长，
@@ -3468,6 +3786,15 @@ internal static class Program
         }
 
         results.Add(($"界面文字里没有 Markdown 强调符（{where}）", offenders.Count == 0));
+    }
+
+    /// <summary>调用产品的私有静态方法（自检用；找不到直接抛，不静默通过）。</summary>
+    private static T InvokeStatic<T>(Type type, string methodName, params object?[] args)
+    {
+        var method = type.GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException($"找不到静态方法 {methodName}");
+
+        return (T)method.Invoke(null, args)!;
     }
 
     /// <summary>反射调用**带参数、有返回值**的私有方法。</summary>

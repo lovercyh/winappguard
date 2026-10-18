@@ -22,7 +22,8 @@ public sealed partial class MainForm
     private CheckBox _auditDomainCheck = null!;
     private Label _auditStatusLabel = null!;
     private Label _auditDetailLabel = null!;
-    private DataGridView _auditGrid = null!;
+    private DataGridViewBuffered _auditGrid = null!;
+    private ContextMenuStrip? _auditMenu;
     private System.Windows.Forms.Timer? _auditTimer;
     private AuditService? _auditService;
     private bool _loadingAuditSettings;
@@ -162,6 +163,38 @@ public sealed partial class MainForm
 
         _auditGrid.SelectionChanged += (_, _) => UpdateAuditDetail();
         _auditGrid.CellFormatting += OnAuditCellFormatting;
+        _auditGrid.CellMouseDown += OnAuditGridCellMouseDown;
+        _auditGrid.EmptyText =
+            "还没有记录。\r\n打开「记录连接」后，新的连接会出现在这里。";
+
+        // 右键复制：记录页里最常想拿走的两个值（远端地址、程序路径），
+        // 以前只能手抄 —— 尤其是 IPv6，手抄基本不现实。
+        _auditMenu = new ContextMenuStrip();
+        var copyRemoteItem = new ToolStripMenuItem("复制远端地址");
+        copyRemoteItem.Click += (_, _) => CopyFromSelectedAuditRow(
+            row => row.Remote, "这一行没有远端地址。");
+
+        var copyPathItem = new ToolStripMenuItem("复制程序路径");
+        copyPathItem.Click += (_, _) => CopyFromSelectedAuditRow(
+            row => row.ProcessPath, "这一行没有程序路径（可能是无归属进程）。");
+
+        var copyDomainItem = new ToolStripMenuItem("复制域名");
+        copyDomainItem.Click += (_, _) => CopyFromSelectedAuditRow(
+            row => row.Domain, "这一行没有推测出域名。");
+
+        _auditMenu.Items.Add(copyRemoteItem);
+        _auditMenu.Items.Add(copyPathItem);
+        _auditMenu.Items.Add(copyDomainItem);
+        _auditMenu.Opening += (_, _) =>
+        {
+            var hasRow = GetSelectedAuditRow() is not null;
+            foreach (ToolStripItem item in _auditMenu.Items)
+            {
+                item.Enabled = hasRow;
+            }
+        };
+
+        _auditGrid.ContextMenuStrip = _auditMenu;
 
         var bottom = new Panel
         {
@@ -439,6 +472,55 @@ public sealed partial class MainForm
         {
             LocalLog.Error("刷新审计列表失败", ex);
             _auditStatusLabel.Text = "读取审计记录失败（详见日志）";
+        }
+    }
+
+    /// <summary>右键点在哪个行上就操作哪个行（右键默认不会改变选中）。</summary>
+    private void OnAuditGridCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Right && e.RowIndex >= 0 && e.RowIndex < _auditGrid.Rows.Count)
+        {
+            _auditGrid.CurrentCell = _auditGrid.Rows[e.RowIndex].Cells[0];
+        }
+    }
+
+    /// <summary>当前选中的记录（没有选中返回 null）。</summary>
+    private AuditRow? GetSelectedAuditRow()
+        => _auditGrid.SelectedRows.Count > 0 && _auditGrid.SelectedRows[0].Tag is AuditRow row
+            ? row
+            : null;
+
+    /// <summary>把选中行的某个字段复制到剪贴板；空值给一句明确提示，不静默失败。</summary>
+    private void CopyFromSelectedAuditRow(Func<AuditRow, string> selector, string emptyMessage)
+    {
+        var row = GetSelectedAuditRow();
+
+        if (row is null)
+        {
+            return;
+        }
+
+        var value = selector(row);
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            MessageBox.Show(
+                this,
+                emptyMessage,
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(value);
+        }
+        catch (Exception ex)
+        {
+            // 剪贴板被别的程序占用时 SetText 会抛异常，不能让它把程序带崩。
+            ShowError("复制失败", ex);
         }
     }
 

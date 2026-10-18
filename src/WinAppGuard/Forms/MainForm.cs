@@ -103,6 +103,15 @@ public partial class MainForm : Form
     /// <summary>规则列表的数据源。</summary>
     private readonly BindingSource _rulesSource = new();
 
+    /// <summary>规则页的**筛选后**视图（绑定到表格）。<_rules> 始终是完整列表。</summary>
+    private readonly List<FirewallRuleItem> _rulesView = new();
+
+    /// <summary>规则页搜索词；空字符串表示不过滤。</summary>
+    private string _rulesKeyword = string.Empty;
+
+    /// <summary>规则摘要的"未筛选"版本，搜索时在它后面追加筛选结果数。</summary>
+    private string _rulesSummaryBase = "规则共 0 条";
+
     /// <summary>规则列表的数据。同样只创建一次、原地更新，理由见 <see cref="_connections"/>。</summary>
     private readonly List<FirewallRuleItem> _rules = new();
 
@@ -222,6 +231,9 @@ public partial class MainForm : Form
     /// </summary>
     private readonly AppSettings _settings = AppSettings.Load();
 
+    /// <summary>窗口大小/位置与列宽（本机状态，存在 ui-state.json；不含任何隐私数据）。</summary>
+    private UiState _uiState = new();
+
     /// <summary>
     /// IP 归属查询的调度器。
     /// 联网动作全在它内部的 <see cref="IpOwnershipLookup"/> 里 ——
@@ -304,6 +316,10 @@ public partial class MainForm : Form
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
+
+        // 先恢复上次的窗口大小/列宽，再初始化运行期（首屏就是用户熟悉的样子）。
+        RestoreUiState();
+
         InitializeRuntime();
     }
 
@@ -319,6 +335,8 @@ public partial class MainForm : Form
         }
 
         _runtimeInitialized = true;
+
+        KeyDown += OnMainFormKeyDown;
 
         ShowRuntimeStatus();
 
@@ -397,7 +415,172 @@ public partial class MainForm : Form
         _auditTimer?.Dispose();
         _auditStore.Dispose();
 
+        // 记住窗口位置/大小与列宽，下次打开还是原样（自检模式不写，免得污染本机状态）。
+        CaptureAndSaveUiState();
+
         base.OnFormClosing(e);
+    }
+
+    // ==================================================================
+    // 界面状态（窗口大小/位置、列宽）与快捷键
+    // ==================================================================
+
+    /// <summary>恢复上次的窗口位置/大小与列宽；没有记录或记录不可用就保持默认。</summary>
+    private void RestoreUiState()
+    {
+        // 自检里固定用默认布局：否则开发机上保存过的窗口大小会让布局断言时好时坏。
+        if (SuppressBackgroundServices)
+        {
+            return;
+        }
+
+        _uiState = UiState.Load();
+
+        if (_uiState.HasUsableBounds())
+        {
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(_uiState.X, _uiState.Y, _uiState.Width, _uiState.Height);
+
+            if (_uiState.Maximized)
+            {
+                WindowState = FormWindowState.Maximized;
+            }
+        }
+
+        ApplyColumnWidths(_connectionGrid);
+        ApplyColumnWidths(_rulesGrid);
+    }
+
+    /// <summary>把当前窗口位置/大小和两处列宽写回 ui-state.json。</summary>
+    private void CaptureAndSaveUiState()
+    {
+        if (SuppressBackgroundServices)
+        {
+            return;
+        }
+
+        // 最大化时 Bounds 是屏幕大小，用户真正想要的"还原尺寸"在 RestoreBounds 里。
+        var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+
+        _uiState.X = bounds.X;
+        _uiState.Y = bounds.Y;
+        _uiState.Width = bounds.Width;
+        _uiState.Height = bounds.Height;
+        _uiState.Maximized = WindowState == FormWindowState.Maximized;
+
+        CaptureColumnWidths(_connectionGrid);
+        CaptureColumnWidths(_rulesGrid);
+
+        _uiState.Save();
+    }
+
+    private void ApplyColumnWidths(DataGridView grid)
+    {
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            // Fill 列的宽度由表格自己算，记下来也没用。
+            if (column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+            {
+                continue;
+            }
+
+            if (_uiState.ColumnWidths.TryGetValue($"{grid.Name}.{column.Name}", out var width)
+                && width >= column.MinimumWidth)
+            {
+                column.Width = width;
+            }
+        }
+    }
+
+    private void CaptureColumnWidths(DataGridView grid)
+    {
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            if (column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+            {
+                continue;
+            }
+
+            _uiState.ColumnWidths[$"{grid.Name}.{column.Name}"] = column.Width;
+        }
+    }
+
+    /// <summary>
+    /// 全局快捷键（KeyPreview）：
+    ///   F5        刷新当前页
+    ///   Ctrl+F    跳到当前页的搜索框
+    ///   Esc       清空当前页的搜索（光标不在输入框里时）
+    ///   Delete    删除选中的规则（光标不在输入框里时；仍会弹确认框）
+    /// </summary>
+    private void OnMainFormKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.F5)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+
+            if (_tabControl.SelectedTab == _tabAudit)
+            {
+                RefreshAudit();
+            }
+            else if (_tabControl.SelectedTab == _tabRules)
+            {
+                OnRefreshRulesButtonClick(this, EventArgs.Empty);
+            }
+            else
+            {
+                OnRefreshButtonClick(this, EventArgs.Empty);
+            }
+
+            return;
+        }
+
+        if (e.Control && e.KeyCode == Keys.F)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+
+            var box = _tabControl.SelectedTab == _tabRules
+                ? _rulesSearchBox
+                : _tabControl.SelectedTab == _tabAudit
+                    ? _auditSearchBox
+                    : _searchBox;
+
+            box.Focus();
+            box.SelectAll();
+            return;
+        }
+
+        // 下面两个键在输入框里必须保持原义（删字、取消输入）。
+        if (ActiveControl is TextBoxBase)
+        {
+            return;
+        }
+
+        if (e.KeyCode == Keys.Escape)
+        {
+            if (_tabControl.SelectedTab == _tabRules && _rulesKeyword.Length > 0)
+            {
+                _rulesSearchBox.Clear();
+                e.Handled = true;
+            }
+            else if (_tabControl.SelectedTab == _tabConnections && _searchKeyword.Length > 0)
+            {
+                ClearSearch();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        if (e.KeyCode == Keys.Delete
+            && _tabControl.SelectedTab == _tabRules
+            && _rulesDeleteButton.Enabled)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            OnRulesDeleteButtonClick(this, EventArgs.Empty);
+        }
     }
 
     // ==================================================================
@@ -437,6 +620,8 @@ public partial class MainForm : Form
 
         _connectionSource.DataSource = _connections;
         _connectionGrid.DataSource = _connectionSource;
+        _connectionGrid.EmptyText =
+            "没有匹配的连接。\r\n可以清除搜索，或勾选上面被隐藏的连接类型。";
     }
 
     /// <summary>
@@ -454,8 +639,11 @@ public partial class MainForm : Form
         AddRuleColumn("启用", nameof(FirewallRuleItem.EnabledText), 70);
         AddRuleColumn("规则名", nameof(FirewallRuleItem.Name), 180);
 
-        _rulesSource.DataSource = _rules;
+        _rulesSource.DataSource = _rulesView;
         _rulesGrid.DataSource = _rulesSource;
+        _rulesGrid.EmptyText =
+            "还没有规则。\r\n在「联网连接」页选中程序后点「阻止选中程序联网」。";
+        _rulesGrid.CellFormatting += OnRulesCellFormatting;
     }
 
     /// <summary>给「联网连接」表格添加一个只读文本列。</summary>
@@ -590,16 +778,22 @@ public partial class MainForm : Form
             var selectedRuleName = CaptureRuleSelection();
             _rules.Clear();
             _rules.AddRange(_appGuardRules);
-            RebindRules(selectedRuleName);
+
+            // 绑定到表格的是**筛选后**的视图：搜索时只显示匹配项，但 _rules 始终完整
+            // （删除全部 / 摘要统计都按完整列表算）。
+            ApplyRulesFilter(selectedRuleName);
 
             // 页签上挂**规则总数**（而不是"被阻止的程序数"）：
             // 这一页现在同时装着阻止规则和允许规则（白名单），
             // 挂规则数才和用户在这个页面里看到的东西一致。
             _tabRules.Text = $"规则（{_appGuardRules.Count}）";
             _statusRulesLabel.Text = $"已阻止程序：{_blockedPaths.Count} 个";
-            _rulesSummaryLabel.Text = allowRuleCount > 0
+
+            _rulesSummaryBase = allowRuleCount > 0
                 ? $"规则共 {_appGuardRules.Count} 条（阻止 {_appGuardRules.Count - allowRuleCount} 条，允许 {allowRuleCount} 条）"
                 : $"规则共 {_appGuardRules.Count} 条";
+
+            UpdateRulesSummaryText();
 
             UpdateRulesActionState();
         }
@@ -961,6 +1155,7 @@ public partial class MainForm : Form
         // 签名列的列名，用于定位单元格。用列名而不是硬编码索引，列顺序变了也不会错。
         var signatureColumnIndex = _connectionGrid.Columns[nameof(TcpConnectionItem.SignatureText)]?.Index ?? -1;
         var whitelistColumnIndex = _connectionGrid.Columns[nameof(TcpConnectionItem.WhitelistText)]?.Index ?? -1;
+        var pathColumnIndex = _connectionGrid.Columns[nameof(TcpConnectionItem.ProcessPathText)]?.Index ?? -1;
 
         foreach (DataGridViewRow row in _connectionGrid.Rows)
         {
@@ -986,6 +1181,12 @@ public partial class MainForm : Form
             if (whitelistColumnIndex >= 0)
             {
                 row.Cells[whitelistColumnIndex].ToolTipText = BuildWhitelistTooltip(item);
+            }
+
+            // 路径列一定会被截断（列宽就那么大），悬停给出完整路径。
+            if (pathColumnIndex >= 0 && !string.IsNullOrEmpty(item.ProcessPath))
+            {
+                row.Cells[pathColumnIndex].ToolTipText = item.ProcessPath;
             }
         }
 
@@ -1040,7 +1241,7 @@ public partial class MainForm : Form
     /// 重新绑定规则表格，并尽量保住用户的选中状态。
     ///
     /// 和连接页一样：恢复不了原选中就明确清空，不让表格自动落到第一行。
-    /// 否则用户点「允许选中程序联网」时，操作的可能是他并没有看过的那一条规则。
+    /// 否则用户点「解除阻止（允许联网）」时，操作的可能是他并没有看过的那一条规则。
     /// </summary>
     private void RebindRules(string? selectedRuleName)
     {
@@ -1071,9 +1272,9 @@ public partial class MainForm : Form
             return false;
         }
 
-        for (var i = 0; i < _rules.Count && i < _rulesGrid.Rows.Count; i++)
+        for (var i = 0; i < _rulesView.Count && i < _rulesGrid.Rows.Count; i++)
         {
-            if (string.Equals(_rules[i].Name, ruleName, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(_rulesView[i].Name, ruleName, StringComparison.OrdinalIgnoreCase))
             {
                 _rulesGrid.CurrentCell = _rulesGrid.Rows[i].Cells[0];
                 return true;
@@ -1081,6 +1282,111 @@ public partial class MainForm : Form
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 按搜索词重建「筛选后的规则视图」，然后重新绑定表格。
+    /// </summary>
+    /// <remarks>
+    /// 为什么要单独一个视图：表格如果直接绑 <see cref="_rules"/>，
+    /// 搜索就只能在**刷新时**过滤，而每 3 秒/每次操作都会重新绑定，
+    /// 用户的搜索结果会被无声地冲掉。分成"完整列表 + 视图"两层就没有这个问题。
+    /// 删除全部、摘要统计仍然按完整列表算，不受搜索影响。
+    /// </remarks>
+    private void ApplyRulesFilter(string? selectedRuleName = null)
+    {
+        var keyword = _rulesKeyword.Trim();
+
+        _rulesView.Clear();
+
+        if (keyword.Length == 0)
+        {
+            _rulesView.AddRange(_rules);
+        }
+        else
+        {
+            _rulesView.AddRange(_rules.Where(rule => MatchesRule(rule, keyword)));
+        }
+
+        // 复用 RebindRules：它负责 ResetBindings + 恢复选中 + 刷新按钮状态。
+        RebindRules(selectedRuleName);
+
+        ApplyRuleTooltips();
+        UpdateRulesSummaryText();
+    }
+
+    /// <summary>规则是否匹配搜索词（程序名 / 路径 / 规则名 / 到期文本）。</summary>
+    private static bool MatchesRule(FirewallRuleItem rule, string keyword)
+        => Contains(rule.ApplicationNameText, keyword)
+           || Contains(rule.ApplicationPath, keyword)
+           || Contains(rule.Name, keyword)
+           || Contains(rule.ExpiryText, keyword);
+
+    /// <summary>摘要文字：没有搜索时就是总数；搜索时追加「筛选出 N 条」。</summary>
+    private void UpdateRulesSummaryText()
+        => _rulesSummaryLabel.Text = _rulesKeyword.Trim().Length == 0
+            ? _rulesSummaryBase
+            : $"{_rulesSummaryBase} ｜ 筛选出 {_rulesView.Count} 条";
+
+    private void OnRulesSearchTextChanged(object? sender, EventArgs e)
+    {
+        var keyword = _rulesSearchBox.Text.Trim();
+
+        if (string.Equals(keyword, _rulesKeyword, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _rulesKeyword = keyword;
+        ApplyRulesFilter(CaptureRuleSelection());
+    }
+
+    /// <summary>规则表格：路径和规则名经常显示不全，悬停给完整内容。</summary>
+    private void ApplyRuleTooltips()
+    {
+        var pathIndex = _rulesGrid.Columns[nameof(FirewallRuleItem.ApplicationPath)]?.Index ?? -1;
+        var nameIndex = _rulesGrid.Columns[nameof(FirewallRuleItem.Name)]?.Index ?? -1;
+
+        foreach (DataGridViewRow row in _rulesGrid.Rows)
+        {
+            if (row.DataBoundItem is not FirewallRuleItem rule)
+            {
+                continue;
+            }
+
+            if (pathIndex >= 0 && !string.IsNullOrEmpty(rule.ApplicationPath))
+            {
+                row.Cells[pathIndex].ToolTipText = rule.ApplicationPath;
+            }
+
+            if (nameIndex >= 0 && !string.IsNullOrEmpty(rule.Name))
+            {
+                row.Cells[nameIndex].ToolTipText = rule.Name;
+            }
+        }
+    }
+
+    /// <summary>规则表格：动作列着色（红=阻止，绿=允许），不用文字以外的线索去猜。</summary>
+    private void OnRulesCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= _rulesGrid.Rows.Count)
+        {
+            return;
+        }
+
+        if (_rulesGrid.Columns[e.ColumnIndex].Name != nameof(FirewallRuleItem.ActionText))
+        {
+            return;
+        }
+
+        if (_rulesGrid.Rows[e.RowIndex].DataBoundItem is not FirewallRuleItem rule)
+        {
+            return;
+        }
+
+        e.CellStyle.ForeColor = rule.Action == FirewallAction.Block
+            ? Color.FromArgb(180, 30, 30)
+            : Color.FromArgb(20, 120, 50);
     }
 
     /// <summary>
@@ -1755,22 +2061,24 @@ public partial class MainForm : Form
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
-            title: "允许程序联网",
-            question: $"确定要允许「{programName}」联网吗？",
+            title: "解除阻止（允许联网）",
+            question: $"确定要解除对「{programName}」的阻止吗？",
             details: new[]
             {
                 new KeyValuePair<string, string>("程序名", programName),
                 new KeyValuePair<string, string>("完整路径", programPath),
                 new KeyValuePair<string, string>("将删除规则", $"{rulesForProgram.Count} 条"),
+                new KeyValuePair<string, string>("会新建允许规则吗", "不会（删除即恢复放行）"),
             },
             warnings: new[]
             {
                 "只会删除下面这些由 WinAppGuard 创建的规则：",
                 ruleList,
+                "不会创建任何允许规则 —— 2.0 起默认就是放行，删掉阻止规则就等于恢复联网。",
                 "其他程序、以及系统和其他软件设置的防火墙规则一律不受影响。",
                 "删除后该程序可以立刻重新联网；如果它没有自己恢复，重启该程序即可。",
             },
-            confirmText: "允许联网");
+            confirmText: "解除阻止");
 
         if (!confirmed)
         {
@@ -2088,7 +2396,7 @@ public partial class MainForm : Form
             warnings: new[]
             {
                 "删除后这些程序会立刻恢复联网。",
-                "如果你只是想放行某一个程序，请用「允许选中程序联网」，不要用这个按钮。",
+                "如果你只是想放行某一个程序，请用「解除阻止（允许联网）」，不要用这个按钮。",
             }.Concat(strictModeEnabled
                 ? new[] { "⚠ 严格模式会同时被关闭（默认出站动作还原成「允许」），因为白名单马上就不在了。" }
                 : Array.Empty<string>()).ToArray(),
@@ -2786,7 +3094,7 @@ public partial class MainForm : Form
             {
                 "退出只是关掉这个界面程序。它创建的防火墙规则依然生效，被阻止的程序仍然上不了网。",
                 $"当前被阻止的 {blockedCount} 个程序会继续保持被阻止状态。",
-                "如果想让它们恢复联网，请先回到主界面用「允许选中程序联网」，或用「删除全部 AppGuard 规则」。",
+                "如果想让它们恢复联网，请先回到主界面用「解除阻止（允许联网）」，或用「删除全部 AppGuard 规则」。",
             }
             : new[]
             {
@@ -2847,6 +3155,25 @@ public partial class MainForm : Form
     private void OnSettingsTabResize(object? sender, EventArgs e)
     {
         LayoutSettingsSections();
+    }
+
+    /// <summary>
+    /// 展开/收起「任务计划程序原始 XML」。
+    /// 默认收起：这块内容只有极少数场景要看，常驻会把设置页拉长 220px。
+    /// </summary>
+    private void OnToggleTaskXmlClick(object? sender, EventArgs e)
+    {
+        _taskXmlPanel.Visible = !_taskXmlPanel.Visible;
+
+        _toggleTaskXmlButton.Text = _taskXmlPanel.Visible
+            ? "收起任务计划原始定义"
+            : "查看任务计划原始定义…";
+
+        // 展开时顺手重新读一次，避免看到几小时前的旧内容。
+        if (_taskXmlPanel.Visible)
+        {
+            RefreshAutoStartStatus();
+        }
     }
 
     private void LayoutSettingsSections()

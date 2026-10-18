@@ -68,6 +68,7 @@ partial class MainForm
     private Button _rulesDeleteButton = null!;
     private Button _rulesDeleteAllButton = null!;
     private Label _rulesHintLabel = null!;
+    private TextBox _rulesSearchBox = null!;
 
     private DataGridViewBuffered _rulesGrid = null!;
 
@@ -87,7 +88,7 @@ partial class MainForm
 
     private GroupBox _taskXmlPanel = null!;
     private TextBox _taskXmlBox = null!;
-
+    private Button _toggleTaskXmlButton = null!;
     private GroupBox _privacyPanel = null!;
     private Label _privacyLabel = null!;
     private Label _logPathLabel = null!;
@@ -193,6 +194,7 @@ partial class MainForm
         _rulesDeleteButton = new Button();
         _rulesDeleteAllButton = new Button();
         _rulesHintLabel = new Label();
+        _rulesSearchBox = new TextBox();
         _rulesGrid = new DataGridViewBuffered();
         _tabAudit = new TabPage();
         _tabSettings = new TabPage();
@@ -207,6 +209,7 @@ partial class MainForm
         _refreshAutostartButton = new Button();
         _taskXmlPanel = new GroupBox();
         _taskXmlBox = new TextBox();
+        _toggleTaskXmlButton = new Button();
         _privacyPanel = new GroupBox();
         _privacyLabel = new Label();
         _logPathLabel = new Label();
@@ -444,7 +447,9 @@ partial class MainForm
         _allowButton.Name = "_allowButton";
         _allowButton.Size = new Size(160, 28);
         _allowButton.TabIndex = 11;
-        _allowButton.Text = "允许选中程序联网";
+        // 2.0 起「允许」的实质是**删掉我们自己建的阻止规则**，不是新建一条允许规则。
+        // 旧名字「允许选中程序联网」听起来像后者，会让用户以为我们往防火墙里塞了放行规则。
+        _allowButton.Text = "解除阻止（允许联网）";
         _allowButton.UseVisualStyleBackColor = true;
         _allowButton.Click += OnAllowButtonClick;
 
@@ -575,7 +580,7 @@ partial class MainForm
         _rulesNoticeLabel.Name = "_rulesNoticeLabel";
         _rulesNoticeLabel.Padding = new Padding(0, 2, 0, 0);
         _rulesNoticeLabel.Text = "被阻止的程序不会出现在「联网连接」页里 —— 它连不上网，自然也就没有连接。\r\n" +
-                                 "所以恢复联网请一定在这一页操作：选中要恢复的程序，点「允许选中程序联网」。";
+                                 "所以恢复联网请一定在这一页操作：选中要恢复的程序，点「解除阻止（允许联网）」。";
         _rulesNoticeLabel.TextAlign = ContentAlignment.TopLeft;
 
         _rulesToolPanel.Dock = DockStyle.Top;
@@ -587,6 +592,7 @@ partial class MainForm
         _rulesToolPanel.Controls.Add(_rulesDeleteButton);
         _rulesToolPanel.Controls.Add(_rulesDeleteAllButton);
         _rulesToolPanel.Controls.Add(_rulesHintLabel);
+        _rulesToolPanel.Controls.Add(_rulesSearchBox);
 
         _rulesRefreshButton.Location = new Point(0, 4);
         _rulesRefreshButton.Name = "_rulesRefreshButton";
@@ -609,7 +615,7 @@ partial class MainForm
         _rulesAllowButton.Name = "_rulesAllowButton";
         _rulesAllowButton.Size = new Size(160, 28);
         _rulesAllowButton.TabIndex = 2;
-        _rulesAllowButton.Text = "允许选中程序联网";
+        _rulesAllowButton.Text = "解除阻止（允许联网）";
         _rulesAllowButton.UseVisualStyleBackColor = true;
         _rulesAllowButton.Click += OnRulesAllowButtonClick;
 
@@ -622,9 +628,12 @@ partial class MainForm
         _rulesDeleteButton.UseVisualStyleBackColor = true;
         _rulesDeleteButton.Click += OnRulesDeleteButtonClick;
 
-        _rulesDeleteAllButton.Location = new Point(306, 42);
+        // ⚠️ 这是不可撤销的批量操作：和普通按钮分开摆（挪到第一行最右）、用红色文字，
+        //    避免手一滑就把所有规则删光。确认框里仍会列出条数并要求两次确认。
+        _rulesDeleteAllButton.ForeColor = Color.FromArgb(180, 30, 30);
+        _rulesDeleteAllButton.Location = new Point(900, 4);
         _rulesDeleteAllButton.Name = "_rulesDeleteAllButton";
-        _rulesDeleteAllButton.Size = new Size(180, 28);
+        _rulesDeleteAllButton.Size = new Size(200, 28);
         _rulesDeleteAllButton.TabIndex = 4;
         _rulesDeleteAllButton.Text = "删除全部 AppGuard 规则";
         _rulesDeleteAllButton.UseVisualStyleBackColor = true;
@@ -632,11 +641,19 @@ partial class MainForm
 
         _rulesHintLabel.AutoSize = true;
         _rulesHintLabel.ForeColor = SystemColors.GrayText;
-        _rulesHintLabel.Location = new Point(500, 47);
+        _rulesHintLabel.Location = new Point(306, 47);
         _rulesHintLabel.Name = "_rulesHintLabel";
         _rulesHintLabel.Size = new Size(300, 17);
         _rulesHintLabel.TabIndex = 5;
         _rulesHintLabel.Text = "未选中任何规则";
+
+        // 规则页搜索：规则一多就只能靠眼睛找，这里按 程序名 / 路径 / 规则名 / 到期 过滤。
+        _rulesSearchBox.Location = new Point(480, 8);
+        _rulesSearchBox.Name = "_rulesSearchBox";
+        _rulesSearchBox.PlaceholderText = "搜索：程序名 / 路径 / 规则名";
+        _rulesSearchBox.Size = new Size(280, 23);
+        _rulesSearchBox.TabIndex = 6;
+        _rulesSearchBox.TextChanged += OnRulesSearchTextChanged;
 
         _rulesGrid.Dock = DockStyle.Fill;
         _rulesGrid.AllowUserToAddRows = false;
@@ -823,11 +840,14 @@ partial class MainForm
         _refreshStrictModeButton.Click += OnRefreshStrictModeClick;
 
         // 因为上面插了一整块，任务定义面板整体往下挪。
-        _taskXmlPanel.Location = new Point(6, 872);
+        // 默认折叠：这块 XML 只有极少数场景要看，常驻会白占 220px，把设置页拉得很长。
+        // 想看的人点上面的「查看任务计划原始定义…」展开。
+        _taskXmlPanel.Location = new Point(6, 906);
         _taskXmlPanel.Name = "_taskXmlPanel";
         _taskXmlPanel.Size = new Size(1060, 220);
         _taskXmlPanel.TabIndex = 3;
         _taskXmlPanel.Text = "任务计划程序里的原始定义（只读，实时读取）";
+        _taskXmlPanel.Visible = false;
         _taskXmlPanel.Controls.Add(_taskXmlBox);
 
         _taskXmlBox.Dock = DockStyle.Fill;
@@ -839,6 +859,15 @@ partial class MainForm
         _taskXmlBox.ScrollBars = ScrollBars.Both;
         _taskXmlBox.TabIndex = 0;
         _taskXmlBox.WordWrap = false;
+
+        // XML 面板默认折叠，用这个按钮展开/收起。
+        _toggleTaskXmlButton.Location = new Point(6, 872);
+        _toggleTaskXmlButton.Name = "_toggleTaskXmlButton";
+        _toggleTaskXmlButton.Size = new Size(240, 28);
+        _toggleTaskXmlButton.TabIndex = 4;
+        _toggleTaskXmlButton.Text = "查看任务计划原始定义…";
+        _toggleTaskXmlButton.UseVisualStyleBackColor = true;
+        _toggleTaskXmlButton.Click += OnToggleTaskXmlClick;
 
         // ---------- 数据与隐私 ----------
         // 单独做一块，是为了正面回答「这工具会不会偷偷把我的数据传出去」。
@@ -938,6 +967,7 @@ partial class MainForm
         _checkIpOwnershipCheckBox.CheckedChanged += OnIpOwnershipChanged;
 
         _tabSettings.Controls.Add(_taskXmlPanel);
+        _tabSettings.Controls.Add(_toggleTaskXmlButton);
         _tabSettings.Controls.Add(_strictModePanel);
         _tabSettings.Controls.Add(_privacyPanel);
         _tabSettings.Controls.Add(_autostartPanel);
@@ -1037,6 +1067,12 @@ partial class MainForm
             "这类记录的归属进程通常已经退出，既看不出是哪个程序，也没法用来创建防火墙规则。\n默认不显示。");
         _toolTip.SetToolTip(_showOwnerlessCheckBox,
             "没有归属进程（PID 为 0）的连接无法显示程序名，也无法为它创建防火墙规则。\n默认不显示。");
+        _toolTip.SetToolTip(_safetyNoticeLabel,
+            "本程序会主动联网的三处，以及各自的开关位置：\n" +
+            "1) IP 归属查询 —— 「设置」页 → 数据与隐私；\n" +
+            "2) 证书吊销检查 —— 「设置」页 → 数据与隐私；\n" +
+            "3) 域名推测 —— 「记录」页 → 「域名推测（会向本机 DNS 服务器发查询）」。\n" +
+            "三处都关掉之后，本程序不再产生任何网络流量。");
         _toolTip.SetToolTip(_autoRefreshCheckBox,
             "每 3 秒自动重新扫描一次。勾选后会立刻先刷新一次。");
         _toolTip.SetToolTip(_connectionGrid,
@@ -1071,6 +1107,7 @@ partial class MainForm
         Controls.Add(_statusStrip);
         MinimumSize = new Size(980, 640);
         Name = "MainForm";
+        KeyPreview = true;
         StartPosition = FormStartPosition.CenterScreen;
         Text = "WinAppGuard — Windows 程序联网控制工具";
 

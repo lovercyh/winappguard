@@ -283,8 +283,9 @@ partial class MainForm
         _safetyNoticeLabel.Size = new Size(1120, 20);
         _safetyNoticeLabel.TabIndex = 1;
         // ⚠️ 这里的措辞必须和实际行为一致。
-        // 有两处会联网：IP 归属查询（本程序自己的代码）和证书吊销检查
-        // （Windows 证书服务代表程序发起）。不能写「本程序不访问网络」，那是在骗用户。
+        // 有三处会联网：IP 归属查询（本程序自己的代码）、证书吊销检查
+        // （Windows 证书服务代表程序发起）、域名推测（读 DNS 缓存，必要时向本机 DNS 补查询）。
+        // 不能写「本程序不访问网络」，那是在骗用户。
         //
         // 2.0 起工具不再使用 Windows 防火墙，规则全部落在 WFP 的专属子层里；
         // 严格模式也只是在自己的动态会话里生效，**不修改任何系统设置**。
@@ -295,7 +296,7 @@ partial class MainForm
         // 自检里有一条断言专门量它（--ui-check 的「顶部安全横幅放得下」）。
         _safetyNoticeLabel.Text =
             "说明：只在专属子层里创建和删除本工具的过滤器，不修改 Windows 防火墙的任何设置" +
-            "（严格模式只在本进程内生效）；默认会联网查 IP 归属与证书吊销，都能在「设置」页关闭。";
+            "（严格模式只在本进程内生效）；默认会联网查 IP 归属、证书吊销、域名推测，都能关掉。";
 
         _tabAudit.Name = "_tabAudit";
         _tabAudit.Padding = new Padding(3);
@@ -865,9 +866,10 @@ partial class MainForm
         _privacyScrollHost.TabIndex = 0;
         _privacyScrollHost.Controls.Add(_privacyLabel);
 
-        // ⚠️ 措辞必须和实际行为一致：现在有两处会联网，不能再写「本程序不含网络代码」。
+        // ⚠️ 措辞必须和实际行为一致：现在有**三处**会联网，不能再写「本程序不含网络代码」。
         // 一处是本程序自己的代码（IP 归属查询），一处是 Windows 证书服务代表程序发起的
-        // （证书吊销检查）。写含糊了就是在骗用户。
+        // （证书吊销检查），第三处是 2.1 的域名推测（读本机 DNS 缓存，条目过期时可能补发查询）。
+        // 写含糊了就是在骗用户。
         _privacyLabel.AutoSize = true;
         _privacyLabel.Location = new Point(14, 8);
         _privacyLabel.MaximumSize = new Size(1010, 0);
@@ -875,13 +877,13 @@ partial class MainForm
         _privacyLabel.Size = new Size(600, 60);
         _privacyLabel.TabIndex = 0;
         _privacyLabel.Text =
-            "本程序有且只有两处会联网，两者都可以关掉：\r\n" +
-            "· IP 归属查询（默认开启）：把连接的远程 IP 发送到 whois.cymru.com 查询归属，" +
-            "用来判断「这个连接在跟谁通信」。只发远程 IP，不发进程名、路径、端口或任何其它本机信息；" +
-            "局域网和本机地址根本不会发出去。\r\n" +
-            "· 证书吊销检查（默认开启）：Windows 的证书服务会代表本程序去查询 CA 服务器。\r\n" +
-            "两处都关掉之后，本程序不再产生任何网络流量。\r\n" +
-            "日志只写在本机下面这一个目录里，不会发送到任何地方，你可以随时查看或删除：";
+            "本程序有三处会联网，都可以关掉：\r\n" +
+            "· IP 归属查询（默认开启，本页可关）：把远程 IP 发到 whois.cymru.com 查归属；" +
+            "只发远程 IP，不发进程名、路径、端口等本机信息，局域网和本机地址不会发出。\r\n" +
+            "· 证书吊销检查（默认开启，本页可关）：Windows 证书服务代表本程序查询 CA 服务器。\r\n" +
+            "· 域名推测（默认开启，「记录」页可关）：读本机 DNS 缓存标注域名；" +
+            "缓存缺失且条目过期时可能补发一次查询，关掉后完全不发包。\r\n" +
+            "三处都关掉之后不再产生任何网络流量；日志只写在本机下面这个目录里，不会发送到任何地方：";
 
         _privacyBottomPanel.Dock = DockStyle.Bottom;
         _privacyBottomPanel.Height = 138;

@@ -1406,8 +1406,10 @@ internal static class Program
 
         if (TryGetField<Label>(form, "_strictModeDetailLabel", out var strictDetail))
         {
+            // ⚠️ 这个方法只有一个 bool 参数（enabled），别照老签名多传一个
+            //    —— 多传会抛 ParameterCountException，整个 --render-docs 直接失败（2.1 就这么坏了）。
             var text = InvokePrivateWithResult<string>(
-                form, "BuildStrictModeDetailText", false, new OutboundDefaultState(true, true, true));
+                form, "BuildStrictModeDetailText", false);
 
             if (!string.IsNullOrEmpty(text))
             {

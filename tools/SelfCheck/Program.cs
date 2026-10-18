@@ -3712,6 +3712,18 @@ internal static class Program
                 CheckAssertion(results, "两条过滤器的 ID 都能映射回规则名",
                     idMap.Count >= 2 && idMap.Values.All(name => name == blockRule.DisplayName));
 
+                // 审计只允许记录"本工具自己的过滤器"拦下的连接：
+                // 这张集合必须与子层里实际存在的过滤器 **完全一致**（多一个少一个都是 bug）。
+                var actualIds = engine.ListOurFilters()
+                    .Select(filter => filter.FilterId)
+                    .Where(id => id != 0)
+                    .ToHashSet();
+                var reportedIds = RuleEngine.GetOurFilterIds();
+
+                W($"    子层过滤器 ID = {actualIds.Count} 个，GetOurFilterIds = {reportedIds.Count} 个");
+                CheckAssertion(results, "过滤器 ID 集合与子层实际内容一致",
+                    actualIds.SetEquals(reportedIds));
+
                 CheckAssertion(results, "两条过滤器的说明字段里都存着规则内容",
                     stored.Count == 2 && stored.All(filter => WfpRule.TryParse(filter.Description, out _)));
                 CheckAssertion(results, "显示名称也已写入",
@@ -4942,7 +4954,7 @@ internal static class Program
             W($"      {child.GetType().Name}  Dock={child.Dock}  Size={child.Size}");
         }
 
-        CheckAssertion(results, "页签标题是「审计」", tab.Text == "审计");
+        CheckAssertion(results, "页签标题是「记录」", tab.Text == "记录");
         CheckAssertion(results, "页签里有直接子控件（工具条 / 表格 / 底栏）", tab.Controls.Count >= 3);
 
         var grids = Descendants<DataGridView>(tab).ToList();
@@ -4962,7 +4974,7 @@ internal static class Program
         var checkBoxes = Descendants<CheckBox>(tab).Select(box => box.Text).ToList();
         W($"    复选框 = {string.Join(" / ", checkBoxes)}");
 
-        CheckAssertion(results, "有「记录审计」开关", checkBoxes.Any(text => text.Contains("记录审计")));
+        CheckAssertion(results, "有「记录连接」开关", checkBoxes.Any(text => text.Contains("记录连接")));
         CheckAssertion(results, "有「域名推测」开关", checkBoxes.Any(text => text.Contains("域名推测")));
         CheckAssertion(results, "有「只看拦截」开关", checkBoxes.Any(text => text.Contains("只看拦截")));
 

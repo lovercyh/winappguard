@@ -86,7 +86,7 @@ public sealed partial class MainForm
         {
             Location = new Point(0, 42),
             Width = 110,
-            Text = "记录审计",
+            Text = "记录连接",
         };
         _auditEnabledCheck.CheckedChanged += OnAuditEnabledChanged;
 
@@ -377,7 +377,7 @@ public sealed partial class MainForm
 
             _auditStatusLabel.Text =
                 $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
-                (_auditService is null ? " · 审计未运行" : " · 审计运行中");
+                (_auditService is null ? " · 记录未开启" : " · 记录中");
 
             UpdateAuditDetail();
         }
@@ -417,17 +417,17 @@ public sealed partial class MainForm
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
-            title: "清空审计记录",
-            question: "确定要删除全部审计记录吗？",
+            title: "清空记录",
+            question: "确定要删除全部记录吗？",
             details: new[]
             {
-                new KeyValuePair<string, string>("将要做的", "删除本机上的全部审计文件"),
+                new KeyValuePair<string, string>("将要做的", "删除本机上的全部记录文件"),
                 new KeyValuePair<string, string>("不可恢复", "删除后无法找回"),
             },
             warnings: new[]
             {
-                "只删除审计记录，不影响任何防火墙规则。",
-                "以后的新连接会继续被记录（如果你没关闭「记录审计」）。",
+                "只删除记录，不影响任何防火墙规则。",
+                "以后的新连接会继续被记录（如果你没关闭「记录连接」）。",
             },
             confirmText: "清空");
 

@@ -299,7 +299,7 @@ partial class MainForm
 
         _tabAudit.Name = "_tabAudit";
         _tabAudit.Padding = new Padding(3);
-        _tabAudit.Text = "审计";
+        _tabAudit.Text = "记录";
         _tabAudit.UseVisualStyleBackColor = true;
 
         // ==================================================================

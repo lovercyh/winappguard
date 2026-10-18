@@ -166,24 +166,30 @@ internal sealed class AuditStore : IDisposable
         }
     }
 
-    /// <summary>清空全部审计记录。</summary>
-    internal void Clear()
+    /// <summary>清空全部审计记录，返回成功删除的文件数。</summary>
+    internal int Clear()
     {
         lock (_gate)
         {
             DisposeWriter();
+
+            var deleted = 0;
 
             foreach (var file in GetFiles())
             {
                 try
                 {
                     File.Delete(file);
+                    deleted++;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // 忽略：上层会重新读一次文件列表，确实还在就如实显示。
+                    // 文件被别的进程（或另一个未关闭的写入端）占用时删不掉。
+                    // 这里不吞掉整批，交给调用方用 GetFiles() 复查并如实提示。
                 }
             }
+
+            return deleted;
         }
     }
 

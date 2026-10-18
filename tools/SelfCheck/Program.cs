@@ -4382,6 +4382,39 @@ internal static class Program
                 CheckAssertion(results, "跨文件读取条数正确（3 旧 + 12 新）", all.Count == 15);
             }
 
+            // ---------------- 3.5 清空：写入端开着时删不掉 ----------------
+            W();
+            W("===== 清空：写入端开着时删不掉，关掉后能删 =====");
+
+            var clearDirectory = Path.Combine(tempDirectory, "clear-test");
+            Directory.CreateDirectory(clearDirectory);
+
+            using (var writer = new AuditStore(clearDirectory))
+            {
+                writer.Append(new AuditEvent
+                {
+                    TimeUtc = now,
+                    Kind = AuditEventKind.Connect,
+                    ProcessPath = @"C:\x.exe",
+                    RemoteAddress = "1.1.1.1",
+                    RemotePort = 443,
+                    Protocol = 6,
+                });
+
+                using var cleaner = new AuditStore(clearDirectory);
+                var whileOpen = cleaner.Clear();
+
+                W($"    写入端开着时删除 = {whileOpen} 个（预期 0）");
+                CheckAssertion(results, "写入端开着时删不掉（Windows 文件锁）", whileOpen == 0);
+            }
+
+            using (var cleaner = new AuditStore(clearDirectory))
+            {
+                var afterClose = cleaner.Clear();
+                W($"    写入端关闭后删除 = {afterClose} 个（预期 ≥1）");
+                CheckAssertion(results, "写入端关闭后能删掉", afterClose >= 1);
+            }
+
             // ---------------- 4. 保留期 ----------------
             W();
             W("===== 4. 保留期清理 =====");

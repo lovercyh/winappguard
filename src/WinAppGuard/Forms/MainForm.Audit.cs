@@ -436,17 +436,49 @@ public sealed partial class MainForm
             return;
         }
 
+        // ⚠️ 必须先停掉审计服务：它开着写入端时，Windows 不允许删除这些文件。
+        var wasRunning = _auditService is not null;
+
+        if (wasRunning)
+        {
+            StopAuditService();
+        }
+
+        var deleted = 0;
+
         try
         {
-            _auditStore.Clear();
-            LocalLog.Operation("审计：用户清空了全部记录");
+            deleted = _auditStore.Clear();
+            LocalLog.Operation($"记录：用户清空了记录，删除 {deleted} 个文件");
         }
         catch (Exception ex)
         {
-            ShowError("清空审计记录失败", ex);
+            ShowError("清空记录失败", ex);
+        }
+        finally
+        {
+            if (wasRunning)
+            {
+                StartAuditIfEnabled();
+            }
         }
 
         RefreshAudit();
+
+        var remaining = _auditStore.GetFiles().Count;
+
+        if (remaining > 0)
+        {
+            LocalLog.Warning($"记录：清空后仍有 {remaining} 个文件删不掉");
+            MessageBox.Show(
+                this,
+                $"有 {remaining} 个记录文件删不掉（可能正被其它程序占用）。\n" +
+                $"已删除 {deleted} 个。\n\n" +
+                $"可以稍后再试，或手动删除：\n{_auditStore.DirectoryPath}",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
     }
 
     private void OnAuditOpenFolderClick(object? sender, EventArgs e)

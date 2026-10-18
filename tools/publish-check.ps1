@@ -87,8 +87,10 @@ Write-Host "    .\dist-tools\$exeName --audit-service-test 记录：完整服务
 Write-Host "    .\dist-tools\$exeName --audit-live-test   记录：实时采集（连接 + 拦截事件，需管理员）"
 Write-Host "    .\dist-tools\$exeName --audit-ui-test     记录：页结构（工具条 / 表格 / 开关 / 学习模式行，离线）"
 Write-Host "    .\dist-tools\$exeName --program-history-test  新程序提醒：已知程序表与学习模式（离线）"
+Write-Host "    .\dist-tools\$exeName --new-program-ui-test   新程序提醒：提醒窗按钮映射 / 汇总窗 / 学习时长（离线）"
+Write-Host "    .\dist-tools\$exeName --new-program-live-test 新程序提醒：真实连接触发提醒（约 15 秒，不建规则）"
 Write-Host ''
-Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 6 项离线检查依次跑一遍。）"
+Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 7 项离线检查依次跑一遍。）"
 Write-Host "  两个 --strict-mode-* 刻意不在那个启动器里：它们需要管理员、而且会真的断开网络，只适合手动单独跑。"
 
 # 生成一个双击即可运行的启动器，方便在虚拟机里验证。
@@ -114,7 +116,7 @@ if not exist "%EXE%" (
 
 echo.
 echo ============================================================
-echo   [1/6]  connection filter and sort  (offline, no UI)
+echo   [1/7]  connection filter and sort  (offline, no UI)
 echo          keyword matching / numeric port and IP sorting
 echo ============================================================
 echo.
@@ -122,7 +124,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [2/6]  temporary block expiry  (offline, no system changes)
+echo   [2/7]  temporary block expiry  (offline, no system changes)
 echo          encode / parse / expire judgement, incl. truncation
 echo ============================================================
 echo.
@@ -130,7 +132,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [3/6]  ownership core check  (offline, no network)
+echo   [3/7]  ownership core check  (offline, no network)
 echo          cache / expiry / capacity / switch / settings
 echo ============================================================
 echo.
@@ -138,7 +140,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [4/6]  ownership online lookup check
+echo   [4/7]  ownership online lookup check
 echo          NOTE: uses the network, only whois.cymru.com:43
 echo ============================================================
 echo.
@@ -146,7 +148,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [5/6]  UI layout check
+echo   [5/7]  UI layout check
 echo          NOTE: a window will flash briefly, then close
 echo          offline / no admin needed
 echo ============================================================
@@ -155,11 +157,19 @@ echo.
 
 echo.
 echo ============================================================
-echo   [6/6]  new-program alerts and learning mode  (offline)
+echo   [6/7]  new-program alerts and learning mode  (offline)
 echo          known-program table / learning mode / "later" semantics
 echo ============================================================
 echo.
 "%EXE%" --program-history-test --no-pause
+
+echo.
+echo ============================================================
+echo   [7/7]  new-program prompt wiring  (offline)
+echo          button-to-choice mapping / learning summary / suppress
+echo ============================================================
+echo.
+"%EXE%" --new-program-ui-test --no-pause
 
 echo.
 echo ---- done. press any key to close ----

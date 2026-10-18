@@ -26,7 +26,10 @@ internal sealed class NewProgramPrompt : Form
 {
     private NewProgramChoice _choice = NewProgramChoice.Later;
 
-    private NewProgramPrompt(string path)
+    /// <summary>用户最后的选择（自检用：验证四个按钮各自映射到正确的决定）。</summary>
+    internal NewProgramChoice Choice => _choice;
+
+    internal NewProgramPrompt(string path)
     {
         Text = "新程序正在联网";
         FormBorderStyle = FormBorderStyle.FixedDialog;

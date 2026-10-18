@@ -54,6 +54,9 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --audit-service-test 审计：完整服务跑 12 秒（DNS + 轮询 + 拦截，写临时目录）
 ///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
+///   WinAppGuard.SelfCheck.exe --program-history-test 新程序提醒：已知程序表 / 学习模式 / 「稍后」语义（离线）
+///   WinAppGuard.SelfCheck.exe --new-program-ui-test   新程序提醒：提醒窗按钮映射 / 汇总窗 / 学习时长（离线）
+///   WinAppGuard.SelfCheck.exe --new-program-live-test 新程序提醒：真实连接触发提醒（约 15 秒，不建规则）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
 ///   任一模式加 --no-pause 可以不等待回车直接退出
 ///
@@ -127,7 +130,9 @@ internal static class Program
                          && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--program-history-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--program-history-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--new-program-ui-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--new-program-live-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -218,6 +223,14 @@ internal static class Program
             else if (args.Contains("--program-history-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunProgramHistoryTest();
+            }
+            else if (args.Contains("--new-program-ui-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunNewProgramUiTest();
+            }
+            else if (args.Contains("--new-program-live-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunNewProgramLiveTest();
             }
             else if (args.Contains("--wfp-ip-rule-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -5197,6 +5210,428 @@ internal static class Program
             return false;
         }
     }
+
+    /// <summary>
+    /// 2.2 界面逻辑自检（**离线**）：提醒窗的四个按钮映射、汇总窗的勾选取值、
+    /// 学习时长的下拉映射、剩余时间格式、"是否抑制提醒"的三态。
+    ///
+    /// 为什么不靠人工点：这四个按钮一旦接错（比如「允许」接到了「阻止」），
+    /// 手工测试时很容易点一下看见窗口关掉就以为对了 —— 而这正是最危险的错。
+    /// </summary>
+    private static void RunNewProgramUiTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   2.2 界面逻辑（离线：提醒窗按钮 / 汇总窗 / 学习模式映射）      #");
+        W("################################################################");
+        W();
+
+        // ---------------- 1. 提醒窗 ----------------
+        W("===== 1. 「新程序正在联网」提醒窗 =====");
+
+        const string samplePath = @"C:\Program Files\curl\curl.exe";
+
+        using (var prompt = new NewProgramPrompt(samplePath))
+        {
+            var buttons = Descendants<Button>(prompt).Select(button => button.Text).ToList();
+            W($"    标题 = {prompt.Text}");
+            W($"    按钮 = {string.Join(" / ", buttons)}");
+
+            CheckAssertion(results, "标题是「新程序正在联网」", prompt.Text == "新程序正在联网");
+            CheckAssertion(results, "正好 4 个按钮", buttons.Count == 4);
+            CheckAssertion(results, "四个按钮文字齐全",
+                buttons.Contains("允许联网") && buttons.Contains("忽略")
+                && buttons.Contains("阻止联网") && buttons.Contains("稍后"));
+
+            var labels = Descendants<Label>(prompt).Select(label => label.Text).ToList();
+            CheckAssertion(results, "正文写出了程序名",
+                labels.Any(text => text.Contains("curl.exe")));
+            CheckAssertion(results, "正文写出了完整路径",
+                labels.Any(text => text.Contains(samplePath)));
+            CheckAssertion(results, "默认（直接关窗）= 稍后", prompt.Choice == NewProgramChoice.Later);
+            CheckAssertion(results, "Enter 键对应「允许联网」",
+                (prompt.AcceptButton as Button)?.Text == "允许联网");
+            CheckAssertion(results, "Esc 键对应「稍后」",
+                (prompt.CancelButton as Button)?.Text == "稍后");
+        }
+
+        // 四个按钮各自映射到哪个决定：**这个接错就等于功能反了**。
+        var expected = new (string Button, NewProgramChoice Choice)[]
+        {
+            ("允许联网", NewProgramChoice.Allow),
+            ("忽略", NewProgramChoice.Ignore),
+            ("阻止联网", NewProgramChoice.Block),
+            ("稍后", NewProgramChoice.Later),
+        };
+
+        foreach (var (buttonText, choice) in expected)
+        {
+            using var prompt = new NewProgramPrompt(samplePath);
+            var button = Descendants<Button>(prompt).First(item => item.Text == buttonText);
+
+            // ⚠️ 不能用 PerformClick()：它内部有 CanSelect 判断，
+            //    窗体没显示出来时是**空操作**（第一次自检就栽在这里，报"三个按钮都返回 Later"）。
+            //    这里直接触发 OnClick（反射调用虚方法，等价于真的点下去）。
+            RaiseClick(button);
+
+            W($"    点「{buttonText}」→ {prompt.Choice}");
+            CheckAssertion(results, $"点「{buttonText}」得到 {choice}", prompt.Choice == choice);
+        }
+
+        // ---------------- 2. 学习模式汇总窗 ----------------
+        W();
+        W("===== 2. 学习模式汇总窗 =====");
+
+        var now = DateTime.UtcNow;
+        var programs = new List<KnownProgram>
+        {
+            new(@"C:\one.exe", ProgramDecision.Unknown, now, now),
+            new(@"C:\two.exe", ProgramDecision.Unknown, now, now),
+            new(@"C:\three.exe", ProgramDecision.Unknown, now, now),
+        };
+
+        using (var summary = new LearningSummaryForm(programs))
+        {
+            CheckAssertion(results, "列出全部程序", summary.ProgramList.Items.Count == 3);
+            CheckAssertion(results, "默认一个都不勾（不勾 = 允许）",
+                summary.ProgramList.CheckedItems.Count == 0);
+
+            var texts = Descendants<Label>(summary).Select(label => label.Text).ToList();
+            CheckAssertion(results, "标题写明了数量", texts.Any(text => text.Contains("3 个程序")));
+
+            summary.ProgramList.SetItemChecked(0, true);
+            summary.ProgramList.SetItemChecked(2, true);
+
+            var checkedPaths = LearningSummaryForm.CollectChecked(summary.ProgramList);
+            W($"    勾选第 1、3 项 → {string.Join(" / ", checkedPaths)}");
+
+            CheckAssertion(results, "只取勾中的两项", checkedPaths.Count == 2);
+            CheckAssertion(results, "取得的是勾中的那两项，顺序也对",
+                checkedPaths.Count == 2
+                && checkedPaths[0] == @"C:\one.exe"
+                && checkedPaths[1] == @"C:\three.exe");
+        }
+
+        // ---------------- 3. 主窗体的学习模式映射 ----------------
+        W();
+        W("===== 3. 主窗体：学习时长下拉 与 提醒抑制 =====");
+
+        MainForm.SuppressBackgroundServices = true;
+        using var form = new MainForm(isAutostart: false);
+
+        var combo = GetField<ComboBox>(form, "_learningMinutesCombo");
+        var settings = GetField<AppSettings>(form, "_settings");
+
+        var expectedMinutes = new[] { 30, 60, 120, 0 };
+
+        for (var index = 0; index < expectedMinutes.Length; index++)
+        {
+            combo.SelectedIndex = index;
+            var minutes = Invoke<int>(form, "SelectedLearningMinutes");
+
+            W($"    下拉第 {index + 1} 项「{combo.Items[index]}」→ {minutes} 分钟");
+            CheckAssertion(results, $"「{combo.Items[index]}」映射成 {expectedMinutes[index]} 分钟"
+                                    + (expectedMinutes[index] == 0 ? "（= 直到关闭）" : string.Empty),
+                minutes == expectedMinutes[index]);
+        }
+
+        CheckAssertion(results, "剩余时间格式（1 小时 5 分）",
+            InvokeStatic<string>(typeof(MainForm), "FormatRemaining", TimeSpan.FromMinutes(65))
+                .Contains("1 小时"));
+        CheckAssertion(results, "剩余时间格式（1 分 5 秒）",
+            InvokeStatic<string>(typeof(MainForm), "FormatRemaining", TimeSpan.FromSeconds(65))
+                .Contains("1 分 5 秒"));
+
+        // 三态：不学习 + 提醒开 → 不抑制；关提醒 → 抑制；学习模式 → 抑制。
+        var learningActive = GetFieldInfo(form, "_learningActive");
+
+        settings.NewProgramAlertEnabled = true;
+        learningActive.SetValue(form, false);
+        CheckAssertion(results, "提醒开着、不在学习 → 会提醒",
+            !Invoke<bool>(form, "IsAlertSuppressed"));
+
+        settings.NewProgramAlertEnabled = false;
+        CheckAssertion(results, "关掉「新程序提醒」→ 不打扰",
+            Invoke<bool>(form, "IsAlertSuppressed"));
+
+        settings.NewProgramAlertEnabled = true;
+        learningActive.SetValue(form, true);
+        CheckAssertion(results, "学习模式进行中 → 不打扰",
+            Invoke<bool>(form, "IsAlertSuppressed"));
+
+        learningActive.SetValue(form, false);
+        settings.NewProgramAlertEnabled = true;
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 触发一次点击。
+    ///
+    /// 为什么不用 <see cref="Button.PerformClick"/>：它内部有 CanSelect 判断，
+    /// 窗体没显示出来时是**空操作** —— 用它会让"按钮没接对"这个 bug 从测试里溜过去。
+    /// </summary>
+    private static void RaiseClick(Button button)
+    {
+        var onClick = typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)
+                      ?? throw new InvalidOperationException("找不到 Control.OnClick");
+
+        onClick.Invoke(button, new object[] { EventArgs.Empty });
+    }
+
+    /// <summary>取私有字段（自检用；找不到直接抛，不静默通过）。</summary>
+    private static T GetField<T>(object target, string name)
+    {
+        var field = GetFieldInfo(target, name);
+        return (T)field.GetValue(target)!;
+    }
+
+    /// <summary>取私有字段的 <see cref="FieldInfo"/>（要写回时用）。</summary>
+    private static FieldInfo GetFieldInfo(object target, string name)
+        => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+           ?? throw new InvalidOperationException($"找不到字段 {name}");
+
+    /// <summary>调用私有实例方法。</summary>
+    private static T Invoke<T>(object target, string name, params object[] arguments)
+    {
+        var method = target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException($"找不到方法 {name}");
+
+        return (T)method.Invoke(target, arguments)!;
+    }
+
+    /// <summary>调用私有静态方法。</summary>
+    private static T InvokeStatic<T>(Type type, string name, params object[] arguments)
+    {
+        var method = type.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)
+                     ?? throw new InvalidOperationException($"找不到静态方法 {name}");
+
+        return (T)method.Invoke(null, arguments)!;
+    }
+
+    /// <summary>
+    /// 「新程序检测」端到端自检（**离线之外唯一需要联网的一步**：连 whois.cymru.com:43）。
+    ///
+    /// 它验证的是"从真实连接 → 判定为新程序 → 触发提醒"这条链，
+    /// **不建任何防火墙规则、不改系统状态**，只写临时目录。
+    /// 剩下的只有"弹窗长什么样、点了以后真的拦不拦得住" —— 那部分必须人工在虚拟机里做。
+    /// </summary>
+    private static void RunNewProgramLiveTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"wag-newprog-{Guid.NewGuid():N}");
+
+        W("################################################################");
+        W("#   新程序检测（真实连接 → 提醒；约 15 秒，不建规则）           #");
+        W("################################################################");
+        W();
+
+        var selfPath = Environment.ProcessPath ?? string.Empty;
+        W($"    本进程 = {selfPath}");
+
+        AuditService? service = null;
+
+        try
+        {
+            // ---------------- 1. 第一次见到 → 提醒一次 ----------------
+            W();
+            W("===== 1. 第一次见到就提醒，第二次不再打扰 =====");
+
+            var knownFile = Path.Combine(tempDirectory, "known-programs.json");
+            var detected = new List<string>();
+
+            service = new AuditService(
+                Path.Combine(tempDirectory, "audit"),
+                pollSeconds: 1,
+                knownProgramsPath: knownFile);
+
+            service.NewPrograms.NewProgramDetected += path =>
+            {
+                lock (detected)
+                {
+                    detected.Add(path);
+                }
+            };
+
+            service.Start();
+
+            HoldConnection("whois.cymru.com", 43, keepSeconds: 4);
+            Thread.Sleep(3000);
+
+            var firstRound = Snapshot(detected);
+            W($"    第一轮检测到：{firstRound.Count} 个（去重后 {firstRound.Distinct(StringComparer.OrdinalIgnoreCase).Count()} 个）");
+            W($"    其中本进程：{CountOf(firstRound, selfPath)} 次");
+
+            foreach (var path in firstRound.Take(5))
+            {
+                W($"      {Path.GetFileName(path)}");
+            }
+
+            // ⚠️ 不能断言"总共只提醒 1 次"：这台机器上同时有战网 / Epic / Steam / 浏览器在联网，
+            //    对一个全新的表来说它们**都是新程序**，本来就该各提醒一次。
+            //    真正的不变量是「同一个程序只提醒一次」，所以断言必须按路径计数。
+            CheckAssertion(results, "本进程发起的连接被判定为新程序并提醒",
+                CountOf(firstRound, selfPath) == 1);
+
+            var distinctCount = firstRound.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            CheckAssertion(results, "每个新程序只提醒一次（第一轮内部没有重复）",
+                distinctCount == firstRound.Count);
+
+            CheckAssertion(results, "已知程序表里记住了它",
+                service.NewPrograms.Store.Find(selfPath) is not null);
+            CheckAssertion(results, "刚记下的决定是「还没决定」",
+                service.NewPrograms.Store.Find(selfPath)?.Decision == ProgramDecision.Unknown);
+
+            // 同一个程序再连一次：不该再提醒。
+            HoldConnection("whois.cymru.com", 43, keepSeconds: 4);
+            Thread.Sleep(3000);
+
+            var secondRound = Snapshot(detected);
+            var selfAgain = CountOf(secondRound, selfPath);
+
+            W($"    第二轮累计：{secondRound.Count} 个；本进程仍然 {selfAgain} 次");
+
+            CheckAssertion(results, "同一个程序不会再打扰（本进程仍是 1 次）", selfAgain == 1);
+
+            // 第一轮见过的每一个程序，在第二轮里都不能增加次数。
+            var repeated = firstRound
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(path => CountOf(secondRound, path) != 1)
+                .ToList();
+
+            W($"    第二轮里被重复提醒的程序 = {repeated.Count} 个");
+
+            CheckAssertion(results, "第一轮见过的程序都没有被重复提醒", repeated.Count == 0);
+
+            service.Dispose();
+            CheckAssertion(results, "已知程序表已落盘", File.Exists(knownFile));
+
+            var reRead = new KnownProgramStore(knownFile);
+            CheckAssertion(results, "落盘后重新读回仍然记得它", reRead.Find(selfPath) is not null);
+
+            service = null;
+
+            // ---------------- 2. 学习模式：只记录、不提醒 ----------------
+            W();
+            W("===== 2. 学习模式：不提醒，但仍然记录 =====");
+
+            var learningKnown = Path.Combine(tempDirectory, "learning-known.json");
+            var learningDetected = new List<string>();
+
+            service = new AuditService(
+                Path.Combine(tempDirectory, "audit-learning"),
+                pollSeconds: 1,
+                knownProgramsPath: learningKnown);
+
+            service.LearningMode = true;
+            service.NewPrograms.NewProgramDetected += path =>
+            {
+                lock (learningDetected)
+                {
+                    learningDetected.Add(path);
+                }
+            };
+
+            service.Start();
+
+            HoldConnection("whois.cymru.com", 43, keepSeconds: 4);
+            Thread.Sleep(3000);
+
+            var learningRound = Snapshot(learningDetected);
+            W($"    学习模式期间提醒次数 = {learningRound.Count}（应为 0）");
+            W($"    学习模式期间是否记录 = {service.NewPrograms.Store.Find(selfPath) is not null}");
+
+            CheckAssertion(results, "学习模式不提醒", learningRound.Count == 0);
+            CheckAssertion(results, "学习模式仍然把它记进已知程序表（结束后不再补问）",
+                service.NewPrograms.Store.Find(selfPath) is not null);
+
+            // 退出学习模式后也不该"补问"：它已经被记过了。
+            service.LearningMode = false;
+            HoldConnection("whois.cymru.com", 43, keepSeconds: 4);
+            Thread.Sleep(3000);
+
+            CheckAssertion(results, "退出学习模式后不会补问", Snapshot(learningDetected).Count == 0);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！异常：{ex.GetType().Name}：{ex.Message}");
+            CheckAssertion(results, "自检过程不抛异常", false);
+        }
+        finally
+        {
+            try
+            {
+                service?.Dispose();
+            }
+            catch (Exception)
+            {
+                // 收尾失败不影响结论。
+            }
+
+            try
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>复制一份当前收集到的列表（后台线程在写）。</summary>
+    private static List<string> Snapshot(List<string> source)
+    {
+        lock (source)
+        {
+            return source.ToList();
+        }
+    }
+
+    /// <summary>
+    /// 主动连一次并**保持若干秒**（用来制造"某个程序正在联网"这一事实，
+    /// 让每秒轮询的连接差集看得见它）。
+    /// 连不上不抛异常 —— 无网环境下这些断言会失败，但报告里能看到是"没连上"而不是崩溃。
+    /// </summary>
+    private static void HoldConnection(string host, int port, int keepSeconds)
+    {
+        try
+        {
+            var address = Dns.GetHostAddresses(host)
+                .FirstOrDefault(item => item.AddressFamily == AddressFamily.InterNetwork);
+
+            if (address is null)
+            {
+                return;
+            }
+
+            using var client = new TcpClient();
+            var task = client.ConnectAsync(address, port);
+
+            if (task.Wait(4000) && client.Connected)
+            {
+                Thread.Sleep(keepSeconds * 1000);
+            }
+        }
+        catch (Exception)
+        {
+            // 连不上就算了：后面的断言会如实报失败。
+        }
+    }
+
+    /// <summary>路径比较（不区分大小写）。</summary>
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>某个路径在列表里出现过几次。</summary>
+    private static int CountOf(IEnumerable<string> paths, string path)
+        => paths.Count(item => PathsEqual(item, path));
 
     /// <summary>
     /// 「已知程序」与「新程序告警」自检（离线、临时文件）。

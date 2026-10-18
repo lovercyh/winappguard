@@ -115,6 +115,27 @@ internal sealed class LearningSummaryForm : Form
     }
 
     /// <summary>
+    /// 从勾选列表里取出"要阻止的路径"。
+    ///
+    /// 抽成静态方法是为了能被自检直接调用 —— 这段逻辑（哪个算勾中）是真正会出错的地方，
+    /// 不应该只能靠"人工点一下看看"来验证。
+    /// </summary>
+    internal static List<string> CollectChecked(CheckedListBox list)
+    {
+        var blocked = new List<string>();
+
+        for (var i = 0; i < list.Items.Count; i++)
+        {
+            if (list.GetItemChecked(i) && list.Items[i] is KnownProgram program)
+            {
+                blocked.Add(program.Path);
+            }
+        }
+
+        return blocked;
+    }
+
+    /// <summary>
     /// 显示汇总窗。
     /// </summary>
     /// <returns>用户确认时返回"要阻止的程序列表"；取消返回 null（调用方据此什么都不做）。</returns>
@@ -129,16 +150,6 @@ internal sealed class LearningSummaryForm : Form
             return null;
         }
 
-        var blocked = new List<string>();
-
-        for (var i = 0; i < form._list.Items.Count; i++)
-        {
-            if (form._list.GetItemChecked(i) && form._list.Items[i] is KnownProgram program)
-            {
-                blocked.Add(program.Path);
-            }
-        }
-
-        return blocked;
+        return CollectChecked(form._list);
     }
 }

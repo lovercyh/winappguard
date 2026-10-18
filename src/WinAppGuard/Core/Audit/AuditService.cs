@@ -22,8 +22,7 @@ internal sealed class AuditService : IDisposable
     private readonly AuditStore _store;
     private readonly DomainIndex _domains = new();
     private readonly ConnectionTracker _connections = new();
-    private readonly NewProgramWatcher _newPrograms =
-        new(new KnownProgramStore());
+    private readonly NewProgramWatcher _newPrograms;
     private readonly object _writeGate = new();
     private readonly object _filterIdGate = new();
 
@@ -35,13 +34,19 @@ internal sealed class AuditService : IDisposable
     private WfpDropCollector? _drops;
     private DateTime _nextPurge;
 
+    /// <param name="knownProgramsPath">
+    /// 「已知程序」表的路径。**只给自检用** —— 产品走默认路径，
+    /// 否则自检会去写用户真实的 known-programs.json。
+    /// </param>
     internal AuditService(
         string? directory = null,
         int pollSeconds = 3,
         int retentionDays = AuditStore.DefaultRetentionDays,
-        bool allowDomainLookup = true)
+        bool allowDomainLookup = true,
+        string? knownProgramsPath = null)
     {
         _store = new AuditStore(directory, retentionDays: retentionDays);
+        _newPrograms = new NewProgramWatcher(new KnownProgramStore(knownProgramsPath));
         PollSeconds = Math.Max(1, pollSeconds);
         AllowDomainLookup = allowDomainLookup;
         _nextPurge = DateTime.Now.Date.AddDays(1);

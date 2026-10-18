@@ -51,6 +51,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --audit-store-test 审计：事件模型与落盘（往返 / 轮转 / 清理 / 半行容错，离线）
 ///   WinAppGuard.SelfCheck.exe --audit-dns-test   审计：读本机 DNS 缓存 + 域名索引（离线、不联网）
 ///   WinAppGuard.SelfCheck.exe --audit-live-test  审计：实时采集（连接差集 + WFP 拦截事件，约 12 秒，需管理员）
+///   WinAppGuard.SelfCheck.exe --audit-service-test 审计：完整服务跑 12 秒（DNS + 轮询 + 拦截，写临时目录）
 ///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
@@ -123,7 +124,8 @@ internal static class Program
                          && !args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -210,6 +212,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuditServiceTest();
             }
             else if (args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4704,6 +4710,105 @@ internal static class Program
         finally
         {
             collector?.Dispose();
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 审计服务端到端自检：真的跑 12 秒，把三个数据源串起来写进临时目录，再读回来核对。
+    ///
+    /// 验证的是"接线"而不是"逻辑"（逻辑各自有专门的离线自检）：
+    ///   - 服务能起、能停；
+    ///   - 确实产生了审计文件，条数与写入计数一致；
+    ///   - 连接事件里有域名推测（缓存有记录时）。
+    /// </summary>
+    private static void RunAuditServiceTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"wag-auditsvc-{Guid.NewGuid():N}");
+
+        W("################################################################");
+        W("#   审计服务（DNS + 连接轮询 + 拦截事件 → 落盘，跑 12 秒）       #");
+        W("################################################################");
+        W();
+
+        AuditService? service = null;
+
+        try
+        {
+            service = new AuditService(tempDirectory, pollSeconds: 2);
+            service.Start();
+
+            CheckAssertion(results, "服务已启动", service.IsRunning);
+            W($"    拦截事件订阅 = {(service.DropSubscriptionActive ? "成功" : "未成功（非管理员时会这样）")}");
+
+            if (service.LastError is not null)
+            {
+                W($"    最近错误：{service.LastError}");
+            }
+
+            W("    采样 12 秒（现在随便开几个网页 / 让程序联网）……");
+            Thread.Sleep(12_000);
+
+            var written = service.EventsWritten;
+            var drops = service.DropsSeen;
+
+            service.Dispose();
+            var stopped = !service.IsRunning;
+            service = null;
+
+            W();
+            W("===== 结果 =====");
+            W($"    写入 {written} 条，其中拦截 {drops} 条");
+
+            var files = Directory.Exists(tempDirectory)
+                ? Directory.GetFiles(tempDirectory, "audit-*.jsonl")
+                : Array.Empty<string>();
+
+            W($"    审计文件 {files.Length} 个");
+            foreach (var file in files)
+            {
+                W($"      {Path.GetFileName(file)}  {new FileInfo(file).Length} 字节");
+            }
+
+            CheckAssertion(results, "产生了审计文件", files.Length > 0);
+
+            using var reader = new AuditStore(tempDirectory);
+            var events = reader.ReadRecent(5000);
+
+            W($"    读回 {events.Count} 条（写入计数 {written}）");
+            CheckAssertion(results, "读回条数与写入计数一致", events.Count == written);
+
+            var connects = events.Count(item => item.Kind == AuditEventKind.Connect);
+            var blocked = events.Count(item => item.Kind == AuditEventKind.Blocked);
+            var withDomain = events.Count(item => !string.IsNullOrEmpty(item.Domain));
+
+            W($"    连接 {connects} 条，拦截 {blocked} 条，带域名 {withDomain} 条");
+
+            foreach (var sample in events.Where(item => !string.IsNullOrEmpty(item.Domain)).Take(5))
+            {
+                W($"      {sample.Describe()}");
+            }
+
+            CheckAssertion(results, "域名推测有命中（缓存为空时允许 0）", withDomain > 0 || connects == 0);
+            CheckAssertion(results, "服务停止后 IsRunning = false", stopped);
+        }
+        finally
+        {
+            service?.Dispose();
+
+            try
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
         }
 
         PrintSummary(results, showFirewallResidue: false);

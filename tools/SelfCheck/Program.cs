@@ -5540,6 +5540,24 @@ internal static class Program
     }
 
     /// <summary>
+    /// 有明确用途、并经过逐条登记的"网络相关原生调用"。
+    ///
+    /// 为什么要有这张表：`dnsapi.dll` 里既有"读本机缓存"的函数，也有"发 DNS 查询"的函数，
+    /// 只看模块名会把两者混为一谈。这里按**函数名**放行，并在审计输出里逐条打印用途，
+    /// 让读者（和未来的维护者）能一眼看出这些调用会不会发包。
+    ///
+    /// 其中 `DnsQuery_W` 既能发包也能只读缓存 —— 本程序在调用处固定传
+    /// `DNS_QUERY_NO_WIRE_QUERY`（只读缓存、不发包），所以登记为例外。
+    /// </summary>
+    private static readonly Dictionary<string, string> RegisteredNetworkImports =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["dnsapi.dll!DnsGetCacheDataTable"] = "枚举本机 DNS 缓存（只读内存，不发包）",
+            ["dnsapi.dll!DnsQuery_W"] = "读缓存记录；调用处固定用 DNS_QUERY_NO_WIRE_QUERY，不发包",
+            ["dnsapi.dll!DnsFree"] = "释放上面两个 API 返回的内存",
+        };
+
+    /// <summary>
     /// 有没有用 P/Invoke 直接调用网络 API。
     ///
     /// 这一项是**防绕过检查**：第 2 项只看托管类型，如果有人用 ws2_32 / winhttp / wininet
@@ -5557,6 +5575,8 @@ internal static class Program
         };
 
         var hits = new List<string>();
+        var registered = new List<string>();
+
         foreach (var handle in metadata.MethodDefinitions)
         {
             var method = metadata.GetMethodDefinition(handle);
@@ -5568,22 +5588,39 @@ internal static class Program
             }
 
             var dll = metadata.GetString(metadata.GetModuleReference(import.Module).Name);
-            if (networkModules.Contains(dll))
+            if (!networkModules.Contains(dll))
             {
-                hits.Add($"{dll}!{metadata.GetString(import.Name)}");
+                continue;
+            }
+
+            var entry = $"{dll}!{metadata.GetString(import.Name)}";
+
+            if (RegisteredNetworkImports.ContainsKey(entry))
+            {
+                registered.Add(entry);
+            }
+            else
+            {
+                hits.Add(entry);
             }
         }
 
         hits.Sort(StringComparer.OrdinalIgnoreCase);
+        registered.Sort(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in registered.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(e => e))
+        {
+            W($"    [已登记] {entry} —— {RegisteredNetworkImports[entry]}");
+        }
 
         if (hits.Count == 0)
         {
-            W("    没有直接调用任何网络相关的原生 API。");
-            W("    （本程序的联网走托管 TcpClient，所以原生调用清单里不会出现网络 API。）");
+            W("    没有**未登记**的网络相关原生调用。");
+            W("    （本程序的联网走托管 TcpClient；DNS 相关调用只读本机缓存，已逐条登记在上方。）");
         }
         else
         {
-            W("    ！发现直接用 P/Invoke 调网络 API，托管检查会被绕过，必须解释清楚：");
+            W("    ！发现未登记的 P/Invoke 网络调用，托管检查会被绕过，必须解释清楚：");
             foreach (var hit in hits)
             {
                 W($"    ！{hit}");
@@ -5591,7 +5628,7 @@ internal static class Program
         }
 
         W();
-        results.Add(("无绕过：没有直接用 P/Invoke 调网络 API", hits.Count == 0));
+        results.Add(("无绕过：没有未登记的原生网络调用", hits.Count == 0));
     }
 
     /// <summary>列出全部 P/Invoke —— 这是程序能碰到的原生 API 的完整清单，供人工审计。</summary>

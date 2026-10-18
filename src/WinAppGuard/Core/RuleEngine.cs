@@ -157,6 +157,29 @@ internal static class RuleEngine
         return map;
     }
 
+    /// <summary>
+    /// 本工具当前**所有**过滤器的 ID（含没有说明字段的，例如严格模式的"阻止全部"）。
+    ///
+    /// 审计的拦截事件来自 WFP 的全局 `CLASSIFY_DROP` —— 里面混着 Windows 防火墙、
+    /// 其它安全软件拦掉的连接。只有用这张表过滤，才能保证"审计里出现的拦截＝本工具拦的"。
+    /// </summary>
+    internal static HashSet<ulong> GetOurFilterIds()
+    {
+        var ids = new HashSet<ulong>();
+
+        using var engine = OpenEngine();
+
+        foreach (var filter in engine.ListOurFilters())
+        {
+            if (filter.FilterId != 0)
+            {
+                ids.Add(filter.FilterId);
+            }
+        }
+
+        return ids;
+    }
+
     /// <summary>当前「允许联网」规则覆盖的程序路径（严格模式白名单用）。</summary>
     internal static List<string> GetAllowRulePrograms()
         => GetRules()

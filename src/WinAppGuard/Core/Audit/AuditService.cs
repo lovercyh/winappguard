@@ -23,6 +23,10 @@ internal sealed class AuditService : IDisposable
     private readonly DomainIndex _domains = new();
     private readonly ConnectionTracker _connections = new();
     private readonly object _writeGate = new();
+    private readonly object _filterIdGate = new();
+
+    /// <summary>本工具自己的过滤器 ID。null 表示还没成功加载过（此时不记录任何拦截事件）。</summary>
+    private HashSet<ulong>? _ourFilterIds;
 
     private CancellationTokenSource? _cancellation;
     private Thread? _thread;
@@ -65,6 +69,18 @@ internal sealed class AuditService : IDisposable
     /// <summary>最近一次错误（供界面如实显示，不影响其它功能）。</summary>
     internal string? LastError { get; private set; }
 
+    /// <summary>当前识别到的"本工具过滤器"数量（0 表示拦截事件不会被记录）。</summary>
+    internal int OurFilterIdCount
+    {
+        get
+        {
+            lock (_filterIdGate)
+            {
+                return _ourFilterIds?.Count ?? 0;
+            }
+        }
+    }
+
     internal AuditStore Store => _store;
 
     /// <summary>启动。会尝试订阅 WFP 拦截事件；失败只记错误，不阻止轮询。</summary>
@@ -77,6 +93,9 @@ internal sealed class AuditService : IDisposable
 
         try
         {
+            // 先把这个"是不是我们拦的"的判据准备好，否则早期事件会被全部丢掉。
+            RefreshOurFilterIds();
+
             _drops = WfpDropCollector.Start();
             _drops.DropDetected += OnDrop;
         }
@@ -148,6 +167,9 @@ internal sealed class AuditService : IDisposable
             {
                 var nowUtc = DateTime.UtcNow;
 
+                // 规则可能刚被增删/重建（ID 会变）：每轮刷新一次"我们自己的过滤器 ID"。
+                RefreshOurFilterIds();
+
                 // ---- DNS 快照（决定"域名"这一列）----
                 if (nowUtc >= nextDns)
                 {
@@ -158,6 +180,13 @@ internal sealed class AuditService : IDisposable
                 // ---- 连接轮询（决定"正常连接"）----
                 var snapshot = ConnectionScanner.Scan();
                 var added = _connections.Update(ConnectionTracker.FromSnapshot(snapshot));
+
+                // 有新连接时**立刻再刷一次 DNS**：应用通常是"刚解析完就连"，
+                // 定期快照可能刚好错过；这里补一次，避免把本可识别的域名记成"未知"。
+                if (added.Count > 0)
+                {
+                    _domains.Update(DnsCacheReader.ReadSnapshot(AllowDomainLookup), DateTime.UtcNow);
+                }
 
                 foreach (var connection in added)
                 {
@@ -176,8 +205,7 @@ internal sealed class AuditService : IDisposable
                     });
                 }
 
-                // ---- 每天清理一次过期文件 ----
-                if (DateTime.Now >= _nextPurge)
+                // ---- 每天清理一次过期文件 ----                if (DateTime.Now >= _nextPurge)
                 {
                     var deleted = _store.PurgeExpired(DateTime.Now);
                     if (deleted > 0)
@@ -210,6 +238,17 @@ internal sealed class AuditService : IDisposable
     {
         try
         {
+            // ★ 只记录**我们自己**的过滤器拦下的连接。
+            //   CLASSIFY_DROP 是全局事件，Windows 防火墙和其它安全软件触发的也会进来；
+            //   不过滤的话，就会出现"规则页一条都没有，审计里却一堆拦截"。
+            lock (_filterIdGate)
+            {
+                if (_ourFilterIds is null || !_ourFilterIds.Contains(drop.FilterId))
+                {
+                    return;
+                }
+            }
+
             var (domain, _) = _domains.Resolve(drop.RemoteAddress, DateTime.UtcNow);
             Interlocked.Increment(ref _dropCounter);
 
@@ -234,9 +273,30 @@ internal sealed class AuditService : IDisposable
         }
     }
 
-    private void Write(AuditEvent auditEvent)
+    /// <summary>
+    /// 刷新"本工具自己的过滤器 ID"。
+    /// 失败时保留上一次的结果 —— 不要因为一次读取失败就永久停止记录拦截事件。
+    /// </summary>
+    private void RefreshOurFilterIds()
     {
-        lock (_writeGate)
+        try
+        {
+            var ids = RuleEngine.GetOurFilterIds();
+
+            lock (_filterIdGate)
+            {
+                _ourFilterIds = ids;
+            }
+        }
+        catch (Exception ex)
+        {
+            // 从没成功过时 _ourFilterIds 为 null → 拦截事件一律不记（宁可少记，也不要不准）。
+            LocalLog.Warning($"审计：刷新过滤器 ID 失败（本轮拦截事件可能不记录）：{ex.Message}");
+        }
+    }
+
+    private void Write(AuditEvent auditEvent)
+    {        lock (_writeGate)
         {
             _store.Append(auditEvent);
             Interlocked.Increment(ref _eventsWritten);

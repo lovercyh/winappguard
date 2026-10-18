@@ -4760,6 +4760,7 @@ internal static class Program
 
             CheckAssertion(results, "服务已启动", service.IsRunning);
             W($"    拦截事件订阅 = {(service.DropSubscriptionActive ? "成功" : "未成功（非管理员时会这样）")}");
+            W($"    本工具过滤器 ID = {service.OurFilterIdCount} 个（只有这些 ID 的拦截事件才会被记录）");
 
             if (service.LastError is not null)
             {

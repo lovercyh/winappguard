@@ -3224,6 +3224,10 @@ internal static class Program
             TryGetField<Button>(form, "_whitelistAddButton", out var whitelistAdd)
             && whitelistAdd.Text.Contains("添加程序"));
 
+        CheckAssertion(results, "黑名单页也有「添加程序…」",
+            TryGetField<Button>(form, "_rulesAddButton", out var rulesAdd)
+            && rulesAdd.Text.Contains("添加程序"));
+
         CheckAssertion(results, "白名单页有「清空白名单」且是红色",
             TryGetField<Button>(form, "_whitelistClearButton", out var whitelistClear)
             && whitelistClear.Text.Contains("清空") && whitelistClear.ForeColor.R > 150);
@@ -3241,6 +3245,14 @@ internal static class Program
         W("===== 4. 快捷键 =====");
 
         CheckAssertion(results, "窗体开启了 KeyPreview（否则快捷键收不到）", form.KeyPreview);
+
+        // 严格模式的按钮文字：「恢复默认放行」对用户来说说不清是在关什么，已改成「关闭严格模式」。
+        var staleWording = Descendants<Control>(form)
+            .Select(control => control.Text)
+            .Where(text => text.Contains("恢复默认放行"))
+            .ToList();
+
+        CheckAssertion(results, "界面里不再出现「恢复默认放行」这个说法", staleWording.Count == 0);
 
         // ---------------- 5. 记录页右键菜单 ----------------
         W();
@@ -3399,7 +3411,7 @@ internal static class Program
             // 3) 按钮文字必须在按钮里放得下（缩放后按钮不会自动变宽）。
             foreach (var name in new[]
                      {
-                         "_rulesDeleteButton", "_rulesDeleteAllButton",
+                         "_rulesDeleteButton", "_rulesDeleteAllButton", "_rulesAddButton",
                          "_whitelistAddButton", "_whitelistRemoveButton", "_whitelistClearButton",
                      })
             {

@@ -2406,6 +2406,77 @@ public partial class MainForm : Form
 
     /// <summary>「规则」页：允许选中的规则对应的程序联网。</summary>
     /// <summary>
+    /// 黑名单页「添加程序…」：按路径把一个程序加进黑名单（永久阻止）。
+    ///
+    /// 为什么要有：有些程序只在后台悄悄联网，连接页不一定抓得到；
+    /// 而且白名单页有「添加程序…」，两边对称才不会让人觉得"为什么那边能加、这边不能"。
+    /// </summary>
+    private void OnRulesAddButtonClick(object? sender, EventArgs e)
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "选择要阻止联网的程序",
+            Filter = "程序 (*.exe)|*.exe",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var path = dialog.FileName;
+        var name = Path.GetFileName(path);
+
+        if (ProtectedProcesses.IsProtected(path, out var reason))
+        {
+            MessageBox.Show(
+                this,
+                $"不能阻止「{name}」：{reason}。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "加入黑名单",
+            question: $"确定要阻止「{name}」联网吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("程序名", name),
+                new KeyValuePair<string, string>("完整路径", path),
+                new KeyValuePair<string, string>("生效范围", "出站方向的 TCP 和 UDP 全部阻止（永久）"),
+                new KeyValuePair<string, string>("将创建规则", RuleNaming.BuildBlockRuleName(path)),
+            },
+            warnings: new[]
+            {
+                "确认后该程序会立刻无法联网（已经建立的连接也会断开）。",
+                "这是永久规则，要恢复请回到这一页删除它。",
+                "想限时阻止（30 分钟 / 2 小时 / 下次重启），请到「联网连接」页操作。",
+            },
+            confirmText: "阻止");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            var ruleName = RuleEngine.CreateBlockRule(path);
+            LocalLog.Operation($"加入黑名单：{path}（规则 {ruleName}）");
+            AfterRulesChanged();
+        }
+        catch (Exception ex)
+        {
+            ShowError("加入黑名单失败", ex);
+        }
+    }
+
+    /// <summary>
     /// 弹出确认框，删除某个程序的**阻止**规则（即「允许它联网」）。
     ///
     /// 2.1.2 起只删阻止规则：白名单（允许规则）在「严格模式下白名单」页单独管理，
@@ -3629,7 +3700,7 @@ public partial class MainForm : Form
                 ? $"当前状态：严格模式生效中（放行 {StrictModeManager.PermittedPrograms.Count} 个程序）"
                 : "当前状态：未开启，默认放行";
 
-            _strictModeToggleButton.Text = enabled ? "恢复默认放行" : "开启严格模式…";
+            _strictModeToggleButton.Text = enabled ? "关闭严格模式" : "开启严格模式…";
 
             // 2.0 的严格模式不改任何全局设置，所以不存在"不能开启"的情况。
             _strictModeToggleButton.Enabled = true;
@@ -3660,7 +3731,7 @@ public partial class MainForm : Form
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
-            title: "恢复默认放行",
+            title: "关闭严格模式",
             question: "确定要关闭严格模式吗？",
             details: new[]
             {
@@ -3673,7 +3744,7 @@ public partial class MainForm : Form
                 "白名单（AppGuard_Allow_ 规则）不会被删，下次开启严格模式时直接生效。",
                 "不会修改 Windows 防火墙的任何设置。",
             },
-            confirmText: "恢复默认放行");
+            confirmText: "关闭严格模式");
 
         if (!confirmed)
         {

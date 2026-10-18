@@ -65,6 +65,7 @@ partial class MainForm
     private Button _rulesRefreshButton = null!;
     private Label _rulesSummaryLabel = null!;
     private Button _rulesDeleteButton = null!;
+    private Button _rulesAddButton = null!;
     private Button _rulesDeleteAllButton = null!;
     private Label _rulesHintLabel = null!;
     private TextBox _rulesSearchBox = null!;
@@ -206,6 +207,7 @@ partial class MainForm
         _rulesRefreshButton = new Button();
         _rulesSummaryLabel = new Label();
         _rulesDeleteButton = new Button();
+        _rulesAddButton = new Button();
         _rulesDeleteAllButton = new Button();
         _rulesHintLabel = new Label();
         _rulesSearchBox = new TextBox();
@@ -614,6 +616,7 @@ partial class MainForm
         _rulesToolPanel.Controls.Add(_rulesRefreshButton);
         _rulesToolPanel.Controls.Add(_rulesSummaryLabel);
         _rulesToolPanel.Controls.Add(_rulesDeleteButton);
+        _rulesToolPanel.Controls.Add(_rulesAddButton);
         _rulesToolPanel.Controls.Add(_rulesDeleteAllButton);
         _rulesToolPanel.Controls.Add(_rulesHintLabel);
         _rulesToolPanel.Controls.Add(_rulesSearchBox);
@@ -643,6 +646,16 @@ partial class MainForm
         _rulesDeleteButton.UseVisualStyleBackColor = true;
         _rulesDeleteButton.Click += OnRulesDeleteButtonClick;
 
+        // 黑名单也支持按路径添加（白名单有"添加程序…"，两边对称；
+        // 有些程序只在后台悄悄联网，连接页里未必抓得到它）。
+        _rulesAddButton.Location = new Point(168, 42);
+        _rulesAddButton.Name = "_rulesAddButton";
+        _rulesAddButton.Size = new Size(140, 28);
+        _rulesAddButton.TabIndex = 7;
+        _rulesAddButton.Text = "添加程序…";
+        _rulesAddButton.UseVisualStyleBackColor = true;
+        _rulesAddButton.Click += OnRulesAddButtonClick;
+
         // ⚠️ 这是不可撤销的批量操作：和普通按钮分开摆（挪到第一行最右）、用红色文字，
         //    避免手一滑就把所有规则删光。确认框里仍会列出条数并要求两次确认。
         _rulesDeleteAllButton.ForeColor = Color.FromArgb(180, 30, 30);
@@ -656,7 +669,7 @@ partial class MainForm
 
         _rulesHintLabel.AutoSize = true;
         _rulesHintLabel.ForeColor = SystemColors.GrayText;
-        _rulesHintLabel.Location = new Point(168, 47);
+        _rulesHintLabel.Location = new Point(320, 47);
         _rulesHintLabel.Name = "_rulesHintLabel";
         _rulesHintLabel.Size = new Size(300, 17);
         _rulesHintLabel.TabIndex = 5;

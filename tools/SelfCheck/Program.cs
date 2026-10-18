@@ -125,7 +125,8 @@ internal static class Program
                          && !args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-live-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -212,6 +213,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuditUiTest();
             }
             else if (args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4901,6 +4906,87 @@ internal static class Program
         }
 
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 审计页结构自检：确认页签里**真的有控件**（曾经出现过"只有页签、内容是空的"——
+    /// 原因是构造器里的初始化调用漏掉了，而编译和界面其它自检都发现不了）。
+    ///
+    /// 不显示窗口、不启动后台服务，纯结构检查。
+    /// </summary>
+    private static void RunAuditUiTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   审计页结构（页签里必须有工具条、表格、开关）                 #");
+        W("################################################################");
+        W();
+
+        MainForm.SuppressBackgroundServices = true;
+
+        using var form = new MainForm(isAutostart: false);
+
+        if (!TryGetField<TabPage>(form, "_tabAudit", out var tab))
+        {
+            CheckAssertion(results, "找得到 _tabAudit", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    页签文本 = {tab.Text}，直接子控件 = {tab.Controls.Count}");
+
+        foreach (Control child in tab.Controls)
+        {
+            W($"      {child.GetType().Name}  Dock={child.Dock}  Size={child.Size}");
+        }
+
+        CheckAssertion(results, "页签标题是「审计」", tab.Text == "审计");
+        CheckAssertion(results, "页签里有直接子控件（工具条 / 表格 / 底栏）", tab.Controls.Count >= 3);
+
+        var grids = Descendants<DataGridView>(tab).ToList();
+        W($"    表格数量 = {grids.Count}");
+
+        CheckAssertion(results, "页签里有表格", grids.Count == 1);
+        CheckAssertion(results, "表格有 6 列", grids.Count == 1 && grids[0].Columns.Count == 6);
+
+        if (grids.Count == 1)
+        {
+            var headers = string.Join(" | ", grids[0].Columns.Cast<DataGridViewColumn>().Select(column => column.HeaderText));
+            W($"    列标题 = {headers}");
+            CheckAssertion(results, "列标题包含「域名」和「命中规则」",
+                headers.Contains("域名") && headers.Contains("命中规则"));
+        }
+
+        var checkBoxes = Descendants<CheckBox>(tab).Select(box => box.Text).ToList();
+        W($"    复选框 = {string.Join(" / ", checkBoxes)}");
+
+        CheckAssertion(results, "有「记录审计」开关", checkBoxes.Any(text => text.Contains("记录审计")));
+        CheckAssertion(results, "有「域名推测」开关", checkBoxes.Any(text => text.Contains("域名推测")));
+        CheckAssertion(results, "有「只看拦截」开关", checkBoxes.Any(text => text.Contains("只看拦截")));
+
+        var buttons = Descendants<Button>(tab).Select(button => button.Text).ToList();
+        W($"    按钮 = {string.Join(" / ", buttons)}");
+        CheckAssertion(results, "有「清空」按钮", buttons.Any(text => text.Contains("清空")));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>递归找出某类型的所有子控件。</summary>
+    private static IEnumerable<T> Descendants<T>(Control root) where T : Control
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var nested in Descendants<T>(child))
+            {
+                yield return nested;
+            }
+        }
     }
 
     /// <summary>子层是否已经不存在（只读判断，不抛异常）。</summary>

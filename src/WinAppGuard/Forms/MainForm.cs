@@ -256,6 +256,8 @@ public partial class MainForm : Form
         _expiryTimer.Interval = AppConstants.ExpiredRuleCheckIntervalMs;
         SetupConnectionGrid();
         SetupRulesGrid();
+        InitializeAuditPage();
+        StartAuditIfEnabled();
 
         // 列宽用「预览线」拖动（自带的实时拖动在慢机器上会卡，见 GridColumnResizer）。
         _columnResizer = new GridColumnResizer(_connectionGrid);
@@ -388,6 +390,12 @@ public partial class MainForm : Form
             HideToTray();
             return;
         }
+
+        // 真正退出：停掉审计后台线程（它会刷盘并关闭文件）。
+        StopAuditService();
+        _auditTimer?.Stop();
+        _auditTimer?.Dispose();
+        _auditStore.Dispose();
 
         base.OnFormClosing(e);
     }

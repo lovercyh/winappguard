@@ -33,6 +33,14 @@
 - 已知程序表存 `%LOCALAPPDATA%\WinAppGuard\known-programs.json`，
   只含**程序路径与决定**，不含任何网络信息；文件损坏时按空表处理（最多重问一次）。
 
+### 已修正
+
+- **自检工具的报告文件改为带 BOM 的 UTF-8**：没有 BOM 时，中文 Windows 上
+  PowerShell 的 `Get-Content` 与记事本会按系统 ANSI 代码页解码，报告整篇乱码。
+  （控制台输出**被重定向**时仍可能乱码 —— 那是 PowerShell 5.1 的解码方式决定的，
+  与本源码无关；这种情况请直接看报告文件，或先执行
+  `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`。)
+
 ## [2.1.0] - 2026-10-18
 
 > 新增「记录」页：看清**过去一段时间谁连了谁、有没有被拦**。

@@ -91,6 +91,14 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // ⚠️ 固定成 UTF-8 有一个已知的坑（不修，但必须知道）：
+        //    **被重定向**时（`| Out-File`、`> 文件`），解码方是父进程 PowerShell 5.1，
+        //    它按自己启动时的 [Console]::OutputEncoding（中文系统 = GBK）解码，
+        //    而我们吐的是 UTF-8 → 全篇乱码（VM 实测）。
+        //    为什么不在程序里改成"按控制台代码页输出"：那需要 System.Text.Encoding.CodePages
+        //    提供的 GBK 编码器，而本项目的硬线是"不引第三方库 + 出厂审计要能证明引用清单稳定"。
+        //    正确做法在**调用方**：要么先 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`，
+        //    要么直接看我们写的**带 BOM 的报告文件**（Get-Content / 记事本能正确识别）。
         Console.OutputEncoding = Encoding.UTF8;
 
         var noPause = args.Contains("--no-pause", StringComparer.OrdinalIgnoreCase);
@@ -6858,9 +6866,20 @@ internal static class Program
         {
             var directory = AppContext.BaseDirectory;
             var path = Path.Combine(directory, "WinAppGuard-自检报告.txt");
-            File.WriteAllText(path, Report.ToString(), Encoding.UTF8);
+
+            // ⚠️ 必须带 BOM：PowerShell 5.1 的 Get-Content / 记事本靠 BOM 判断 UTF-8，
+            //    没有 BOM 时会按系统 ANSI 代码页（中文系统是 GBK）解码 → 全篇乱码。
+            File.WriteAllText(path, Report.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
             Console.WriteLine();
             Console.WriteLine($"报告已保存到：{path}");
+
+            // 纯 ASCII 的一行：万一上面中文是乱码（输出被重定向、父进程用 GBK 解码），
+            // 这行还能看懂，并指向能正确显示中文的报告文件。
+            if (Console.IsOutputRedirected)
+            {
+                Console.WriteLine("  [note] output was redirected; if the Chinese text above looks garbled,");
+                Console.WriteLine("         read the report file above instead (it is UTF-8 with BOM).");
+            }
         }
         catch (Exception ex)
         {

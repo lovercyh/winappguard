@@ -47,6 +47,16 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
   kind (connect / blocked), process, remote endpoint, **domain (guessed)**, and **which rule
   matched**; search, blocked-only filter, one-click clear. Stored locally only, kept for 7 days,
   enabled by default.
+- **Block an IP** — pick a connection on the *Records* page and hit *Block this IP*, or type one
+  in manually. The rule matches the **remote IP** (IPv4 / IPv6) and does **not** go through DNS
+  resolution, so other services on the same IP are blocked as well.
+- **New-program prompt** — the **first** time a program goes online, a small dialog offers
+  *Allow / Ignore / Block / Later*. On by default, and can be turned off on the *Records* page
+  (recording continues; only the prompt stops). *Block* creates an ordinary program block rule
+  that you can delete on the *Rules* page.
+- **Learning mode** — start it on the *Records* page (30 min / 1 hour / 2 hours / until you stop it).
+  During that window WinAppGuard **only records, never prompts**; when it ends you get a summary of
+  the programs seen for the first time, tick the ones to block, and the rest count as allowed.
 - **Optionally auto-starts at logon**, to the system tray.
 - **Every rule lands in a dedicated WFP sublayer with a fixed GUID** — manage them on the *Rules*
   page; `wf.msc` will not show them (it only lists Windows Firewall's own rules).

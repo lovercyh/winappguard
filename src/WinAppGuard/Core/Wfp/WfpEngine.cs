@@ -181,7 +181,8 @@ internal sealed class WfpEngine : IDisposable
         string? Name,
         string? Description,
         Guid LayerKey,
-        uint ActionType);
+        uint ActionType,
+        ulong FilterId);
 
     /// <summary>
     /// 列出本子层下的所有过滤器。
@@ -238,7 +239,8 @@ internal sealed class WfpEngine : IDisposable
                             Marshal.PtrToStringUni(filter.DisplayData.Name),
                             Marshal.PtrToStringUni(filter.DisplayData.Description),
                             filter.LayerKey,
-                            filter.Action.Type));
+                            filter.Action.Type,
+                            filter.FilterId));
                     }
                 }
                 finally

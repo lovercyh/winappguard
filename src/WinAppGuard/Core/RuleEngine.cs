@@ -132,6 +132,31 @@ internal static class RuleEngine
         return removed;
     }
 
+    /// <summary>
+    /// 过滤器 ID → 规则名 的映射。
+    ///
+    /// 审计里的"拦截"事件带的是 WFP 的 **filterId**（不是规则名）。
+    /// 一条规则在 V4/V6 各有一条过滤器，两个 ID 都映射到同一个规则名。
+    /// </summary>
+    internal static Dictionary<ulong, string> GetFilterIdToRuleName()
+    {
+        var map = new Dictionary<ulong, string>();
+
+        using var engine = OpenEngine();
+
+        foreach (var filter in engine.ListOurFilters())
+        {
+            if (filter.FilterId == 0 || !WfpRule.TryParse(filter.Description, out var rule))
+            {
+                continue;
+            }
+
+            map[filter.FilterId] = rule.DisplayName;
+        }
+
+        return map;
+    }
+
     /// <summary>当前「允许联网」规则覆盖的程序路径（严格模式白名单用）。</summary>
     internal static List<string> GetAllowRulePrograms()
         => GetRules()

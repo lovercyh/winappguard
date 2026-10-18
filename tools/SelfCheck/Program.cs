@@ -3698,6 +3698,11 @@ internal static class Program
                 // 专门钉住一类错误：过滤器加进去了，但说明字段没写进去 ——
                 // 那时"写入成功"却"读回 0 条规则"，症状很迷惑。
                 var stored = engine.ListOurFilters();
+                var idMap = RuleEngine.GetFilterIdToRuleName();
+                W($"    过滤器 ID → 规则名：{idMap.Count} 条");
+                CheckAssertion(results, "两条过滤器的 ID 都能映射回规则名",
+                    idMap.Count >= 2 && idMap.Values.All(name => name == blockRule.DisplayName));
+
                 CheckAssertion(results, "两条过滤器的说明字段里都存着规则内容",
                     stored.Count == 2 && stored.All(filter => WfpRule.TryParse(filter.Description, out _)));
                 CheckAssertion(results, "显示名称也已写入",

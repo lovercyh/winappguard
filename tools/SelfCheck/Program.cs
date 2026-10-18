@@ -945,7 +945,9 @@ internal static class Program
 
         try
         {
-            form = new MainForm(isAutostart: false);
+            // 自检只量布局：禁止启动任何后台服务（否则会写真实审计目录）。
+        MainForm.SuppressBackgroundServices = true;
+        form = new MainForm(isAutostart: false);
 
             // 跳过运行期初始化：否则 OnLoad 会去读防火墙规则（需要管理员）并真的扫描一遍。
             // 这里只关心布局，不需要那些东西。
@@ -1140,7 +1142,9 @@ internal static class Program
 
         try
         {
-            form = new MainForm(isAutostart: false);
+            // 自检只量布局：禁止启动任何后台服务（否则会写真实审计目录）。
+        MainForm.SuppressBackgroundServices = true;
+        form = new MainForm(isAutostart: false);
 
             if (!TrySetField(form, "_runtimeInitialized", true))
             {

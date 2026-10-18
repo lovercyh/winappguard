@@ -73,6 +73,7 @@ partial class MainForm
 
     // ---------- 页三：设置 ----------
     private TabPage _tabSettings = null!;
+    private TabPage _tabAudit = null!;
 
     private Label _settingsNoticeLabel = null!;
     private GroupBox _autostartPanel = null!;
@@ -193,6 +194,7 @@ partial class MainForm
         _rulesDeleteAllButton = new Button();
         _rulesHintLabel = new Label();
         _rulesGrid = new DataGridViewBuffered();
+        _tabAudit = new TabPage();
         _tabSettings = new TabPage();
         _settingsNoticeLabel = new Label();
         _autostartPanel = new GroupBox();
@@ -295,6 +297,11 @@ partial class MainForm
             "说明：只在专属子层里创建和删除本工具的过滤器，不修改 Windows 防火墙的任何设置" +
             "（严格模式只在本进程内生效）；默认会联网查 IP 归属与证书吊销，都能在「设置」页关闭。";
 
+        _tabAudit.Name = "_tabAudit";
+        _tabAudit.Padding = new Padding(3);
+        _tabAudit.Text = "审计";
+        _tabAudit.UseVisualStyleBackColor = true;
+
         // ==================================================================
         // 标签页容器
         // ==================================================================
@@ -302,6 +309,7 @@ partial class MainForm
         _tabControl.Controls.Add(_tabConnections);
         _tabControl.Controls.Add(_tabRules);
         _tabControl.Controls.Add(_tabSettings);
+        _tabControl.Controls.Add(_tabAudit);
         _tabControl.Location = new Point(24, 104);
         _tabControl.Name = "_tabControl";
         _tabControl.SelectedIndex = 0;

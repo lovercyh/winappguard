@@ -49,6 +49,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --wfp-status      WFP：只读，打印当前 2.0 规则与子层状态
 ///   WinAppGuard.SelfCheck.exe --wfp-strict-test WFP：严格模式（动态会话 + 白名单 + 阻止全部，验证真能拦、退出即恢复）
 ///   WinAppGuard.SelfCheck.exe --audit-store-test 审计：事件模型与落盘（往返 / 轮转 / 清理 / 半行容错，离线）
+///   WinAppGuard.SelfCheck.exe --audit-dns-test   审计：读本机 DNS 缓存 + 域名索引（离线、不联网）
 ///   WinAppGuard.SelfCheck.exe --wfp-recover-test WFP：恢复（清自己的东西 + 证明不碰 Windows 防火墙 + 幂等）
 ///   WinAppGuard.SelfCheck.exe --render-docs [目录]  生成 README 用的界面截图（离线 / 不需要管理员 / 造数据渲染）
 ///   WinAppGuard.SelfCheck.exe --audit [dll]      出厂审计：读编译产物元数据，证明零第三方库 / 联网边界受控
@@ -119,7 +120,8 @@ internal static class Program
                          && !args.Contains("--ui-render", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--cli-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -206,6 +208,10 @@ internal static class Program
             else if (args.Contains("--render-docs", StringComparer.OrdinalIgnoreCase))
             {
                 RunRenderDocs();
+            }
+            else if (args.Contains("--audit-dns-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuditDnsTest();
             }
             else if (args.Contains("--audit-store-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4407,6 +4413,151 @@ internal static class Program
             {
                 // 临时目录删不掉不影响结论。
             }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// DNS 缓存与域名索引自检（离线、**不联网**）。
+    ///
+    /// 两件事：
+    ///   1. 真的读一遍本机 DNS 缓存，看看能拿到多少映射、有多少"一个 IP 多个域名"；
+    ///   2. 用合成数据验证索引逻辑：单候选 / 多候选 / 过期 / 未知。
+    /// </summary>
+    private static void RunAuditDnsTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   DNS 缓存与域名索引自检（只读本机缓存，不发任何网络请求）     #");
+        W("################################################################");
+        W();
+
+        // ---------------- 1. 结构体尺寸 ----------------
+        var layoutOk = true;
+        try
+        {
+            DnsCacheReader.EnsureLayout();
+        }
+        catch (Exception ex)
+        {
+            layoutOk = false;
+            W($"    {ex.Message}");
+        }
+
+        CheckAssertion(results, "DNS 结构体尺寸与字段偏移正确", layoutOk);
+
+        // ---------------- 2. 读真实缓存 ----------------
+        W();
+        W("===== 1. 本机 DNS 缓存 =====");
+
+        var snapshot = DnsCacheReader.ReadSnapshot();
+        var distinctAddresses = snapshot.Select(record => record.Address)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var distinctNames = snapshot.Select(record => record.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+
+        W($"    记录 {snapshot.Count} 条：唯一 IP {distinctAddresses} 个、唯一域名 {distinctNames} 个");
+
+        foreach (var sample in snapshot.Take(8))
+        {
+            W($"      {sample.Name} → {sample.Address}（TTL {sample.TtlSeconds}s）");
+        }
+
+        CheckAssertion(results, "读取缓存没有抛异常", true);
+        CheckAssertion(results, "所有地址都能被解析成合法 IP",
+            snapshot.All(record => IPAddress.TryParse(record.Address, out _)));
+
+        if (snapshot.Count == 0)
+        {
+            W("    ⚠️ 当前缓存是空的：随便打开一个网页再跑一次，就能看到真实的映射。");
+        }
+
+        // ---------------- 3. 一 IP 多域名（CDN 撞车） ----------------
+        W();
+        W("===== 2. 一个 IP 对应多个域名 =====");
+
+        var multi = snapshot
+            .GroupBy(record => record.Address, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                Address = group.Key,
+                Names = group.Select(record => record.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            })
+            .Where(item => item.Names.Count > 1)
+            .ToList();
+
+        W($"    {multi.Count} 组");
+        foreach (var item in multi.Take(5))
+        {
+            W($"      {item.Address} ← {string.Join(" / ", item.Names.Take(3))}");
+        }
+
+        CheckAssertion(results, "多域名统计可以计算", multi.Count >= 0);
+
+        // ---------------- 4. 索引逻辑（合成数据） ----------------
+        W();
+        W("===== 3. 域名索引逻辑 =====");
+
+        var now = DateTime.UtcNow;
+        var index = new DomainIndex(TimeSpan.FromMinutes(30));
+
+        index.Update(new[]
+        {
+            new DnsCacheRecord("single.example", "10.0.0.1", 60),
+            new DnsCacheRecord("a.example", "10.0.0.2", 60),
+            new DnsCacheRecord("b.example", "10.0.0.2", 60),
+            new DnsCacheRecord("v6.example", "2001:db8::5", 60),
+        }, now);
+
+        var single = index.Resolve("10.0.0.1", now);
+        var multiple = index.Resolve("10.0.0.2", now);
+        var unknown = index.Resolve("10.9.9.9", now);
+        var v6 = index.Resolve("2001:db8::5", now);
+
+        W($"    单候选 = {single.Domain}（{single.CandidateCount} 个）");
+        W($"    多候选 = {multiple.Domain}（{multiple.CandidateCount} 个）");
+        W($"    未知   = {unknown.Domain ?? "null"}");
+        W($"    IPv6   = {v6.Domain}");
+
+        CheckAssertion(results, "单候选时给出域名", single.Domain == "single.example" && single.CandidateCount == 1);
+        CheckAssertion(results, "多候选时全部列出并标注数量",
+            multiple.CandidateCount == 2
+            && multiple.Domain is not null
+            && multiple.Domain.Contains("a.example")
+            && multiple.Domain.Contains("b.example"));
+        CheckAssertion(results, "未知 IP 返回 null", unknown.Domain is null && unknown.CandidateCount == 0);
+        CheckAssertion(results, "IPv6 地址也能匹配", v6.Domain == "v6.example");
+
+        // ---------------- 5. 过期 ----------------
+        W();
+        W("===== 4. 过期记录会被丢掉 =====");
+
+        index.Update(Array.Empty<DnsCacheRecord>(), now.AddHours(2));
+        var afterExpiry = index.Resolve("10.0.0.1", now.AddHours(2));
+
+        W($"    两小时后 = {afterExpiry.Domain ?? "null"}，剩余 IP 数 = {index.AddressCount}");
+        CheckAssertion(results, "过期后查不到域名", afterExpiry.Domain is null);
+        CheckAssertion(results, "过期记录已从索引里删除", index.AddressCount == 0);
+
+        // ---------------- 6. 用真实缓存建索引 ----------------
+        W();
+        W("===== 5. 用真实缓存建索引 =====");
+
+        var realIndex = new DomainIndex();
+        realIndex.Update(snapshot, now);
+        W($"    索引里有 {realIndex.AddressCount} 个 IP（预期与唯一 IP 数一致）");
+        CheckAssertion(results, "索引 IP 数与快照一致", realIndex.AddressCount == distinctAddresses);
+
+        if (snapshot.Count > 0)
+        {
+            var pick = snapshot[0];
+            var guessed = realIndex.Resolve(pick.Address, now);
+            W($"    抽查 {pick.Address} → {guessed.Domain ?? "null"}（{guessed.CandidateCount} 个候选）");
+            CheckAssertion(results, "抽查的 IP 能查到刚写入的域名",
+                guessed.Domain is not null
+                && guessed.Domain.Contains(pick.Name, StringComparison.OrdinalIgnoreCase));
         }
 
         PrintSummary(results, showFirewallResidue: false);

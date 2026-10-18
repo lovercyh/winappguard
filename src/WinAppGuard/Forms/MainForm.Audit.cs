@@ -27,6 +27,9 @@ public sealed partial class MainForm
     private AuditService? _auditService;
     private bool _loadingAuditSettings;
 
+    /// <summary>上一次重建表格时的"数据签名"。相同就不再重建（避免每 3 秒打断用户选中/滚动）。</summary>
+    private string? _auditLastSignature;
+
     /// <summary>
     /// 自检工具构造窗体时置 true：不启动后台服务、不写真实审计目录。
     /// （ui-check 只是量布局，不应该产生副作用。）
@@ -321,6 +324,21 @@ public sealed partial class MainForm
             var keyword = _auditSearchBox.Text.Trim();
             var blockedOnly = _auditBlockedOnlyCheck.Checked;
 
+            // 数据没变就不重建：每 3 秒重建一次会把用户的选中和滚动位置打断。
+            var lastTicks = events.Count > 0 ? events[^1].TimeUtc.Ticks : 0;
+            var signature = $"{events.Count}|{lastTicks}|{keyword}|{blockedOnly}|{_auditService is null}";
+
+            if (string.Equals(signature, _auditLastSignature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            // 重建前记下当前选中的是哪一条（用内容做 key，行号会变）。
+            var selectedKey = _auditGrid.SelectedRows.Count > 0
+                              && _auditGrid.SelectedRows[0].Tag is AuditRow selectedRow
+                ? selectedRow.Detail
+                : null;
+
             var rows = new List<AuditRow>();
 
             // ReadRecent 返回时间正序，这里倒过来显示最新的在上面。
@@ -385,6 +403,21 @@ public sealed partial class MainForm
 
                     _auditGrid.Rows[index].Tag = row;
                 }
+
+                // 恢复之前的选中（按内容匹配）；找不到就不选，避免自动跳到第一行。
+                _auditGrid.ClearSelection();
+
+                if (selectedKey is not null)
+                {
+                    foreach (DataGridViewRow gridRow in _auditGrid.Rows)
+                    {
+                        if (gridRow.Tag is AuditRow candidate && candidate.Detail == selectedKey)
+                        {
+                            gridRow.Selected = true;
+                            break;
+                        }
+                    }
+                }
             }
             finally
             {
@@ -399,6 +432,7 @@ public sealed partial class MainForm
                 $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
                 (_auditService is null ? " · 记录未开启" : " · 记录中");
 
+            _auditLastSignature = signature;
             UpdateAuditDetail();
         }
         catch (Exception ex)

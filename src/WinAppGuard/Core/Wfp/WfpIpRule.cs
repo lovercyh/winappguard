@@ -32,7 +32,7 @@ internal sealed record WfpIpRule
     internal IPAddress ToIPAddress() => IPAddress.Parse(Address);
 
     /// <summary>显示名称，例如 AppGuard_BlockIp_216.31.12.15。</summary>
-    internal string DisplayName => $"{AppConstants.RulePrefixBlock}Ip_{Address}";
+    internal string DisplayName => $"{AppConstants.RulePrefix}BlockIp_{Address}";
 
     /// <summary>写进过滤器说明字段的机器可读串。</summary>
     internal string Description => string.Join(Separator, Marker, Version, Kind, Address, string.Empty);

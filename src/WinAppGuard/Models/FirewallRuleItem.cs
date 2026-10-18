@@ -67,9 +67,19 @@ public sealed class FirewallRuleItem
     /// <summary>协议的显示文本。</summary>
     public string ProtocolText => Protocol == 256 ? "任意" : Protocol.ToString();
 
-    /// <summary>程序名的显示文本（只取文件名，路径太长不适合放在表格里）。</summary>
+    /// <summary>
+    /// 程序名的显示文本（只取文件名，路径太长不适合放在表格里）。
+    /// 对「封禁 IP」规则显示 IP 本身。
+    /// </summary>
     public string ApplicationNameText =>
         !string.IsNullOrEmpty(IpAddress)
             ? IpAddress
             : string.IsNullOrEmpty(ApplicationPath) ? "（所有程序）" : Path.GetFileName(ApplicationPath);
+
+    /// <summary>
+    /// 这条规则拦的是「程序」还是「IP」。
+    /// 黑名单页把两类规则放在一起，必须让用户一眼看出区别 ——
+    /// 「解除阻止」对程序是恢复联网，对 IP 是解除封禁，含义并不一样。
+    /// </summary>
+    public string RuleKindText => string.IsNullOrEmpty(IpAddress) ? "程序" : "IP";
 }

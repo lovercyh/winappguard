@@ -64,13 +64,27 @@ partial class MainForm
     private Panel _rulesToolPanel = null!;
     private Button _rulesRefreshButton = null!;
     private Label _rulesSummaryLabel = null!;
-    private Button _rulesAllowButton = null!;
     private Button _rulesDeleteButton = null!;
     private Button _rulesDeleteAllButton = null!;
     private Label _rulesHintLabel = null!;
     private TextBox _rulesSearchBox = null!;
 
     private DataGridViewBuffered _rulesGrid = null!;
+
+    // ---------- 页三：严格模式下白名单 ----------
+    private TabPage _tabWhitelist = null!;
+
+    private Label _whitelistNoticeLabel = null!;
+    private Panel _whitelistToolPanel = null!;
+    private Button _whitelistRefreshButton = null!;
+    private Label _whitelistSummaryLabel = null!;
+    private TextBox _whitelistSearchBox = null!;
+    private Button _whitelistRemoveButton = null!;
+    private Button _whitelistAddButton = null!;
+    private Label _whitelistHintLabel = null!;
+    private Button _whitelistClearButton = null!;
+
+    private DataGridViewBuffered _whitelistGrid = null!;
 
     // ---------- 页三：设置 ----------
     private TabPage _tabSettings = null!;
@@ -160,6 +174,7 @@ partial class MainForm
         _tabControl = new TabControl();
         _tabConnections = new TabPage();
         _tabRules = new TabPage();
+        _tabWhitelist = new TabPage();
         _toolPanel = new Panel();
         _toolRowFilters = new FlowLayoutPanel();
         _toolRowActions = new FlowLayoutPanel();
@@ -190,12 +205,21 @@ partial class MainForm
         _rulesToolPanel = new Panel();
         _rulesRefreshButton = new Button();
         _rulesSummaryLabel = new Label();
-        _rulesAllowButton = new Button();
         _rulesDeleteButton = new Button();
         _rulesDeleteAllButton = new Button();
         _rulesHintLabel = new Label();
         _rulesSearchBox = new TextBox();
         _rulesGrid = new DataGridViewBuffered();
+        _whitelistNoticeLabel = new Label();
+        _whitelistToolPanel = new Panel();
+        _whitelistRefreshButton = new Button();
+        _whitelistSummaryLabel = new Label();
+        _whitelistSearchBox = new TextBox();
+        _whitelistRemoveButton = new Button();
+        _whitelistAddButton = new Button();
+        _whitelistHintLabel = new Label();
+        _whitelistClearButton = new Button();
+        _whitelistGrid = new DataGridViewBuffered();
         _tabAudit = new TabPage();
         _tabSettings = new TabPage();
         _settingsNoticeLabel = new Label();
@@ -312,8 +336,9 @@ partial class MainForm
         _tabControl.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _tabControl.Controls.Add(_tabConnections);
         _tabControl.Controls.Add(_tabRules);
-        _tabControl.Controls.Add(_tabSettings);
+        _tabControl.Controls.Add(_tabWhitelist);
         _tabControl.Controls.Add(_tabAudit);
+        _tabControl.Controls.Add(_tabSettings);
         _tabControl.Location = new Point(24, 104);
         _tabControl.Name = "_tabControl";
         _tabControl.SelectedIndex = 0;
@@ -570,7 +595,7 @@ partial class MainForm
         // ==================================================================
         _tabRules.Padding = new Padding(9);
         _tabRules.Name = "_tabRules";
-        _tabRules.Text = "规则";
+        _tabRules.Text = "黑名单";
         _tabRules.UseVisualStyleBackColor = true;
 
         // 这一段说明是专门为了回答「我阻止了 chrome，为什么列表里找不到它了」。
@@ -580,7 +605,7 @@ partial class MainForm
         _rulesNoticeLabel.Name = "_rulesNoticeLabel";
         _rulesNoticeLabel.Padding = new Padding(0, 2, 0, 0);
         _rulesNoticeLabel.Text = "被阻止的程序不会出现在「联网连接」页里 —— 它连不上网，自然也就没有连接。\r\n" +
-                                 "所以恢复联网请一定在这一页操作：选中要恢复的程序，点「解除阻止（允许联网）」。";
+                                 "要恢复联网：在这里删除对应的规则（封禁 IP 的规则也在这里，类型列会标出来）。";
         _rulesNoticeLabel.TextAlign = ContentAlignment.TopLeft;
 
         _rulesToolPanel.Dock = DockStyle.Top;
@@ -588,7 +613,6 @@ partial class MainForm
         _rulesToolPanel.Name = "_rulesToolPanel";
         _rulesToolPanel.Controls.Add(_rulesRefreshButton);
         _rulesToolPanel.Controls.Add(_rulesSummaryLabel);
-        _rulesToolPanel.Controls.Add(_rulesAllowButton);
         _rulesToolPanel.Controls.Add(_rulesDeleteButton);
         _rulesToolPanel.Controls.Add(_rulesDeleteAllButton);
         _rulesToolPanel.Controls.Add(_rulesHintLabel);
@@ -610,19 +634,10 @@ partial class MainForm
         _rulesSummaryLabel.TabIndex = 1;
         _rulesSummaryLabel.Text = "规则共 0 条";
 
-        _rulesAllowButton.Enabled = false;
-        _rulesAllowButton.Location = new Point(0, 42);
-        _rulesAllowButton.Name = "_rulesAllowButton";
-        _rulesAllowButton.Size = new Size(160, 28);
-        _rulesAllowButton.TabIndex = 2;
-        _rulesAllowButton.Text = "解除阻止（允许联网）";
-        _rulesAllowButton.UseVisualStyleBackColor = true;
-        _rulesAllowButton.Click += OnRulesAllowButtonClick;
-
         _rulesDeleteButton.Enabled = false;
-        _rulesDeleteButton.Location = new Point(168, 42);
+        _rulesDeleteButton.Location = new Point(0, 42);
         _rulesDeleteButton.Name = "_rulesDeleteButton";
-        _rulesDeleteButton.Size = new Size(130, 28);
+        _rulesDeleteButton.Size = new Size(160, 28);
         _rulesDeleteButton.TabIndex = 3;
         _rulesDeleteButton.Text = "删除选中规则";
         _rulesDeleteButton.UseVisualStyleBackColor = true;
@@ -635,13 +650,13 @@ partial class MainForm
         _rulesDeleteAllButton.Name = "_rulesDeleteAllButton";
         _rulesDeleteAllButton.Size = new Size(200, 28);
         _rulesDeleteAllButton.TabIndex = 4;
-        _rulesDeleteAllButton.Text = "删除全部 AppGuard 规则";
+        _rulesDeleteAllButton.Text = "清空黑名单";
         _rulesDeleteAllButton.UseVisualStyleBackColor = true;
         _rulesDeleteAllButton.Click += OnRulesDeleteAllButtonClick;
 
         _rulesHintLabel.AutoSize = true;
         _rulesHintLabel.ForeColor = SystemColors.GrayText;
-        _rulesHintLabel.Location = new Point(306, 47);
+        _rulesHintLabel.Location = new Point(168, 47);
         _rulesHintLabel.Name = "_rulesHintLabel";
         _rulesHintLabel.Size = new Size(300, 17);
         _rulesHintLabel.TabIndex = 5;
@@ -683,6 +698,127 @@ partial class MainForm
         _tabRules.Controls.Add(_rulesGrid);
         _tabRules.Controls.Add(_rulesToolPanel);
         _tabRules.Controls.Add(_rulesNoticeLabel);
+
+        // ==================================================================
+        // 页三：严格模式下白名单
+        //
+        // 为什么单独一页（而不是和黑名单挤在「规则」页里）：
+        //   黑名单 = "谁不许上网"，随时生效；白名单 = "严格模式下谁可以上网"，
+        //   只有在严格模式开着的时候才有意义。混在一张表里，用户根本分不清
+        //   "删除这条规则"到底是解除了阻止，还是把它踢出了白名单。
+        // ==================================================================
+        _tabWhitelist.Padding = new Padding(9);
+        _tabWhitelist.Name = "_tabWhitelist";
+        _tabWhitelist.Text = "严格模式下白名单";
+        _tabWhitelist.UseVisualStyleBackColor = true;
+
+        _whitelistNoticeLabel.Dock = DockStyle.Top;
+        _whitelistNoticeLabel.ForeColor = Color.FromArgb(191, 87, 0);
+        _whitelistNoticeLabel.Height = 64;
+        _whitelistNoticeLabel.Name = "_whitelistNoticeLabel";
+        _whitelistNoticeLabel.Padding = new Padding(0, 2, 0, 0);
+        _whitelistNoticeLabel.Text = "白名单只在「严格模式」下起作用：严格模式开着时，只有这里列出的程序" +
+                                     "（以及系统必需程序）能上网。\r\n" +
+                                     "严格模式没开时，这些规则不会限制任何东西。";
+        _whitelistNoticeLabel.TextAlign = ContentAlignment.TopLeft;
+
+        _whitelistToolPanel.Dock = DockStyle.Top;
+        _whitelistToolPanel.Height = 76;
+        _whitelistToolPanel.Name = "_whitelistToolPanel";
+        _whitelistToolPanel.Controls.Add(_whitelistRefreshButton);
+        _whitelistToolPanel.Controls.Add(_whitelistSummaryLabel);
+        _whitelistToolPanel.Controls.Add(_whitelistSearchBox);
+        _whitelistToolPanel.Controls.Add(_whitelistRemoveButton);
+        _whitelistToolPanel.Controls.Add(_whitelistAddButton);
+        _whitelistToolPanel.Controls.Add(_whitelistHintLabel);
+        _whitelistToolPanel.Controls.Add(_whitelistClearButton);
+
+        _whitelistRefreshButton.Location = new Point(0, 4);
+        _whitelistRefreshButton.Name = "_whitelistRefreshButton";
+        _whitelistRefreshButton.Size = new Size(110, 28);
+        _whitelistRefreshButton.TabIndex = 0;
+        _whitelistRefreshButton.Text = "重新读取";
+        _whitelistRefreshButton.UseVisualStyleBackColor = true;
+        _whitelistRefreshButton.Click += OnRefreshRulesButtonClick;
+
+        _whitelistSummaryLabel.AutoSize = true;
+        _whitelistSummaryLabel.ForeColor = SystemColors.GrayText;
+        _whitelistSummaryLabel.Location = new Point(124, 10);
+        _whitelistSummaryLabel.Name = "_whitelistSummaryLabel";
+        _whitelistSummaryLabel.Size = new Size(300, 17);
+        _whitelistSummaryLabel.TabIndex = 1;
+        _whitelistSummaryLabel.Text = "白名单共 0 个程序";
+
+        _whitelistSearchBox.Location = new Point(480, 8);
+        _whitelistSearchBox.Name = "_whitelistSearchBox";
+        _whitelistSearchBox.PlaceholderText = "搜索：程序名 / 路径 / 规则名";
+        _whitelistSearchBox.Size = new Size(280, 23);
+        _whitelistSearchBox.TabIndex = 2;
+        _whitelistSearchBox.TextChanged += OnWhitelistSearchTextChanged;
+
+        _whitelistRemoveButton.Enabled = false;
+        _whitelistRemoveButton.Location = new Point(0, 42);
+        _whitelistRemoveButton.Name = "_whitelistRemoveButton";
+        _whitelistRemoveButton.Size = new Size(160, 28);
+        _whitelistRemoveButton.TabIndex = 3;
+        _whitelistRemoveButton.Text = "移出白名单";
+        _whitelistRemoveButton.UseVisualStyleBackColor = true;
+        _whitelistRemoveButton.Click += OnWhitelistRemoveButtonClick;
+
+        // 严格模式下，没进白名单的程序**连不上网**，因此也不会出现在「联网连接」页里 ——
+        // 那种情况下只能按路径添加，否则用户会被"想加却找不到它"卡死。
+        _whitelistAddButton.Location = new Point(168, 42);
+        _whitelistAddButton.Name = "_whitelistAddButton";
+        _whitelistAddButton.Size = new Size(140, 28);
+        _whitelistAddButton.TabIndex = 3;
+        _whitelistAddButton.Text = "添加程序…";
+        _whitelistAddButton.UseVisualStyleBackColor = true;
+        _whitelistAddButton.Click += OnWhitelistAddButtonClick;
+
+        _whitelistHintLabel.AutoSize = true;
+        _whitelistHintLabel.ForeColor = SystemColors.GrayText;
+        _whitelistHintLabel.Location = new Point(320, 47);
+        _whitelistHintLabel.Name = "_whitelistHintLabel";
+        _whitelistHintLabel.Size = new Size(300, 17);
+        _whitelistHintLabel.TabIndex = 4;
+        _whitelistHintLabel.Text = "未选中任何程序";
+
+        _whitelistClearButton.ForeColor = Color.FromArgb(180, 30, 30);
+        _whitelistClearButton.Location = new Point(900, 4);
+        _whitelistClearButton.Name = "_whitelistClearButton";
+        _whitelistClearButton.Size = new Size(200, 28);
+        _whitelistClearButton.TabIndex = 5;
+        _whitelistClearButton.Text = "清空白名单";
+        _whitelistClearButton.UseVisualStyleBackColor = true;
+        _whitelistClearButton.Click += OnWhitelistClearButtonClick;
+
+        _whitelistGrid.Dock = DockStyle.Fill;
+        _whitelistGrid.AllowUserToAddRows = false;
+        _whitelistGrid.AllowUserToDeleteRows = false;
+        _whitelistGrid.AllowUserToResizeRows = false;
+        _whitelistGrid.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle
+        {
+            BackColor = Color.FromArgb(245, 247, 250),
+        };
+        _whitelistGrid.AutoGenerateColumns = false;
+        _whitelistGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        _whitelistGrid.BackgroundColor = SystemColors.Window;
+        _whitelistGrid.BorderStyle = BorderStyle.Fixed3D;
+        _whitelistGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        _whitelistGrid.EditMode = DataGridViewEditMode.EditProgrammatically;
+        _whitelistGrid.MultiSelect = false;
+        _whitelistGrid.Name = "_whitelistGrid";
+        _whitelistGrid.ReadOnly = true;
+        _whitelistGrid.RowHeadersVisible = false;
+        _whitelistGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _whitelistGrid.TabIndex = 1;
+        _whitelistGrid.CellMouseDown += OnWhitelistGridCellMouseDown;
+        _whitelistGrid.KeyDown += OnWhitelistGridKeyDown;
+        _whitelistGrid.SelectionChanged += OnWhitelistGridSelectionChanged;
+
+        _tabWhitelist.Controls.Add(_whitelistGrid);
+        _tabWhitelist.Controls.Add(_whitelistToolPanel);
+        _tabWhitelist.Controls.Add(_whitelistNoticeLabel);
 
         // ==================================================================
         // 页三：设置
@@ -1039,7 +1175,7 @@ partial class MainForm
 
         _trayDeleteAllItem.Name = "_trayDeleteAllItem";
         _trayDeleteAllItem.Size = new Size(259, 22);
-        _trayDeleteAllItem.Text = "删除全部 AppGuard 规则…";
+        _trayDeleteAllItem.Text = "清空全部规则（黑名单+白名单）…";
         _trayDeleteAllItem.Click += OnRulesDeleteAllButtonClick;
 
         _traySeparator.Name = "_traySeparator";

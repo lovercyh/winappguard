@@ -47,9 +47,20 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
   kind (connect / blocked), process, remote endpoint, **domain (guessed)**, and **which rule
   matched**; search, blocked-only filter, one-click clear. Stored locally only, kept for 7 days,
   enabled by default.
+- **Block an IP** — pick a connection on the *Records* page and hit *Block this IP*, or type one in
+  manually. The rule matches the **remote IP** (IPv4 / IPv6) and does **not** go through DNS
+  resolution, so other services on the same IP are blocked as well.
+- **Separate *Blocklist* and *Strict-mode whitelist* pages** — the blocklist is "who may not go
+  online" (program blocks + blocked IPs, with a *Type* column); the whitelist is "who may go online
+  while strict mode is on", and the page states whether it is currently in effect. The whitelist
+  page can add a program **by path** — under strict mode an unlisted program never reaches the
+  network, so it would never show up on the Connections page.
+- **Shortcuts** — `F5` refresh, `Ctrl+F` search, `Esc` clear, `Delete` remove the selected entry.
+- **Remembers window size and column widths** (sizes only — no private data).
 - **Optionally auto-starts at logon**, to the system tray.
-- **Every rule lands in a dedicated WFP sublayer with a fixed GUID** — manage them on the *Rules*
-  page; `wf.msc` will not show them (it only lists Windows Firewall's own rules).
+- **Every rule lands in a dedicated WFP sublayer with a fixed GUID** — manage them on the
+  *Blocklist* / *Strict-mode whitelist* pages; `wf.msc` will not show them (it only lists
+  Windows Firewall's own rules).
 
 ## What it does **not** do
 
@@ -163,7 +174,8 @@ WinAppGuard.exe --help                     # usage
 
 | Rules | Settings |
 |---|---|
-| ![Rules tab](docs/screenshots/02-rules.png) | ![Settings tab](docs/screenshots/03-settings.png) |
+| ![Blocklist tab](docs/screenshots/02-rules.png) | ![Settings tab](docs/screenshots/03-settings.png) |
+| ![Strict-mode whitelist](docs/screenshots/05-whitelist.png) | |
 
 ![Block confirmation](docs/screenshots/04-confirm-block.png)
 

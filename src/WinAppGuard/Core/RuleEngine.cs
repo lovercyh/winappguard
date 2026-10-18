@@ -99,6 +99,26 @@ internal static class RuleEngine
         return true;
     }
 
+    /// <summary>
+    /// 删除某一类规则（只删阻止，或只删允许），返回删除条数。
+    /// 黑名单页的「清空黑名单」和白名单页的「清空白名单」各用一半。
+    /// </summary>
+    internal static int DeleteRulesByAction(FirewallAction action)
+    {
+        var targets = GetRules().Where(rule => rule.Action == action).ToList();
+
+        var deleted = 0;
+        foreach (var rule in targets)
+        {
+            if (DeleteRule(rule.Name))
+            {
+                deleted++;
+            }
+        }
+
+        return deleted;
+    }
+
     /// <summary>删除作用于指定程序的全部规则（阻止 + 允许），返回删除的规则条数。</summary>
     internal static int DeleteRulesForProgram(string programPath)
     {

@@ -115,6 +115,21 @@ public partial class MainForm : Form
     /// <summary>规则列表的数据。同样只创建一次、原地更新，理由见 <see cref="_connections"/>。</summary>
     private readonly List<FirewallRuleItem> _rules = new();
 
+    // ---------- 严格模式下白名单页的数据 ----------
+
+    private readonly BindingSource _whitelistSource = new();
+
+    /// <summary>白名单页的**筛选后**视图（绑定到表格）；<_whitelistRules> 始终是完整列表。</summary>
+    private readonly List<FirewallRuleItem> _whitelistView = new();
+
+    private readonly List<FirewallRuleItem> _whitelistRules = new();
+
+    private string _whitelistKeyword = string.Empty;
+    private string _whitelistSummaryBase = "白名单共 0 个程序";
+
+    /// <summary>白名单页是否"用户真的点选过"某一行（理由同 <see cref="_ruleSelectionConfirmed"/>）。</summary>
+    private bool _whitelistSelectionConfirmed;
+
     /// <summary>
     /// 本工具创建的全部防火墙规则（内存缓存）。
     ///
@@ -268,6 +283,7 @@ public partial class MainForm : Form
         _expiryTimer.Interval = AppConstants.ExpiredRuleCheckIntervalMs;
         SetupConnectionGrid();
         SetupRulesGrid();
+        SetupWhitelistGrid();
         InitializeAuditPage();
         StartAuditIfEnabled();
 
@@ -449,6 +465,7 @@ public partial class MainForm : Form
 
         ApplyColumnWidths(_connectionGrid);
         ApplyColumnWidths(_rulesGrid);
+        ApplyColumnWidths(_whitelistGrid);
     }
 
     /// <summary>把当前窗口位置/大小和两处列宽写回 ui-state.json。</summary>
@@ -470,6 +487,7 @@ public partial class MainForm : Form
 
         CaptureColumnWidths(_connectionGrid);
         CaptureColumnWidths(_rulesGrid);
+        CaptureColumnWidths(_whitelistGrid);
 
         _uiState.Save();
     }
@@ -523,7 +541,8 @@ public partial class MainForm : Form
             {
                 RefreshAudit();
             }
-            else if (_tabControl.SelectedTab == _tabRules)
+            else if (_tabControl.SelectedTab == _tabRules
+                     || _tabControl.SelectedTab == _tabWhitelist)
             {
                 OnRefreshRulesButtonClick(this, EventArgs.Empty);
             }
@@ -542,9 +561,11 @@ public partial class MainForm : Form
 
             var box = _tabControl.SelectedTab == _tabRules
                 ? _rulesSearchBox
-                : _tabControl.SelectedTab == _tabAudit
-                    ? _auditSearchBox
-                    : _searchBox;
+                : _tabControl.SelectedTab == _tabWhitelist
+                    ? _whitelistSearchBox
+                    : _tabControl.SelectedTab == _tabAudit
+                        ? _auditSearchBox
+                        : _searchBox;
 
             box.Focus();
             box.SelectAll();
@@ -564,6 +585,11 @@ public partial class MainForm : Form
                 _rulesSearchBox.Clear();
                 e.Handled = true;
             }
+            else if (_tabControl.SelectedTab == _tabWhitelist && _whitelistKeyword.Length > 0)
+            {
+                _whitelistSearchBox.Clear();
+                e.Handled = true;
+            }
             else if (_tabControl.SelectedTab == _tabConnections && _searchKeyword.Length > 0)
             {
                 ClearSearch();
@@ -573,13 +599,21 @@ public partial class MainForm : Form
             return;
         }
 
-        if (e.KeyCode == Keys.Delete
-            && _tabControl.SelectedTab == _tabRules
+        if (e.KeyCode == Keys.Delete && _tabControl.SelectedTab == _tabRules
             && _rulesDeleteButton.Enabled)
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
             OnRulesDeleteButtonClick(this, EventArgs.Empty);
+            return;
+        }
+
+        if (e.KeyCode == Keys.Delete && _tabControl.SelectedTab == _tabWhitelist
+            && _whitelistRemoveButton.Enabled)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            OnWhitelistRemoveButtonClick(this, EventArgs.Empty);
         }
     }
 
@@ -630,20 +664,35 @@ public partial class MainForm : Form
     /// </summary>
     private void SetupRulesGrid()
     {
-        AddRuleColumn("程序名", nameof(FirewallRuleItem.ApplicationNameText), 150);
+        // 黑名单只装「阻止」类规则（程序阻止 + 封禁 IP）。
+        // 不再放 动作/方向/协议 三列：这里每一条都是「阻止 / 出站 / 任意」，
+        // 三列都只有一个值，除了占地方没有任何信息量。
+        AddRuleColumn("类型", nameof(FirewallRuleItem.RuleKindText), 60);
+        AddRuleColumn("程序名 / IP", nameof(FirewallRuleItem.ApplicationNameText), 160);
         AddRuleColumn("程序路径", nameof(FirewallRuleItem.ApplicationPath), 280, fill: true);
         AddRuleColumn("自动解除", nameof(FirewallRuleItem.ExpiryText), 120);
-        AddRuleColumn("动作", nameof(FirewallRuleItem.ActionText), 60);
-        AddRuleColumn("方向", nameof(FirewallRuleItem.DirectionText), 60);
-        AddRuleColumn("协议", nameof(FirewallRuleItem.ProtocolText), 60);
         AddRuleColumn("启用", nameof(FirewallRuleItem.EnabledText), 70);
-        AddRuleColumn("规则名", nameof(FirewallRuleItem.Name), 180);
+        AddRuleColumn("规则名", nameof(FirewallRuleItem.Name), 200);
 
         _rulesSource.DataSource = _rulesView;
         _rulesGrid.DataSource = _rulesSource;
         _rulesGrid.EmptyText =
-            "还没有规则。\r\n在「联网连接」页选中程序后点「阻止选中程序联网」。";
-        _rulesGrid.CellFormatting += OnRulesCellFormatting;
+            "黑名单是空的。\r\n在「联网连接」页选中程序后点「阻止选中程序联网」，或在「记录」页封禁某个 IP。";
+    }
+
+    /// <summary>「严格模式下白名单」表格的列。</summary>
+    private void SetupWhitelistGrid()
+    {
+        AddColumn(_whitelistGrid, "程序名", nameof(FirewallRuleItem.ApplicationNameText), 160);
+        AddColumn(_whitelistGrid, "程序路径", nameof(FirewallRuleItem.ApplicationPath), 280, fill: true);
+        AddColumn(_whitelistGrid, "启用", nameof(FirewallRuleItem.EnabledText), 70);
+        AddColumn(_whitelistGrid, "规则名", nameof(FirewallRuleItem.Name), 200);
+
+        _whitelistSource.DataSource = _whitelistView;
+        _whitelistGrid.DataSource = _whitelistSource;
+        _whitelistGrid.EmptyText =
+            "白名单是空的。\r\n严格模式开启后，没有任何程序能上网（系统必需程序除外）。\r\n" +
+            "在「联网连接」页选中程序，点「加入白名单」。";
     }
 
     /// <summary>给「联网连接」表格添加一个只读文本列。</summary>
@@ -759,48 +808,60 @@ public partial class MainForm : Form
             _appGuardRules = RuleEngine.GetRules();
 
             _blockedPaths.Clear();
-            var allowRuleCount = 0;
+
             foreach (var rule in _appGuardRules)
             {
                 if (rule.Action == FirewallAction.Block && !string.IsNullOrEmpty(rule.ApplicationPath))
                 {
                     _blockedPaths.Add(rule.ApplicationPath);
                 }
-                else
-                {
-                    allowRuleCount++;
-                }
             }
 
-            // 原地更新规则列表。
-            // 注意顺序：必须**先**抓取选中的规则名，再动 _rules ——
+            // 原地更新两份列表。注意顺序：必须**先**抓取选中项，再动列表 ——
             // 列表变短之后，表格里旧索引对应的数据就不存在了，那时再去读会越界崩溃。
             var selectedRuleName = CaptureRuleSelection();
+            var selectedWhitelistName = CaptureWhitelistSelection();
+
             _rules.Clear();
-            _rules.AddRange(_appGuardRules);
+            _rules.AddRange(_appGuardRules.Where(rule => rule.Action == FirewallAction.Block));
 
-            // 绑定到表格的是**筛选后**的视图：搜索时只显示匹配项，但 _rules 始终完整
-            // （删除全部 / 摘要统计都按完整列表算）。
+            _whitelistRules.Clear();
+            _whitelistRules.AddRange(_appGuardRules.Where(rule => rule.Action == FirewallAction.Allow));
+
+            // 绑定到表格的是**筛选后**的视图：搜索时只显示匹配项，
+            // 但 _rules / _whitelistRules 始终完整（清空与摘要统计都按完整列表算）。
             ApplyRulesFilter(selectedRuleName);
+            ApplyWhitelistFilter(selectedWhitelistName);
 
-            // 页签上挂**规则总数**（而不是"被阻止的程序数"）：
-            // 这一页现在同时装着阻止规则和允许规则（白名单），
-            // 挂规则数才和用户在这个页面里看到的东西一致。
-            _tabRules.Text = $"规则（{_appGuardRules.Count}）";
+            // 页签上挂数量：用户不用点进去就知道每一类有多少条。
+            _tabRules.Text = $"黑名单（{_rules.Count}）";
+            _tabWhitelist.Text = $"严格模式下白名单（{_whitelistRules.Count}）";
+
             _statusRulesLabel.Text = $"已阻止程序：{_blockedPaths.Count} 个";
 
-            _rulesSummaryBase = allowRuleCount > 0
-                ? $"规则共 {_appGuardRules.Count} 条（阻止 {_appGuardRules.Count - allowRuleCount} 条，允许 {allowRuleCount} 条）"
-                : $"规则共 {_appGuardRules.Count} 条";
+            _rulesSummaryBase = $"黑名单共 {_rules.Count} 条";
+            _whitelistSummaryBase = $"白名单共 {_whitelistRules.Count} 个程序";
 
             UpdateRulesSummaryText();
+            UpdateWhitelistSummaryText();
+
+            // 白名单页顶部直接写清"现在白名单到底生不生效"，用户不用去设置页找严格模式开关。
+            _whitelistNoticeLabel.Text =
+                "白名单只在「严格模式」下起作用：严格模式开着时，只有这里列出的程序" +
+                "（以及系统必需程序）能上网。\r\n" +
+                "严格模式没开时，这些规则不会限制任何东西。\r\n" +
+                (StrictModeManager.IsEnabled
+                    ? "当前：严格模式已开启 —— 白名单正在生效。"
+                    : "当前：严格模式未开启 —— 白名单暂不生效。");
 
             UpdateRulesActionState();
+            UpdateWhitelistActionState();
         }
         catch (Exception ex)
         {
             _statusRulesLabel.Text = "读取防火墙规则失败";
             _rulesSummaryLabel.Text = "读取防火墙规则失败";
+            _whitelistSummaryLabel.Text = "读取防火墙规则失败";
 
             ShowError("读取 Windows 防火墙规则失败", ex);
         }
@@ -1366,27 +1427,348 @@ public partial class MainForm : Form
         }
     }
 
-    /// <summary>规则表格：动作列着色（红=阻止，绿=允许），不用文字以外的线索去猜。</summary>
-    private void OnRulesCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    // ==================================================================
+    // 严格模式下白名单页
+    // ==================================================================
+
+    /// <summary>按搜索词重建白名单视图并重新绑定。</summary>
+    private void ApplyWhitelistFilter(string? selectedRuleName = null)
     {
-        if (e.RowIndex < 0 || e.RowIndex >= _rulesGrid.Rows.Count)
+        var keyword = _whitelistKeyword.Trim();
+
+        _whitelistView.Clear();
+
+        if (keyword.Length == 0)
+        {
+            _whitelistView.AddRange(_whitelistRules);
+        }
+        else
+        {
+            _whitelistView.AddRange(_whitelistRules.Where(rule => MatchesRule(rule, keyword)));
+        }
+
+        RebindWhitelist(selectedRuleName);
+        ApplyWhitelistTooltips();
+        UpdateWhitelistSummaryText();
+    }
+
+    private void RebindWhitelist(string? selectedRuleName)
+    {
+        _isRebindingRules = true;
+        try
+        {
+            _whitelistSource.ResetBindings(metadataChanged: false);
+        }
+        finally
+        {
+            _isRebindingRules = false;
+        }
+
+        if (selectedRuleName is null || !TryRestoreWhitelistSelection(selectedRuleName))
+        {
+            _whitelistGrid.CurrentCell = null;
+            _whitelistSelectionConfirmed = false;
+        }
+
+        UpdateWhitelistActionState();
+    }
+
+    private bool TryRestoreWhitelistSelection(string? ruleName)
+    {
+        if (string.IsNullOrEmpty(ruleName))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < _whitelistView.Count && i < _whitelistGrid.Rows.Count; i++)
+        {
+            if (string.Equals(_whitelistView[i].Name, ruleName, StringComparison.OrdinalIgnoreCase))
+            {
+                _whitelistGrid.CurrentCell = _whitelistGrid.Rows[i].Cells[0];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void UpdateWhitelistSummaryText()
+        => _whitelistSummaryLabel.Text = _whitelistKeyword.Trim().Length == 0
+            ? _whitelistSummaryBase
+            : $"{_whitelistSummaryBase} ｜ 筛选出 {_whitelistView.Count} 个";
+
+    private void OnWhitelistSearchTextChanged(object? sender, EventArgs e)
+    {
+        var keyword = _whitelistSearchBox.Text.Trim();
+
+        if (string.Equals(keyword, _whitelistKeyword, StringComparison.Ordinal))
         {
             return;
         }
 
-        if (_rulesGrid.Columns[e.ColumnIndex].Name != nameof(FirewallRuleItem.ActionText))
+        _whitelistKeyword = keyword;
+        ApplyWhitelistFilter(CaptureWhitelistSelection());
+    }
+
+    private void ApplyWhitelistTooltips()
+    {
+        var pathIndex = _whitelistGrid.Columns[nameof(FirewallRuleItem.ApplicationPath)]?.Index ?? -1;
+        var nameIndex = _whitelistGrid.Columns[nameof(FirewallRuleItem.Name)]?.Index ?? -1;
+
+        foreach (DataGridViewRow row in _whitelistGrid.Rows)
+        {
+            if (row.DataBoundItem is not FirewallRuleItem rule)
+            {
+                continue;
+            }
+
+            if (pathIndex >= 0 && !string.IsNullOrEmpty(rule.ApplicationPath))
+            {
+                row.Cells[pathIndex].ToolTipText = rule.ApplicationPath;
+            }
+
+            if (nameIndex >= 0 && !string.IsNullOrEmpty(rule.Name))
+            {
+                row.Cells[nameIndex].ToolTipText = rule.Name;
+            }
+        }
+    }
+
+    private FirewallRuleItem? GetSelectedWhitelistRule()
+        => _whitelistGrid.CurrentRow?.DataBoundItem as FirewallRuleItem;
+
+    private FirewallRuleItem? GetConfirmedWhitelistRule()
+        => _whitelistSelectionConfirmed ? GetSelectedWhitelistRule() : null;
+
+    private string? CaptureWhitelistSelection()
+        => _whitelistSelectionConfirmed ? GetSelectedWhitelistRule()?.Name : null;
+
+    private void UpdateWhitelistActionState()
+    {
+        var rule = GetConfirmedWhitelistRule();
+
+        _whitelistRemoveButton.Enabled = rule is not null;
+        _whitelistClearButton.Enabled = _whitelistRules.Count > 0;
+
+        if (_whitelistRules.Count == 0)
+        {
+            _whitelistHintLabel.Text = "白名单是空的 —— 严格模式开启后，除系统必需程序外都无法上网。";
+        }
+        else if (rule is null)
+        {
+            _whitelistHintLabel.Text = "未选中任何程序。";
+        }
+        else
+        {
+            _whitelistHintLabel.Text = $"已选中 {rule.ApplicationNameText} —— 规则名 {rule.Name}";
+        }
+    }
+
+    private void OnWhitelistGridCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= _whitelistGrid.Rows.Count)
         {
             return;
         }
 
-        if (_rulesGrid.Rows[e.RowIndex].DataBoundItem is not FirewallRuleItem rule)
+        _whitelistGrid.CurrentCell = _whitelistGrid.Rows[e.RowIndex].Cells[0];
+        _whitelistSelectionConfirmed = true;
+        UpdateWhitelistActionState();
+    }
+
+    private void OnWhitelistGridKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_whitelistGrid.CurrentRow is null)
         {
             return;
         }
 
-        e.CellStyle.ForeColor = rule.Action == FirewallAction.Block
-            ? Color.FromArgb(180, 30, 30)
-            : Color.FromArgb(20, 120, 50);
+        _whitelistSelectionConfirmed = true;
+        UpdateWhitelistActionState();
+    }
+
+    private void OnWhitelistGridSelectionChanged(object? sender, EventArgs e)
+    {
+        if (_isRebindingRules)
+        {
+            return;
+        }
+
+        _whitelistSelectionConfirmed = true;
+        UpdateWhitelistActionState();
+    }
+
+    /// <summary>
+    /// 「添加程序…」：按路径把程序加入白名单。
+    ///
+    /// 为什么必须有这个入口：严格模式开启后，没进白名单的程序**连不上网**，
+    /// 因此也不会出现在「联网连接」页里 —— 用户会被"想加白名单却找不到它"卡死。
+    /// </summary>
+    private void OnWhitelistAddButtonClick(object? sender, EventArgs e)
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "选择要加入白名单的程序",
+            Filter = "程序 (*.exe)|*.exe",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var path = dialog.FileName;
+        var name = Path.GetFileName(path);
+        var strictModeOn = StrictModeManager.IsEnabled;
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "加入白名单",
+            question: $"确定要把「{name}」加入白名单吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("程序名", name),
+                new KeyValuePair<string, string>("完整路径", path),
+                new KeyValuePair<string, string>("生效条件", "只在严格模式下有意义"),
+            },
+            warnings: new[]
+            {
+                strictModeOn
+                    ? "严格模式正在生效：确认后它立刻就能联网。"
+                    : "严格模式当前没有开启，所以加进去暂时不会有任何变化。",
+                "这**不是**阻止规则：它只是允许该程序上网，不影响其它程序。",
+                "如果把同一个程序也放进了黑名单，黑名单优先 —— 它仍然上不了网。",
+            },
+            confirmText: "加入");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            var ruleName = RuleEngine.CreateAllowRule(path);
+            LocalLog.Operation($"加入白名单：{path}（规则 {ruleName}）");
+            AfterRulesChanged();
+        }
+        catch (Exception ex)
+        {
+            ShowError("加入白名单失败", ex);
+        }
+    }
+
+    /// <summary>把选中的程序移出白名单（= 删除那条允许规则）。</summary>
+    private void OnWhitelistRemoveButtonClick(object? sender, EventArgs e)
+    {
+        var rule = GetConfirmedWhitelistRule();
+
+        if (rule is null || string.IsNullOrEmpty(rule.ApplicationPath))
+        {
+            return;
+        }
+
+        var strictModeOn = StrictModeManager.IsEnabled;
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "移出白名单",
+            question: $"确定要把「{rule.ApplicationNameText}」移出白名单吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("程序名", rule.ApplicationNameText),
+                new KeyValuePair<string, string>("完整路径", rule.ApplicationPath),
+                new KeyValuePair<string, string>("将删除规则", rule.Name),
+            },
+            warnings: strictModeOn
+                ? new[]
+                {
+                    "⚠ 严格模式正在生效：移出之后，这个程序会立刻上不了网（已经建立的连接要等它自己断开）。",
+                    "只会删除这一条允许规则，不影响其它程序，也不影响黑名单。",
+                }
+                : new[]
+                {
+                    "严格模式当前没有开启，所以移出白名单暂时不会影响它联网。",
+                    "只会删除这一条允许规则，不影响其它程序，也不影响黑名单。",
+                },
+            confirmText: "移出");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            RuleEngine.DeleteRule(rule.Name);
+            LocalLog.Operation($"移出白名单：{rule.ApplicationPath}（规则 {rule.Name}）");
+            AfterRulesChanged();
+        }
+        catch (Exception ex)
+        {
+            ShowError("移出白名单失败", ex);
+        }
+    }
+
+    /// <summary>清空白名单（删除全部允许规则）。严格模式开启时会让这些程序立刻断网，必须写清楚。</summary>
+    private void OnWhitelistClearButtonClick(object? sender, EventArgs e)
+    {
+        var rules = _whitelistRules;
+
+        if (rules.Count == 0)
+        {
+            AfterRulesChanged();
+            MessageBox.Show(
+                this,
+                "当前白名单是空的，无需清理。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var strictModeOn = StrictModeManager.IsEnabled;
+
+        var ruleList = string.Join(
+            Environment.NewLine,
+            rules.Select(rule => $"    {rule.ApplicationNameText}"));
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "清空白名单",
+            question: $"确定要移除全部 {rules.Count} 个白名单程序吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("程序数", $"{rules.Count} 个"),
+                new KeyValuePair<string, string>("影响", strictModeOn
+                    ? "严格模式正在生效：这些程序会立刻上不了网"
+                    : "严格模式没有开启：暂时不影响联网"),
+            },
+            warnings: new[]
+            {
+                "将要移出白名单的程序：",
+                ruleList,
+                "只会删除本工具创建的允许规则，不影响黑名单，也不影响其它软件或系统的规则。",
+            },
+            confirmText: "清空");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            var deleted = RuleEngine.DeleteRulesByAction(FirewallAction.Allow);
+            LocalLog.Operation($"清空白名单：实际删除 {deleted} 条允许规则");
+            AfterRulesChanged();
+        }
+        catch (Exception ex)
+        {
+            ShowError("清空白名单失败", ex);
+        }
     }
 
     /// <summary>
@@ -1505,7 +1887,6 @@ public partial class MainForm : Form
     {
         var rule = GetConfirmedRule();
 
-        _rulesAllowButton.Enabled = rule is not null;
         _rulesDeleteButton.Enabled = rule is not null;
 
         // 按「表格里实际显示了几条」来判断，而不是按内存缓存 ——
@@ -1515,12 +1896,16 @@ public partial class MainForm : Form
         if (rule is null)
         {
             _rulesHintLabel.Text = _rules.Count == 0
-                ? "当前没有任何 AppGuard 规则"
-                : "点击一条规则来选择要操作的程序";
+                ? "黑名单是空的"
+                : "点击一条规则来选择要操作的程序 / IP";
             return;
         }
 
-        _rulesHintLabel.Text = $"已选中 {rule.ApplicationNameText} —— {rule.ActionText}，规则名 {rule.Name}";
+        var what = string.IsNullOrEmpty(rule.IpAddress)
+            ? rule.ApplicationNameText
+            : $"IP {rule.IpAddress}";
+
+        _rulesHintLabel.Text = $"已选中 {what} —— 规则名 {rule.Name}";
     }
 
     /// <summary>构造「已选中 xxx —— ……」这行说明，让用户知道按钮为什么灰着。</summary>
@@ -2020,26 +2405,18 @@ public partial class MainForm : Form
     }
 
     /// <summary>「规则」页：允许选中的规则对应的程序联网。</summary>
-    private void OnRulesAllowButtonClick(object? sender, EventArgs e)
-    {
-        var rule = GetConfirmedRule();
-        if (rule is null || string.IsNullOrEmpty(rule.ApplicationPath))
-        {
-            return;
-        }
-
-        ConfirmAndAllowProgram(rule.ApplicationPath, rule.ApplicationNameText);
-    }
-
     /// <summary>
-    /// 弹出确认框，删除某个程序的全部 AppGuard 规则（即「允许它联网」）。
-    /// 两个页面共用这一份逻辑，避免两处各写一遍、将来改一处漏一处。
+    /// 弹出确认框，删除某个程序的**阻止**规则（即「允许它联网」）。
+    ///
+    /// 2.1.2 起只删阻止规则：白名单（允许规则）在「严格模式下白名单」页单独管理，
+    /// 点一次「解除阻止」不应该顺手把程序踢出白名单。
     /// </summary>
     /// <returns>确实执行了删除返回 true；用户取消或无事可做返回 false。</returns>
     private bool ConfirmAndAllowProgram(string programPath, string programName)
     {
         var rulesForProgram = _appGuardRules
-            .Where(rule => PathsEqual(rule.ApplicationPath, programPath))
+            .Where(rule => rule.Action == FirewallAction.Block
+                           && PathsEqual(rule.ApplicationPath, programPath))
             .ToList();
 
         if (rulesForProgram.Count == 0)
@@ -2325,19 +2702,20 @@ public partial class MainForm : Form
     }
 
     /// <summary>
-    /// 「规则」页：删除全部 AppGuard 规则。
+    /// 托盘菜单：清空全部规则（黑名单 + 白名单一起删）。
     /// 这是不可撤销的批量操作，所以需要**连续确认两次**。
     /// </summary>
     private void OnRulesDeleteAllButtonClick(object? sender, EventArgs e)
     {
-        var rules = _appGuardRules;
+        // 黑名单页的「清空」只删**阻止**规则；白名单在另一页，各自管各自的。
+        var rules = _rules;
 
         if (rules.Count == 0)
         {
             AfterRulesChanged();
             MessageBox.Show(
                 this,
-                "当前没有任何 AppGuard 规则，无需清理。",
+                "黑名单是空的，无需清理。",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
@@ -2348,33 +2726,24 @@ public partial class MainForm : Form
             Environment.NewLine,
             rules.Select(r => $"    {r.Name}  →  {r.ApplicationPath}"));
 
-        // 严格模式生效时，这一步会把**白名单一起删光** —— 那等于把所有程序都断网。
-        // 所以必须同时关闭严格模式（还原默认放行）。这件事必须写在确认框里，
-        // 不能在代码里悄悄做。
-        var strictModeEnabled = StrictModeManager.IsEnabled;
-
+        // 只删黑名单（阻止规则），**不动白名单**：白名单在单独一页，有自己的「清空」按钮。
         var deleteWarnings = new List<string>
         {
-            "将要删除的规则如下：",
+            "将要删除的阻止规则如下：",
             ruleList,
-            "其他软件和系统自带的防火墙规则一律不受影响。",
+            "删除后这些程序会立刻恢复联网（封禁的 IP 也会立刻解封）。",
+            "其他软件和系统自带的防火墙规则，以及白名单，都不受影响。",
         };
-
-        if (strictModeEnabled)
-        {
-            deleteWarnings.Insert(0, "⚠ 严格模式正在生效：下面这些规则里有白名单，删光之后所有程序都上不了网。");
-            deleteWarnings.Insert(1, "所以这一步会同时关闭严格模式（把默认出站动作还原成「允许」）。");
-        }
 
         // ---------------- 第一次确认：说明清楚要删什么 ----------------
         var firstConfirmed = ConfirmForm.Show(
             owner: DialogOwner,
-            title: "删除全部 AppGuard 规则",
-            question: $"确定要删除全部 {rules.Count} 条由 WinAppGuard 创建的规则吗？",
+            title: "清空黑名单",
+            question: $"确定要清空黑名单吗？（共 {rules.Count} 条阻止规则）",
             details: new[]
             {
                 new KeyValuePair<string, string>("规则条数", $"{rules.Count} 条"),
-                new KeyValuePair<string, string>("影响", "这些程序将立刻恢复联网"),
+                new KeyValuePair<string, string>("影响", "这些程序 / IP 将立刻恢复联网 / 解封"),
             },
             warnings: deleteWarnings.ToArray(),
             confirmText: "继续");
@@ -2388,19 +2757,18 @@ public partial class MainForm : Form
         var secondConfirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "最后确认",
-            question: "这一步不可撤销，确定要删除全部规则吗？",
+            question: "这一步不可撤销，确定要清空黑名单吗？",
             details: new[]
             {
                 new KeyValuePair<string, string>("规则条数", $"{rules.Count} 条"),
             },
             warnings: new[]
             {
-                "删除后这些程序会立刻恢复联网。",
-                "如果你只是想放行某一个程序，请用「解除阻止（允许联网）」，不要用这个按钮。",
-            }.Concat(strictModeEnabled
-                ? new[] { "⚠ 严格模式会同时被关闭（默认出站动作还原成「允许」），因为白名单马上就不在了。" }
-                : Array.Empty<string>()).ToArray(),
-            confirmText: "确认删除");
+                "清空后这些程序会立刻恢复联网（封禁的 IP 立刻解封）。",
+                "如果你只是想放行某一个程序，删那一条就够了，不要用这个按钮。",
+                "白名单在另一页，这一步不会动它。",
+            },
+            confirmText: "确认清空");
 
         if (!secondConfirmed)
         {
@@ -2409,33 +2777,21 @@ public partial class MainForm : Form
 
         try
         {
-            // ⚠ 顺序不能反：**先**关严格模式（还原默认放行），**再**删规则。
-            // 反过来的话，中间那一瞬间是「默认阻止 + 白名单已被删光」= 整台机器断网。
-            if (strictModeEnabled)
-            {
-                var disableResult = StrictModeManager.Disable();
-                LocalLog.Operation($"删除全部规则前先关闭严格模式：{disableResult.Message}");
-            }
-
-            var deleted = RuleEngine.DeleteAllRules();
-            LocalLog.Operation($"删除全部 AppGuard 规则：实际删除 {deleted} 条");
+            var deleted = RuleEngine.DeleteRulesByAction(FirewallAction.Block);
+            LocalLog.Operation($"清空黑名单：实际删除 {deleted} 条阻止规则");
             AfterRulesChanged();
-            RefreshStrictModeStatus();
 
             MessageBox.Show(
                 this,
-                $"已删除 {deleted} 条 AppGuard 规则。\n\n" +
-                "其他软件和系统自带的防火墙规则没有受到影响。" +
-                (strictModeEnabled
-                    ? "\n\n严格模式已同时关闭，默认出站动作已还原成「允许」。"
-                    : string.Empty),
+                $"已清空黑名单，删除 {deleted} 条阻止规则。\n\n" +
+                "这些程序现在可以重新联网；白名单和其它软件的规则没有受到影响。",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
-            ShowError("批量删除失败", ex);
+            ShowError("清空黑名单失败", ex);
         }
     }
 
@@ -3094,7 +3450,7 @@ public partial class MainForm : Form
             {
                 "退出只是关掉这个界面程序。它创建的防火墙规则依然生效，被阻止的程序仍然上不了网。",
                 $"当前被阻止的 {blockedCount} 个程序会继续保持被阻止状态。",
-                "如果想让它们恢复联网，请先回到主界面用「解除阻止（允许联网）」，或用「删除全部 AppGuard 规则」。",
+                "如果想让它们恢复联网，请先回到主界面用「解除阻止（允许联网）」，或用托盘菜单的「清空全部规则」。",
             }
             : new[]
             {

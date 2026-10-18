@@ -1188,6 +1188,10 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
 
+            TrySelectTab(form, "_tabWhitelist");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "05-whitelist.png"));
+
             // 设置页比一屏高（四个分区），所以拉高到能一次看全 ——
             // 否则新加的分区永远落在折叠线以下，那张图就展示不出它。
             TrySelectTab(form, "_tabSettings");
@@ -1288,12 +1292,19 @@ internal static class Program
                 FirewallAction.Allow, RuleExpiry.Never));
 
             rules.Clear();
-            rules.AddRange(appRules);
+            rules.AddRange(appRules.Where(rule => rule.Action == FirewallAction.Block));
 
-            // 顺序同产品：先把完整列表灌进筛选视图（ApplyRulesFilter 内部会 RebindRules），
+            if (TryGetField<List<FirewallRuleItem>>(form, "_whitelistRules", out var whitelistRules))
+            {
+                whitelistRules.Clear();
+                whitelistRules.AddRange(appRules.Where(rule => rule.Action == FirewallAction.Allow));
+            }
+
+            // 顺序同产品：先把完整列表灌进筛选视图（Apply*Filter 内部会 Rebind*），
             // 再重建连接页的显示列表与表格。
-            // ⚠️ 2.2.1 起规则表格绑的是 _rulesView，直接调 RebindRules 会是空表。
+            // ⚠️ 表格绑的是 _rulesView / _whitelistView，直接调 RebindRules 会是空表。
             InvokePrivate(form, "ApplyRulesFilter", new object?[] { null });
+            InvokePrivate(form, "ApplyWhitelistFilter", new object?[] { null });
             InvokePrivate(form, "RebuildView", null);
             InvokePrivate(form, "RebindGrid", new object?[] { null });
         }
@@ -1326,12 +1337,22 @@ internal static class Program
 
         if (TryGetField<Label>(form, "_rulesSummaryLabel", out var rulesSummary))
         {
-            rulesSummary.Text = "规则共 4 条（阻止 3 条，允许 1 条）";
+            rulesSummary.Text = "黑名单共 3 条";
+        }
+
+        if (TryGetField<Label>(form, "_whitelistSummaryLabel", out var whitelistSummary))
+        {
+            whitelistSummary.Text = "白名单共 1 个程序";
         }
 
         if (TryGetField<TabPage>(form, "_tabRules", out var rulesTab))
         {
-            rulesTab.Text = "规则（4）";
+            rulesTab.Text = "黑名单（3）";
+        }
+
+        if (TryGetField<TabPage>(form, "_tabWhitelist", out var whitelistTab))
+        {
+            whitelistTab.Text = "严格模式下白名单（1）";
         }
 
         if (TryGetField<Label>(form, "_selectionHintLabel", out var hint))
@@ -3169,28 +3190,51 @@ internal static class Program
             TryGetField<DataGridViewBuffered>(form, "_auditGrid", out var auditGrid)
             && !string.IsNullOrWhiteSpace(auditGrid.EmptyText));
 
-        // ---------------- 3. 危险按钮 ----------------
+        // ---------------- 3. 黑名单 / 白名单两个页签 ----------------
         W();
-        W("===== 3. 「删除全部」是危险按钮 =====");
+        W("===== 3. 「黑名单」与「严格模式下白名单」=====");
+
+        CheckAssertion(results, "有「黑名单」页签",
+            TryGetField<TabPage>(form, "_tabRules", out var blockTab)
+            && blockTab.Text.Contains("黑名单"));
+
+        CheckAssertion(results, "有「严格模式下白名单」页签",
+            TryGetField<TabPage>(form, "_tabWhitelist", out var whitelistTab)
+            && whitelistTab.Text.Contains("严格模式") && whitelistTab.Text.Contains("白名单"));
 
         if (TryGetField<Button>(form, "_rulesDeleteAllButton", out var deleteAll))
         {
-            W($"    位置 = {deleteAll.Location}，颜色 = {deleteAll.ForeColor}");
+            W($"    黑名单「清空」位置 = {deleteAll.Location}，颜色 = {deleteAll.ForeColor}");
 
-            CheckAssertion(results, "「删除全部」是红色文字",
+            CheckAssertion(results, "「清空黑名单」是红色文字",
                 deleteAll.ForeColor.R > 150 && deleteAll.ForeColor.G < 100);
-            CheckAssertion(results, "「删除全部」不和普通按钮挤在同一行",
+            CheckAssertion(results, "「清空黑名单」不和普通按钮挤在同一行",
                 deleteAll.Location.Y < 30);
-            CheckAssertion(results, "「删除全部」被推到右侧",
+            CheckAssertion(results, "「清空黑名单」被推到右侧",
                 deleteAll.Location.X > 800);
-            CheckAssertion(results, "「解除阻止」文字说清了它的作用",
-                TryGetField<Button>(form, "_rulesAllowButton", out var allowButton)
-                && allowButton.Text.Contains("解除阻止"));
+            CheckAssertion(results, "按钮文字写明了它清的是黑名单",
+                deleteAll.Text.Contains("黑名单"));
         }
         else
         {
-            results.Add(("找得到「删除全部」按钮", false));
+            results.Add(("找得到「清空黑名单」按钮", false));
         }
+
+        CheckAssertion(results, "白名单页有「添加程序…」（严格模式下连接页看不到未放行程序）",
+            TryGetField<Button>(form, "_whitelistAddButton", out var whitelistAdd)
+            && whitelistAdd.Text.Contains("添加程序"));
+
+        CheckAssertion(results, "白名单页有「清空白名单」且是红色",
+            TryGetField<Button>(form, "_whitelistClearButton", out var whitelistClear)
+            && whitelistClear.Text.Contains("清空") && whitelistClear.ForeColor.R > 150);
+
+        CheckAssertion(results, "白名单页的说明写清了「只在严格模式下」",
+            TryGetField<Label>(form, "_whitelistNoticeLabel", out var whitelistNotice)
+            && whitelistNotice.Text.Contains("严格模式"));
+
+        CheckAssertion(results, "白名单表格有空状态文案",
+            TryGetField<DataGridViewBuffered>(form, "_whitelistGrid", out var whitelistGrid)
+            && !string.IsNullOrWhiteSpace(whitelistGrid.EmptyText));
 
         // ---------------- 4. 快捷键 ----------------
         W();
@@ -3353,7 +3397,11 @@ internal static class Program
             CheckNoOverlap(results, "[150%] 规则页工具栏互不重叠", rulesToolPanel.Controls);
 
             // 3) 按钮文字必须在按钮里放得下（缩放后按钮不会自动变宽）。
-            foreach (var name in new[] { "_rulesAllowButton", "_rulesDeleteButton", "_rulesDeleteAllButton" })
+            foreach (var name in new[]
+                     {
+                         "_rulesDeleteButton", "_rulesDeleteAllButton",
+                         "_whitelistAddButton", "_whitelistRemoveButton", "_whitelistClearButton",
+                     })
             {
                 if (!TryGetField<Button>(form, name, out var button))
                 {
@@ -3366,7 +3414,13 @@ internal static class Program
             }
         }
 
-        // 4) 设置页四个分区不重叠。
+        // 4) 白名单页工具栏不重叠。
+        if (TryGetField<Panel>(form, "_whitelistToolPanel", out var whitelistToolPanel))
+        {
+            CheckNoOverlap(results, "[150%] 白名单页工具栏互不重叠", whitelistToolPanel.Controls);
+        }
+
+        // 5) 设置页四个分区不重叠。
         var settingsParts = new List<Control>();
         foreach (var name in new[] { "_autostartPanel", "_privacyPanel", "_strictModePanel", "_taskXmlPanel" })
         {

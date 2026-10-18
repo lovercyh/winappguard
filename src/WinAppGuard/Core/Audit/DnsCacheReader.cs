@@ -100,39 +100,40 @@ internal static class DnsCacheReader
     internal static IReadOnlyList<DnsCacheRecord> ReadSnapshot()
     {
         var result = new List<DnsCacheRecord>();
+        var names = new List<string>();
         var table = IntPtr.Zero;
 
         try
         {
-            // ⚠️ 这个 API 实测成功时返回 1（不是 0），所以只以"表指针是否有效"为准。
+            // ⚠️ 两段式：**先只走链表把名字抄下来**，再逐名查询。
+            // 边遍历边 DnsQuery 会让缓存发生变动、链表被断开 ——
+            // 实测表现为"只拿到前 4 个名字"，而不是报错。
             _ = DnsGetCacheDataTable(out table);
             if (table == IntPtr.Zero)
             {
                 return result;
             }
 
-            var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var node = table;
+            var guard = 0;
 
-            while (node != IntPtr.Zero)
+            while (node != IntPtr.Zero && guard++ < 100_000)
             {
                 var entry = Marshal.PtrToStructure<DnsCacheEntry>(node);
                 var name = Marshal.PtrToStringUni(entry.Name);
 
-                if (!string.IsNullOrEmpty(name) && seenNames.Add(name))
+                if (!string.IsNullOrEmpty(name) && seen.Add(name))
                 {
-                    // 同一个名字可能同时有 A 和 AAAA，两种都取。
-                    CollectRecords(name, DNS_TYPE_A, DNS_TYPE_AAAA, result);
+                    names.Add(name);
                 }
 
                 node = entry.Next;
             }
-
-            return result;
         }
         catch (Exception)
         {
-            return result;
+            // 走链表出错就用已经抄下来的名字。
         }
         finally
         {
@@ -144,12 +145,25 @@ internal static class DnsCacheReader
                 }
                 catch (Exception)
                 {
-                    // 释放失败只影响内存，不影响功能。
+                    // 释放失败只影响内存。
                 }
             }
         }
-    }
 
+        foreach (var name in names)
+        {
+            try
+            {
+                CollectRecords(name, DNS_TYPE_A, DNS_TYPE_AAAA, result);
+            }
+            catch (Exception)
+            {
+                // 单个名字失败不影响其它。
+            }
+        }
+
+        return result;
+    }
     private static void CollectRecords(string name, ushort typeA, ushort typeAaaa, List<DnsCacheRecord> output)
     {
         CollectOne(name, typeA, output);
@@ -172,10 +186,17 @@ internal static class DnsCacheReader
             {
                 var header = Marshal.PtrToStructure<DnsRecordHeader>(node);
 
-                var address = TryReadAddress(node, header);
-                if (address is not null)
+                try
                 {
-                    output.Add(new DnsCacheRecord(name, address, header.Ttl));
+                    var address = TryReadAddress(node, header);
+                    if (address is not null)
+                    {
+                        output.Add(new DnsCacheRecord(name, address, header.Ttl));
+                    }
+                }
+                catch (Exception)
+                {
+                    // 单条记录坏了就跳过，别把整个名字的记录都丢掉。
                 }
 
                 node = header.Next;

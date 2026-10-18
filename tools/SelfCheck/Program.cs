@@ -4749,7 +4749,38 @@ internal static class Program
             }
 
             W("    采样 12 秒（现在随便开几个网页 / 让程序联网）……");
-            Thread.Sleep(12_000);
+
+            // 主动造一条"确定性"的连接：先解析域名（让它进系统 DNS 缓存），
+            // 再连上去并保持几秒，让服务至少轮询到两次。
+            // 这样"域名推测"这一环才有可验证的前提；连不上就不强求。
+            var probeConnected = false;
+            var probeAddress = string.Empty;
+
+            try
+            {
+                var addresses = Dns.GetHostAddresses("whois.cymru.com");
+                var target = addresses.FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork);
+
+                if (target is not null)
+                {
+                    using var client = new TcpClient();
+                    var connectTask = client.ConnectAsync(target, 43);
+
+                    if (connectTask.Wait(4000) && client.Connected)
+                    {
+                        probeConnected = true;
+                        probeAddress = target.ToString();
+                        W($"    主动建立一条连接（用于验证域名推测）：{target}:43");
+                        Thread.Sleep(6000);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                W($"    主动连接失败（不影响其它断言）：{ex.Message}");
+            }
+
+            Thread.Sleep(6000);
 
             var written = service.EventsWritten;
             var drops = service.DropsSeen;
@@ -4791,7 +4822,32 @@ internal static class Program
                 W($"      {sample.Describe()}");
             }
 
-            CheckAssertion(results, "域名推测有命中（缓存为空时允许 0）", withDomain > 0 || connects == 0);
+            if (probeConnected)
+            {
+                var probeEvents = events
+                    .Where(item => item.RemoteAddress == probeAddress && item.RemotePort == 43)
+                    .ToList();
+
+                W($"    主动连接相关记录 = {probeEvents.Count} 条（目标 {probeAddress}:43）");
+
+                foreach (var item in probeEvents)
+                {
+                    W($"      {item.Describe()}  域名={(item.Domain ?? "null")}");
+                }
+
+                CheckAssertion(results,
+                    "主动连接被记录，且命中了域名",
+                    probeEvents.Count > 0 && probeEvents.Any(item => !string.IsNullOrEmpty(item.Domain)));
+
+                if (probeEvents.Count > 0 && probeEvents.All(item => string.IsNullOrEmpty(item.Domain)))
+                {
+                    W("    ⚠️ 记录到了连接但没有域名 —— 说明 DNS 缓存里此刻没有这条解析。");
+                }
+            }
+            else
+            {
+                W("    未建立主动连接，域名命中率只作参考（不做断言）。");
+            }
             CheckAssertion(results, "服务停止后 IsRunning = false", stopped);
         }
         finally

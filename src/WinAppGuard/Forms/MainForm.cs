@@ -395,8 +395,6 @@ public partial class MainForm : Form
         StopAuditService();
         _auditTimer?.Stop();
         _auditTimer?.Dispose();
-        _learningTimer?.Stop();
-        _learningTimer?.Dispose();
         _auditStore.Dispose();
 
         base.OnFormClosing(e);

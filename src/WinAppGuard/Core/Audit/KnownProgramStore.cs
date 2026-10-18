@@ -140,6 +140,29 @@ internal sealed class KnownProgramStore
         }
     }
 
+    /// <summary>
+    /// 忘掉一个程序（用户选了「稍后」）。
+    ///
+    /// 为什么需要它：告警只在"第一次见到"时触发一次，
+    /// 如果「稍后」也把它标成已知，那用户就再也等不到这次询问了 ——
+    /// 那不是"稍后"，是"永不"。
+    /// </summary>
+    internal void Forget(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_programs.Remove(path))
+            {
+                _dirty = true;
+            }
+        }
+    }
+
     /// <summary>全部记录（按首次出现时间倒序）。</summary>
     internal IReadOnlyList<KnownProgram> All()
     {

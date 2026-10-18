@@ -4860,6 +4860,14 @@ internal static class Program
 
             service.Dispose();
             var stopped = !service.IsRunning;
+
+            // ⚠️ 计数必须在 Dispose **之后**读：
+            // Dispose 会等当前那一轮轮询跑完，那一轮还会写入几条；
+            // 先读计数再 Dispose 就会"读回的比写入的多"，机器上
+            // 有别的程序在联网时必然撞上（实测多出 2 条）—— 那是测量的竞态，不是丢数据。
+            written = service.EventsWritten;
+            drops = service.DropsSeen;
+
             service = null;
 
             W();
@@ -5019,6 +5027,48 @@ internal static class Program
         CheckAssertion(results, "有「记录连接」开关", checkBoxes.Any(text => text.Contains("记录连接")));
         CheckAssertion(results, "有「域名推测」开关", checkBoxes.Any(text => text.Contains("域名推测")));
         CheckAssertion(results, "有「只看拦截」开关", checkBoxes.Any(text => text.Contains("只看拦截")));
+        CheckAssertion(results, "有「新程序提醒」开关", checkBoxes.Any(text => text.Contains("新程序提醒")));
+        CheckAssertion(results, "有「学习模式」开关", checkBoxes.Any(text => text.Contains("学习模式")));
+
+        var combos = Descendants<ComboBox>(tab).ToList();
+        W($"    下拉框 = {combos.Count} 个");
+
+        CheckAssertion(results, "有学习时长下拉框", combos.Count == 1);
+        CheckAssertion(results, "学习时长有 4 个选项（含「直到关闭」）",
+            combos.Count == 1 && combos[0].Items.Count == 4
+            && combos[0].Items.Cast<object>().Any(item => item.ToString()!.Contains("直到关闭")));
+
+        // 第三行控件不能互相压住（图上量出来的，不靠眼睛）。
+        var row3 = new List<Control>();
+        foreach (Control child in tab.Controls)
+        {
+            foreach (Control inner in child.Controls)
+            {
+                if (inner is CheckBox { Text: "新程序提醒" or "学习模式" }
+                    || inner is ComboBox
+                    || (inner is Label label && label.Location.Y >= 70))
+                {
+                    row3.Add(inner);
+                }
+            }
+        }
+
+        W($"    第三行控件 = {row3.Count} 个");
+
+        var overlaps = false;
+        for (var i = 0; i < row3.Count; i++)
+        {
+            for (var j = i + 1; j < row3.Count; j++)
+            {
+                if (row3[i].Bounds.IntersectsWith(row3[j].Bounds))
+                {
+                    overlaps = true;
+                    W($"    ！重叠：{row3[i].Bounds} ∩ {row3[j].Bounds}");
+                }
+            }
+        }
+
+        CheckAssertion(results, "第三行控件互不重叠", row3.Count == 4 && !overlaps);
 
         var buttons = Descendants<Button>(tab).Select(button => button.Text).ToList();
         W($"    按钮 = {string.Join(" / ", buttons)}");
@@ -5155,6 +5205,7 @@ internal static class Program
     {
         var results = new List<(string Title, bool Passed)>();
         var tempFile = Path.Combine(Path.GetTempPath(), $"wag-known-{Guid.NewGuid():N}.json");
+        var forgetFile = tempFile + ".forget";
 
         W("################################################################");
         W("#   已知程序 / 新程序告警（离线：只碰临时文件）                 #");
@@ -5226,6 +5277,33 @@ internal static class Program
             var corrupted = new KnownProgramStore(tempFile);
             CheckAssertion(results, "损坏文件不抛异常，按空表处理", corrupted.Count == 0);
             CheckAssertion(results, "损坏后仍可继续记录", corrupted.Observe(@"C:\new.exe", now));
+
+            // ---------------- 5. 「稍后」= 下次再问 ----------------
+            W();
+            W("===== 5. 「稍后」不是「永不询问」 =====");
+
+            var forgetStore = new KnownProgramStore(forgetFile);
+            CheckAssertion(results, "首次见到 f.exe 需要告警", forgetStore.Observe(@"C:\f.exe", now));
+            forgetStore.Forget(@"C:\f.exe");
+            CheckAssertion(results, "「稍后」之后记录被清掉", forgetStore.Find(@"C:\f.exe") is null);
+            CheckAssertion(results, "「稍后」之后下次联网仍会询问", forgetStore.Observe(@"C:\f.exe", now));
+
+            // ---------------- 6. 学习汇总窗 ----------------
+            W();
+            W("===== 6. 学习汇总窗：列出全部程序、默认不勾 =====");
+
+            var programs = new List<KnownProgram>
+            {
+                new(@"C:\one.exe", ProgramDecision.Unknown, now, now),
+                new(@"C:\two.exe", ProgramDecision.Unknown, now, now),
+                new(@"C:\three.exe", ProgramDecision.Unknown, now, now),
+            };
+
+            using (var summary = new LearningSummaryForm(programs))
+            {
+                CheckAssertion(results, "汇总窗列出 3 个程序", summary.ProgramList.Items.Count == 3);
+                CheckAssertion(results, "默认一个都不勾（勾 = 阻止）", summary.ProgramList.CheckedItems.Count == 0);
+            }
         }
         finally
         {
@@ -5240,6 +5318,17 @@ internal static class Program
                 if (File.Exists(temp))
                 {
                     File.Delete(temp);
+                }
+
+                if (File.Exists(forgetFile))
+                {
+                    File.Delete(forgetFile);
+                }
+
+                var forgetTemp = forgetFile + ".tmp";
+                if (File.Exists(forgetTemp))
+                {
+                    File.Delete(forgetTemp);
                 }
             }
             catch (Exception)

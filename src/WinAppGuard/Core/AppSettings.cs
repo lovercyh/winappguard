@@ -57,6 +57,15 @@ public sealed class AppSettings
     public bool AuditEnabled { get; set; } = true;
 
     /// <summary>
+    /// 新程序首次联网时是否弹提示（2.2 新增），默认**开启**。
+    ///
+    /// 关闭后：仍然记录连接（照旧写审计），只是不再询问 —— 
+    /// 也就是"我不想知道，别打扰我"。用户必须能自己关掉，
+    /// 否则一个每见到新程序就弹窗的工具会被当成弹窗广告。
+    /// </summary>
+    public bool NewProgramAlertEnabled { get; set; } = true;
+
+    /// <summary>
     /// 「严格模式」上一次开启之后**没有正常还原**（程序崩溃 / 被强杀 / 机器断电）。
     ///
     /// 它的唯一用途：下次启动时据此把「默认出站动作」还原成「允许」。

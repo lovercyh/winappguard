@@ -20,12 +20,34 @@ public sealed partial class MainForm
     private CheckBox _auditBlockedOnlyCheck = null!;
     private CheckBox _auditEnabledCheck = null!;
     private CheckBox _auditDomainCheck = null!;
+    private CheckBox _auditAlertCheck = null!;
+    private CheckBox _learningCheck = null!;
+    private ComboBox _learningMinutesCombo = null!;
+    private Label _learningStatusLabel = null!;
     private Label _auditStatusLabel = null!;
     private Label _auditDetailLabel = null!;
     private DataGridView _auditGrid = null!;
     private System.Windows.Forms.Timer? _auditTimer;
+    private System.Windows.Forms.Timer? _learningTimer;
     private AuditService? _auditService;
     private bool _loadingAuditSettings;
+
+    /// <summary>学习模式是否正在进行（**只在本进程内**，不落盘）。</summary>
+    private bool _learningActive;
+
+    /// <summary>学习模式开始时间：用它筛出"这段时间里第一次出现的程序"。</summary>
+    private DateTime _learningStartUtc;
+
+    /// <summary>学习模式结束时间；null = 用户选择了「直到关闭」。</summary>
+    private DateTime? _learningEndUtc;
+
+    /// <summary>等待提示的程序（告警是后台线程来的，必须排队串行显示）。</summary>
+    private readonly Queue<string> _pendingPrompts = new();
+
+    /// <summary>已经在队列里的程序，避免同一个程序排两次。</summary>
+    private readonly HashSet<string> _promptQueued = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool _promptActive;
 
     /// <summary>上一次重建表格时的"数据签名"。相同就不再重建（避免每 3 秒打断用户选中/滚动）。</summary>
     private string? _auditLastSignature;
@@ -41,7 +63,7 @@ public sealed partial class MainForm
         var top = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 72,
+            Height = 106,
             Padding = new Padding(0, 4, 0, 0),
         };
 
@@ -125,6 +147,46 @@ public sealed partial class MainForm
             ForeColor = SystemColors.GrayText,
         };
 
+        // ---- 第三行：新程序提醒 + 学习模式 ----
+        _auditAlertCheck = new CheckBox
+        {
+            Location = new Point(0, 72),
+            Width = 118,
+            Text = "新程序提醒",
+        };
+        _auditAlertCheck.CheckedChanged += OnAuditAlertChanged;
+
+        _learningCheck = new CheckBox
+        {
+            Location = new Point(126, 72),
+            Width = 110,
+            Text = "学习模式",
+        };
+        _learningCheck.CheckedChanged += OnLearningChanged;
+
+        _learningMinutesCombo = new ComboBox
+        {
+            Location = new Point(240, 70),
+            Width = 116,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+        };
+        _learningMinutesCombo.Items.AddRange(new object[]
+        {
+            "30 分钟",
+            "1 小时",
+            "2 小时",
+            "直到关闭",
+        });
+        _learningMinutesCombo.SelectedIndex = 1;
+
+        _learningStatusLabel = new Label
+        {
+            Location = new Point(366, 74),
+            Width = 610,
+            Text = string.Empty,
+            ForeColor = SystemColors.GrayText,
+        };
+
         top.Controls.AddRange(new Control[]
         {
             _auditSearchBox,
@@ -137,6 +199,10 @@ public sealed partial class MainForm
             _auditEnabledCheck,
             _auditDomainCheck,
             _auditStatusLabel,
+            _auditAlertCheck,
+            _learningCheck,
+            _learningMinutesCombo,
+            _learningStatusLabel,
         });
 
         _auditGrid = new DataGridViewBuffered
@@ -204,9 +270,15 @@ public sealed partial class MainForm
         _auditEnabledCheck.Checked = _settings.AuditEnabled;
         _auditDomainCheck.Checked = _settings.AuditDomainLookupEnabled;
         _auditDomainCheck.Enabled = _settings.AuditEnabled;
+        _auditAlertCheck.Checked = _settings.NewProgramAlertEnabled;
+        _auditAlertCheck.Enabled = _settings.AuditEnabled;
         _loadingAuditSettings = false;
 
+        _learningTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _learningTimer.Tick += (_, _) => UpdateLearningStatus();
+
         _auditTimer.Start();
+        _learningTimer.Start();
         RefreshAudit();
     }
 
@@ -234,6 +306,12 @@ public sealed partial class MainForm
             _auditService = new AuditService(
                 pollSeconds: 3,
                 allowDomainLookup: _settings.AuditDomainLookupEnabled);
+
+            // 告警是后台线程发出来的：这里只做排队，弹窗一律回 UI 线程。
+            _auditService.NewPrograms.NewProgramDetected += OnNewProgramDetected;
+
+            // 服务是新建的，抑制状态要重新应用一次（否则重建服务会把学习模式/关提醒"忘掉"）。
+            ApplyAlertSuppression();
 
             _auditService.Start();
         }
@@ -270,8 +348,15 @@ public sealed partial class MainForm
         _settings.Save();
 
         _auditDomainCheck.Enabled = _settings.AuditEnabled;
+        _auditAlertCheck.Enabled = _settings.AuditEnabled;
 
         StopAuditService();
+
+        // 关掉记录就等于没有"新程序"可看：学习模式一并收尾（不再弹汇总窗）。
+        if (_learningActive)
+        {
+            EndLearning(showSummary: false);
+        }
 
         if (_settings.AuditEnabled)
         {
@@ -296,6 +381,357 @@ public sealed partial class MainForm
         {
             StopAuditService();
             StartAuditIfEnabled();
+        }
+    }
+
+    // ==================================================================
+    // 新程序提醒 与 学习模式
+    // ==================================================================
+
+    private void OnAuditAlertChanged(object? sender, EventArgs e)
+    {
+        if (_loadingAuditSettings)
+        {
+            return;
+        }
+
+        _settings.NewProgramAlertEnabled = _auditAlertCheck.Checked;
+        _settings.Save();
+
+        // 关掉提醒后仍然记录 —— 只是不再弹窗（"我不想知道，别打扰我"）。
+        ApplyAlertSuppression();
+    }
+
+    /// <summary>是否抑制新程序提示：学习模式中，或用户关了提醒。</summary>
+    private bool IsAlertSuppressed()
+        => _learningActive || !_settings.NewProgramAlertEnabled;
+
+    private void ApplyAlertSuppression()
+    {
+        if (_auditService is not null)
+        {
+            _auditService.LearningMode = IsAlertSuppressed();
+        }
+    }
+
+    private void OnLearningChanged(object? sender, EventArgs e)
+    {
+        if (_loadingAuditSettings)
+        {
+            return;
+        }
+
+        if (_learningCheck.Checked)
+        {
+            StartLearning();
+        }
+        else
+        {
+            EndLearning(showSummary: true);
+        }
+    }
+
+    /// <summary>下拉框选的时长（分钟）；0 = 直到手动关闭。</summary>
+    private int SelectedLearningMinutes() => _learningMinutesCombo.SelectedIndex switch
+    {
+        0 => 30,
+        1 => 60,
+        2 => 120,
+        _ => 0,
+    };
+
+    private void StartLearning()
+    {
+        if (_auditService is null)
+        {
+            _loadingAuditSettings = true;
+            _learningCheck.Checked = false;
+            _loadingAuditSettings = false;
+
+            MessageBox.Show(
+                this,
+                "学习模式需要先打开「记录连接」。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        _learningActive = true;
+        _learningStartUtc = DateTime.UtcNow;
+
+        var minutes = SelectedLearningMinutes();
+        _learningEndUtc = minutes > 0 ? _learningStartUtc.AddMinutes(minutes) : null;
+
+        _learningMinutesCombo.Enabled = false;
+        ApplyAlertSuppression();
+        UpdateLearningStatus();
+
+        LocalLog.Operation(minutes > 0
+            ? $"学习模式：开始（{minutes} 分钟）"
+            : "学习模式：开始（直到手动关闭）");
+    }
+
+    private void EndLearning(bool showSummary)
+    {
+        if (!_learningActive)
+        {
+            return;
+        }
+
+        _learningActive = false;
+        _learningEndUtc = null;
+        _learningMinutesCombo.Enabled = true;
+
+        // 程序化取消勾选，别让 CheckedChanged 再进来一次。
+        _loadingAuditSettings = true;
+        _learningCheck.Checked = false;
+        _loadingAuditSettings = false;
+
+        ApplyAlertSuppression();
+        _learningStatusLabel.Text = string.Empty;
+
+        LocalLog.Operation("学习模式：结束");
+
+        if (showSummary)
+        {
+            ShowLearningSummary();
+        }
+    }
+
+    private void UpdateLearningStatus()
+    {
+        if (!_learningActive)
+        {
+            if (_learningStatusLabel.Text.Length > 0)
+            {
+                _learningStatusLabel.Text = string.Empty;
+            }
+
+            return;
+        }
+
+        if (_learningEndUtc is { } end && DateTime.UtcNow >= end)
+        {
+            EndLearning(showSummary: true);
+            return;
+        }
+
+        var remaining = _learningEndUtc is { } limit
+            ? $"剩余 {FormatRemaining(limit - DateTime.UtcNow)}"
+            : "直到你手动关闭";
+
+        var count = CountNewProgramsSince(_learningStartUtc);
+
+        _learningStatusLabel.Text =
+            $"学习模式：只记录、不询问 · {remaining} · 已发现新程序 {count} 个";
+
+        // 服务可能刚被重建，顺手把抑制状态对齐。
+        ApplyAlertSuppression();
+    }
+
+    private static string FormatRemaining(TimeSpan span)
+    {
+        if (span < TimeSpan.Zero)
+        {
+            span = TimeSpan.Zero;
+        }
+
+        return span.TotalHours >= 1
+            ? $"{(int)span.TotalHours} 小时 {span.Minutes} 分"
+            : $"{span.Minutes} 分 {span.Seconds} 秒";
+    }
+
+    private int CountNewProgramsSince(DateTime startUtc)
+    {
+        var store = _auditService?.NewPrograms.Store;
+
+        return store is null
+            ? 0
+            : store.All().Count(program => program.FirstSeenUtc >= startUtc);
+    }
+
+    /// <summary>告警回调（**后台线程**）：只负责排队，弹窗一律回到 UI 线程。</summary>
+    private void OnNewProgramDetected(string path)
+    {
+        if (IsDisposed || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() => QueuePrompt(path)));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+            // 窗口正在关闭，丢弃这次提示即可。
+        }
+    }
+
+    private void QueuePrompt(string path)
+    {
+        if (IsDisposed || !_promptQueued.Add(path))
+        {
+            return;
+        }
+
+        _pendingPrompts.Enqueue(path);
+        ProcessPromptQueue();
+    }
+
+    /// <summary>
+    /// 串行地弹提示：一次只显示一个。
+    /// 同时来 5 个新程序就叠 5 个模态窗 —— 那不是提醒，是卡死。
+    /// </summary>
+    private void ProcessPromptQueue()
+    {
+        if (_promptActive || IsDisposed)
+        {
+            return;
+        }
+
+        _promptActive = true;
+
+        try
+        {
+            while (_pendingPrompts.Count > 0)
+            {
+                var path = _pendingPrompts.Dequeue();
+                _promptQueued.Remove(path);
+
+                if (IsDisposed)
+                {
+                    return;
+                }
+
+                PromptForNewProgram(path);
+            }
+        }
+        finally
+        {
+            _promptActive = false;
+        }
+    }
+
+    private void PromptForNewProgram(string path)
+    {
+        var choice = NewProgramPrompt.Ask(DialogOwner, path);
+        var store = _auditService?.NewPrograms.Store;
+
+        try
+        {
+            switch (choice)
+            {
+                case NewProgramChoice.Allow:
+                    store?.SetDecision(path, ProgramDecision.Allowed, DateTime.UtcNow);
+                    LocalLog.Operation($"新程序：允许联网 {path}");
+                    break;
+
+                case NewProgramChoice.Ignore:
+                    store?.SetDecision(path, ProgramDecision.Ignored, DateTime.UtcNow);
+                    LocalLog.Operation($"新程序：忽略 {path}");
+                    break;
+
+                case NewProgramChoice.Block:
+                    store?.SetDecision(path, ProgramDecision.Blocked, DateTime.UtcNow);
+
+                    var ruleName = RuleEngine.CreateBlockRule(path);
+                    LocalLog.Operation($"新程序：阻止联网 {path}（规则 {ruleName}）");
+
+                    AfterRulesChanged();
+                    break;
+
+                default:
+                    // 「稍后」= 忘掉它，下次联网再问（不是"永不询问"）。
+                    store?.Forget(path);
+                    break;
+            }
+
+            store?.Save();
+        }
+        catch (Exception ex)
+        {
+            ShowError("处理新程序失败", ex);
+        }
+    }
+
+    /// <summary>学习模式结束：列出这段时间新出现的程序，一次决定阻止/允许。</summary>
+    private void ShowLearningSummary()
+    {
+        var store = _auditService?.NewPrograms.Store;
+
+        if (store is null)
+        {
+            return;
+        }
+
+        var programs = store.All()
+            .Where(program => program.FirstSeenUtc >= _learningStartUtc)
+            .ToList();
+
+        if (programs.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "学习期间没有新程序联网。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var toBlock = LearningSummaryForm.Ask(DialogOwner, programs);
+
+        if (toBlock is null)
+        {
+            // 取消 = 什么都不改（不会把程序静默标成"允许"）。
+            return;
+        }
+
+        var blocked = new HashSet<string>(toBlock, StringComparer.OrdinalIgnoreCase);
+        var now = DateTime.UtcNow;
+        var failed = 0;
+
+        foreach (var program in programs)
+        {
+            var shouldBlock = blocked.Contains(program.Path);
+
+            store.SetDecision(
+                program.Path,
+                shouldBlock ? ProgramDecision.Blocked : ProgramDecision.Allowed,
+                now);
+
+            if (!shouldBlock)
+            {
+                continue;
+            }
+
+            try
+            {
+                RuleEngine.CreateBlockRule(program.Path);
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                LocalLog.Error($"学习模式：阻止 {program.Path} 失败", ex);
+            }
+        }
+
+        store.Save();
+        AfterRulesChanged();
+        RefreshAudit();
+
+        LocalLog.Operation($"学习模式：处理 {programs.Count} 个新程序，阻止 {blocked.Count} 个");
+
+        if (failed > 0)
+        {
+            MessageBox.Show(
+                this,
+                $"有 {failed} 个程序没能阻止（详情见日志）。\n其余已处理。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
     }
 

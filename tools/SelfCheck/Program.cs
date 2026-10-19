@@ -254,6 +254,10 @@ internal static class Program
             {
                 RunServiceUiTest();
             }
+            else if (args.Contains("--service-install-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceInstallTest();
+            }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunWfpScopeTest();
@@ -3567,6 +3571,108 @@ internal static class Program
             && (label.Text ?? string.Empty).Contains("4 条规则", StringComparison.Ordinal));
 
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 安装 / 卸载端到端自检（**需要管理员，会装/卸服务并删除全部 AppGuard 规则**）。
+    ///
+    /// 只在虚拟机里跑。它验证的是"装得上、查得到、卸得干净"，
+    /// 而不是规则过滤效果（那是 --wfp-* 的职责）。
+    /// </summary>
+    private static void RunServiceInstallTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var setup = Path.Combine(AppContext.BaseDirectory, "WinAppGuardSetup.exe");
+
+        W("################################################################");
+        W("#   服务安装 / 卸载（需管理员；会删除全部 AppGuard 规则）        #");
+        W("################################################################");
+        W();
+
+        W("    ⚠ 本自检会：安装服务 → 查询状态 → 卸载服务 → 删除全部规则。");
+        W($"    安装器 = {setup}");
+        W();
+
+        if (!File.Exists(setup))
+        {
+            CheckAssertion(results, "安装器与自检工具在同一目录（WinAppGuardSetup.exe）", false);
+            W("    请把 WinAppGuardSetup.exe / WinAppGuardSvc.exe / WinAppGuard.exe 一起放到这里。");
+            PrintSummary(results, showFirewallResidue: true);
+            return;
+        }
+
+        var install = RunSetup(setup, "--install");
+        W($"    安装输出：{install.Output.Trim()}");
+        CheckAssertion(results, "安装命令成功返回", install.ExitCode == 0);
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(5));
+
+        W($"    服务状态 = {(status is null ? "连不上" : $"v{status.ServiceVersion}，协议 {status.ProtocolVersion}")}");
+        CheckAssertion(results, "装完后能通过 IPC 查到服务状态", status is not null);
+        CheckAssertion(results, "服务协议版本与客户端一致",
+            status is not null && status.ProtocolVersion == ServiceProtocol.Version);
+
+        var uninstall = RunSetup(setup, "--uninstall");
+        W($"    卸载输出：{uninstall.Output.Trim()}");
+        CheckAssertion(results, "卸载命令成功返回", uninstall.ExitCode == 0);
+
+        Thread.Sleep(1200);
+        CheckAssertion(results, "卸载后服务已经连不上",
+            ServiceClient.TryGetStatus(TimeSpan.FromMilliseconds(500)) is null);
+
+        var installDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WinAppGuard");
+        W($"    安装目录仍存在 = {Directory.Exists(installDirectory)}");
+        CheckAssertion(results, "卸载后安装目录已删除", !Directory.Exists(installDirectory));
+
+        PrintSummary(results, showFirewallResidue: true);
+    }
+
+    /// <summary>运行安装器并取回输出（60 秒超时）。</summary>
+    private static (int ExitCode, string Output) RunSetup(string setupPath, string arguments)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = setupPath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            });
+
+            if (process is null)
+            {
+                return (-1, "无法启动安装器。");
+            }
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+
+            if (!process.WaitForExit(60_000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (Exception)
+                {
+                    // 杀不掉就算了，超时已经算失败。
+                }
+
+                return (-1, "安装器超时（60 秒）。");
+            }
+
+            return (process.ExitCode, stdout + stderr);
+        }
+        catch (Exception ex)
+        {
+            return (-1, ex.Message);
+        }
     }
 
     /// <summary>

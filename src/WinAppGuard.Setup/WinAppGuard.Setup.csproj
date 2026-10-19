@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    3.0 的安装 / 修复 / 卸载工具。
+    不引入第三方安装器：复制文件、建服务、写失败重启策略都由本工具自己完成。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <AssemblyName>WinAppGuardSetup</AssemblyName>
+    <RootNamespace>WinAppGuard.Setup</RootNamespace>
+
+    <Version>2.5</Version>
+    <Company>lovercyh</Company>
+    <Copyright>Copyright © 2026 lovercyh</Copyright>
+
+    <!-- 安装/卸载必须管理员；清单强制提权（不可通过命令行绕过）。 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+    <ProjectReference Include="..\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+</Project>

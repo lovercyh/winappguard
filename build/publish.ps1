@@ -16,6 +16,8 @@ $ErrorActionPreference = 'Stop'
 # 项目根目录 = 本脚本所在目录的上一级
 $root       = Split-Path -Parent $PSScriptRoot
 $project    = Join-Path $root 'src\WinAppGuard\WinAppGuard.csproj'
+$service    = Join-Path $root 'src\WinAppGuard.Svc\WinAppGuard.Svc.csproj'
+$setup      = Join-Path $root 'src\WinAppGuard.Setup\WinAppGuard.Setup.csproj'
 $distDir    = Join-Path $root 'dist'
 $publishDir = Join-Path $root 'build\_publish'
 
@@ -42,7 +44,36 @@ if ($extraFiles) {
 
 Copy-Item $exePath $distDir -Force
 
+# ---- 3.0：服务与安装器（同样是自包含单文件）----
+Write-Host '==> 发布服务与安装器'
+$serviceDir = Join-Path $root 'build\_publish_svc'
+$setupDir   = Join-Path $root 'build\_publish_setup'
+
+foreach ($dir in @($serviceDir, $setupDir)) {
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+}
+
+dotnet publish $service -c Release -o $serviceDir
+if ($LASTEXITCODE -ne 0) { throw "发布服务失败，退出码 $LASTEXITCODE" }
+
+dotnet publish $setup -c Release -o $setupDir
+if ($LASTEXITCODE -ne 0) { throw "发布安装器失败，退出码 $LASTEXITCODE" }
+
+foreach ($pair in @(
+    @{ Dir = $serviceDir; Name = 'WinAppGuardSvc.exe' },
+    @{ Dir = $setupDir;   Name = 'WinAppGuardSetup.exe' }
+)) {
+    $path = Join-Path $pair.Dir $pair.Name
+    if (-not (Test-Path $path)) { throw "发布失败：未找到 $path" }
+    Copy-Item $path $distDir -Force
+}
+
 $sizeMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuard.exe')).Length / 1MB, 1)
+$serviceMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSvc.exe')).Length / 1MB, 1)
+$setupMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSetup.exe')).Length / 1MB, 1)
 Write-Host ''
 Write-Host "==> 完成：dist\WinAppGuard.exe  （$sizeMB MB）"
-Write-Host '    双击运行会先弹出 UAC 确认框，这是预期行为。'
+Write-Host "           dist\WinAppGuardSvc.exe  （$serviceMB MB）"
+Write-Host "           dist\WinAppGuardSetup.exe  （$setupMB MB）"
+Write-Host '    安装：管理员运行 dist\WinAppGuardSetup.exe --install'
+Write-Host '    双击界面会先弹出 UAC 确认框，这是预期行为。'

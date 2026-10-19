@@ -38,6 +38,10 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>WinAppGuardSvc</_Parameter1>
     </AssemblyAttribute>
+    <!-- 安装器卸载时要删除本程序创建的全部规则。 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuardSetup</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

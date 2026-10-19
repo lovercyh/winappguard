@@ -87,6 +87,8 @@ partial class MainForm
     private TextBox _whitelistSearchBox = null!;
     private ComboBox _whitelistGroupCombo = null!;
     private Button _whitelistGroupButton = null!;
+    private Button _whitelistExportButton = null!;
+    private Button _whitelistImportButton = null!;
     private Button _whitelistRemoveButton = null!;
     private Button _whitelistAddButton = null!;
     private Label _whitelistHintLabel = null!;
@@ -231,6 +233,8 @@ partial class MainForm
         _whitelistSearchBox = new TextBox();
         _whitelistGroupCombo = new ComboBox();
         _whitelistGroupButton = new Button();
+        _whitelistExportButton = new Button();
+        _whitelistImportButton = new Button();
         _whitelistRemoveButton = new Button();
         _whitelistAddButton = new Button();
         _whitelistHintLabel = new Label();
@@ -706,7 +710,7 @@ partial class MainForm
         _rulesExportButton.TabIndex = 9;
         _rulesExportButton.Text = "导出…";
         _rulesExportButton.UseVisualStyleBackColor = true;
-        _rulesExportButton.Click += OnExportRulesButtonClick;
+        _rulesExportButton.Click += OnExportBlocklistButtonClick;
 
         _rulesImportButton.Location = new Point(544, 42);
         _rulesImportButton.Name = "_rulesImportButton";
@@ -714,7 +718,7 @@ partial class MainForm
         _rulesImportButton.TabIndex = 10;
         _rulesImportButton.Text = "导入…";
         _rulesImportButton.UseVisualStyleBackColor = true;
-        _rulesImportButton.Click += OnImportRulesButtonClick;
+        _rulesImportButton.Click += OnImportBlocklistButtonClick;
 
         _rulesGroupCombo.DropDownStyle = ComboBoxStyle.DropDownList;
         _rulesGroupCombo.Location = new Point(340, 8);
@@ -811,6 +815,8 @@ partial class MainForm
         _whitelistToolPanel.Controls.Add(_whitelistRemoveButton);
         _whitelistToolPanel.Controls.Add(_whitelistAddButton);
         _whitelistToolPanel.Controls.Add(_whitelistGroupButton);
+        _whitelistToolPanel.Controls.Add(_whitelistExportButton);
+        _whitelistToolPanel.Controls.Add(_whitelistImportButton);
         _whitelistToolPanel.Controls.Add(_whitelistHintLabel);
         _whitelistToolPanel.Controls.Add(_whitelistClearButton);
         _whitelistToolPanel.Controls.Add(_whitelistGroupCombo);
@@ -863,6 +869,22 @@ partial class MainForm
         _whitelistGroupButton.UseVisualStyleBackColor = true;
         _whitelistGroupButton.Click += OnWhitelistGroupButtonClick;
 
+        _whitelistExportButton.Location = new Point(440, 42);
+        _whitelistExportButton.Name = "_whitelistExportButton";
+        _whitelistExportButton.Size = new Size(100, 28);
+        _whitelistExportButton.TabIndex = 8;
+        _whitelistExportButton.Text = "导出…";
+        _whitelistExportButton.UseVisualStyleBackColor = true;
+        _whitelistExportButton.Click += OnExportWhitelistButtonClick;
+
+        _whitelistImportButton.Location = new Point(548, 42);
+        _whitelistImportButton.Name = "_whitelistImportButton";
+        _whitelistImportButton.Size = new Size(100, 28);
+        _whitelistImportButton.TabIndex = 9;
+        _whitelistImportButton.Text = "导入…";
+        _whitelistImportButton.UseVisualStyleBackColor = true;
+        _whitelistImportButton.Click += OnImportWhitelistButtonClick;
+
         // 严格模式下，没进白名单的程序**连不上网**，因此也不会出现在「联网连接」页里 ——
         // 那种情况下只能按路径添加，否则用户会被"想加却找不到它"卡死。
         _whitelistAddButton.Location = new Point(168, 42);
@@ -875,7 +897,7 @@ partial class MainForm
 
         _whitelistHintLabel.AutoSize = true;
         _whitelistHintLabel.ForeColor = SystemColors.GrayText;
-        _whitelistHintLabel.Location = new Point(440, 47);
+        _whitelistHintLabel.Location = new Point(656, 47);
         _whitelistHintLabel.Name = "_whitelistHintLabel";
         _whitelistHintLabel.Size = new Size(300, 17);
         _whitelistHintLabel.TabIndex = 4;

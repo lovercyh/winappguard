@@ -3210,9 +3210,9 @@ internal static class Program
             CheckAssertion(results, "分组文件损坏时按空表处理，不抛异常",
                 brokenGroups.AllGroups().Count == 0);
 
-            // ---------------- 2. 导出文档 ----------------
+            // ---------------- 2. 导出文档（按页各导各的） ----------------
             W();
-            W("===== 2. 导出 → 导入（往返）=====");
+            W("===== 2. 导出 → 导入（按页区分）=====");
 
             var gameRule = new FirewallRuleItem
             {
@@ -3256,45 +3256,87 @@ internal static class Program
             groupStore.SetGroup(gameRule.Name, "游戏");
             groupStore.SetGroup(allowRule.Name, "办公");
 
-            var document = RuleExport.Build(new[] { gameRule, allowRule, ipRule }, groupStore);
-            CheckAssertion(results, "导出文档包含全部三条规则", document.Rules.Count == 3);
+            var all = new[] { gameRule, allowRule, ipRule };
 
-            var json = RuleExport.Serialize(document);
+            var blockDoc = RuleExport.Build(all, groupStore, FirewallAction.Block);
+            var allowDoc = RuleExport.Build(all, groupStore, FirewallAction.Allow);
+
+            CheckAssertion(results, "黑名单导出只含阻止规则（程序 + IP）",
+                blockDoc.Rules.Count == 2 && blockDoc.Rules.All(entry => entry.Action == "block"));
+            CheckAssertion(results, "白名单导出只含允许规则",
+                allowDoc.Rules.Count == 1 && allowDoc.Rules.All(entry => entry.Action == "allow"));
+            CheckAssertion(results, "导出文件记录了范围（block / allow）",
+                blockDoc.Scope == "block" && allowDoc.Scope == "allow");
+
+            var blockJson = RuleExport.Serialize(blockDoc);
+            var allowJson = RuleExport.Serialize(allowDoc);
+
             CheckAssertion(results, "导出内容是合法 JSON 且带格式标记",
-                json.Contains(RuleExport.FormatName));
+                blockJson.Contains(RuleExport.FormatName));
 
-            if (!RuleExport.TryParse(json, out var parsed, out var error) || parsed is null)
+            if (!RuleExport.TryParse(blockJson, out var parsedBlock, out var blockError)
+                || parsedBlock is null)
             {
-                CheckAssertion(results, $"导出的文件能被解析（错误：{error}）", false);
+                CheckAssertion(results, $"黑名单导出文件能被解析（错误：{blockError}）", false);
                 PrintSummary(results, showFirewallResidue: false);
                 return;
             }
 
-            CheckAssertion(results, "导入解析出的条数一致", parsed.Rules.Count == 3);
+            if (!RuleExport.TryParse(allowJson, out var parsedAllowDoc, out var allowError)
+                || parsedAllowDoc is null)
+            {
+                CheckAssertion(results, $"白名单导出文件能被解析（错误：{allowError}）", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
 
-            var parsedGame = parsed.Rules.Single(entry => entry.Value == @"C:\Games\game.exe");
-            var parsedAllow = parsed.Rules.Single(entry => entry.Value == @"C:\Tools\tool.exe");
-            var parsedIp = parsed.Rules.Single(entry => entry.Value == "1.2.3.4");
+            var parsedGame = parsedBlock.Rules.Single(entry => entry.Value == @"C:\Games\game.exe");
+            var parsedIp = parsedBlock.Rules.Single(entry => entry.Value == "1.2.3.4");
+            var parsedAllow = parsedAllowDoc.Rules.Single();
 
             CheckAssertion(results, "程序阻止规则的类型/动作保留",
                 parsedGame.Kind == "program" && parsedGame.Action == "block");
-            CheckAssertion(results, "允许规则的类型/动作保留",
-                parsedAllow.Kind == "program" && parsedAllow.Action == "allow");
             CheckAssertion(results, "IP 规则被识别成 ip", parsedIp.Kind == "ip");
+            CheckAssertion(results, "永久规则的到期字段为空",
+                parsedGame.Expiry.Length == 0 && parsedIp.Expiry.Length == 0);
 
             var allowExpiry = RuleExpiry.Parse(parsedAllow.Expiry);
-            CheckAssertion(results, "限时规则的到期时间保留（±1 分钟）",
+            CheckAssertion(results, "白名单限时规则的到期时间保留（±1 分钟）",
                 allowExpiry.Kind == RuleExpiryKind.AtTime
                 && allowExpiry.ExpiresAtUtc is { } at
                 && Math.Abs((at - allowRule.Expiry.ExpiresAtUtc!.Value).TotalMinutes) < 1);
 
-            CheckAssertion(results, "永久规则的到期字段为空",
-                parsedGame.Expiry.Length == 0 && parsedIp.Expiry.Length == 0);
             CheckAssertion(results, "分组名随文件一起导出/导入",
                 parsedGame.Group == "游戏" && parsedAllow.Group == "办公");
+
+            // ---------------- 2b. 跨页导入必须被拦住 ----------------
+            W();
+            W("===== 2b. 黑名单文件不能导进白名单页 =====");
+
+            var blockIntoAllow = RuleExport.TryMatchScope(parsedBlock, FirewallAction.Allow, out var crossError);
+            W($"    黑名单文件 → 白名单页：{(blockIntoAllow ? "接受（错误！）" : crossError)}");
+            CheckAssertion(results, "黑名单文件在导入白名单页时被拒绝", !blockIntoAllow);
+
+            var allowIntoBlock = RuleExport.TryMatchScope(parsedAllowDoc, FirewallAction.Block, out _);
+            CheckAssertion(results, "白名单文件在导入黑名单页时被拒绝", !allowIntoBlock);
+
+            CheckAssertion(results, "同页导入被接受",
+                RuleExport.TryMatchScope(parsedBlock, FirewallAction.Block, out _)
+                && RuleExport.TryMatchScope(parsedAllowDoc, FirewallAction.Allow, out _));
+
+            // 旧格式（没有 Scope 字段）里混了两类 → 同样拒绝，避免"导进去一半"。
+            const string legacyMixed = "{\"Format\":\"WinAppGuard.Rules\",\"Version\":1,\"Rules\":[" +
+                "{\"Kind\":\"program\",\"Value\":\"C:\\\\a.exe\",\"Action\":\"block\"}," +
+                "{\"Kind\":\"program\",\"Value\":\"C:\\\\b.exe\",\"Action\":\"allow\"}]}";
+
+            CheckAssertion(results, "旧格式混了两类时拒绝导入",
+                RuleExport.TryParse(legacyMixed, out var legacyDoc, out _)
+                && legacyDoc is not null
+                && !RuleExport.TryMatchScope(legacyDoc, FirewallAction.Block, out _));
+
             CheckAssertion(results, "摘要能说清阻止/允许数量",
-                RuleExport.Summarize(parsed).Contains("阻止 2 条")
-                && RuleExport.Summarize(parsed).Contains("允许 1 条"));
+                RuleExport.Summarize(parsedBlock).Contains("阻止 2 条")
+                && RuleExport.Summarize(parsedAllowDoc).Contains("允许 1 条"));
 
             // ---------------- 3. 坏文件必须被拒绝 ----------------
             W();
@@ -3494,6 +3536,12 @@ internal static class Program
         CheckAssertion(results, "白名单有「分组…」按钮",
             TryGetField<Button>(form, "_whitelistGroupButton", out var allowGroupButton)
             && allowGroupButton.Text.Contains("分组"));
+
+        CheckAssertion(results, "白名单也有「导出… / 导入…」按钮",
+            TryGetField<Button>(form, "_whitelistExportButton", out var allowExportButton)
+            && allowExportButton.Text.Contains("导出")
+            && TryGetField<Button>(form, "_whitelistImportButton", out var allowImportButton)
+            && allowImportButton.Text.Contains("导入"));
 
         CheckAssertion(results, "两个规则表格都有「分组」列",
             TryGetField<DataGridViewBuffered>(form, "_rulesGrid", out var blockGrid)

@@ -1695,18 +1695,11 @@ public partial class MainForm : Form
         _whitelistGroupButton.Enabled = rule is not null;
         _whitelistClearButton.Enabled = _whitelistRules.Count > 0;
 
-        if (_whitelistRules.Count == 0)
-        {
-            _whitelistHintLabel.Text = "白名单是空的 —— 严格模式开启后，除系统必需程序外都无法上网。";
-        }
-        else if (rule is null)
-        {
-            _whitelistHintLabel.Text = "未选中任何程序。";
-        }
-        else
-        {
-            _whitelistHintLabel.Text = $"已选中 {rule.ApplicationNameText} —— 规则名 {rule.Name}";
-        }
+        // 空状态/长文本交给表格自己的 EmptyText 和分组列，这里只留最短的选中提示，
+        // 否则在最小窗口宽度下这行会被截断。
+        _whitelistHintLabel.Text = rule is null
+            ? "未选中任何程序"
+            : $"已选中 {rule.ApplicationNameText}";
     }
 
     private void OnWhitelistGridCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
@@ -1953,13 +1946,24 @@ public partial class MainForm : Form
     }
 
     /// <summary>导出全部规则（黑名单 + 白名单 + 封禁 IP），含分组。</summary>
-    private void OnExportRulesButtonClick(object? sender, EventArgs e)
+    private void OnExportBlocklistButtonClick(object? sender, EventArgs e)
+        => ExportRules(FirewallAction.Block);
+
+    private void OnExportWhitelistButtonClick(object? sender, EventArgs e)
+        => ExportRules(FirewallAction.Allow);
+
+    /// <summary>导出某一类规则（黑名单或白名单，含封禁 IP 与分组）。</summary>
+    private void ExportRules(FirewallAction scope)
     {
-        if (_appGuardRules.Count == 0)
+        var pageName = scope == FirewallAction.Block ? "黑名单" : "白名单";
+        var fileTag = scope == FirewallAction.Block ? "blacklist" : "whitelist";
+        var count = _appGuardRules.Count(rule => rule.Action == scope);
+
+        if (count == 0)
         {
             MessageBox.Show(
                 this,
-                "当前没有任何规则可导出。",
+                $"当前{pageName}没有规则可导出。",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
@@ -1968,9 +1972,9 @@ public partial class MainForm : Form
 
         using var dialog = new SaveFileDialog
         {
-            Title = "导出规则",
+            Title = $"导出{pageName}",
             Filter = "WinAppGuard 规则 (*.json)|*.json|所有文件 (*.*)|*.*",
-            FileName = $"winappguard-rules-{DateTime.Now:yyyyMMdd}.json",
+            FileName = $"winappguard-{fileTag}-{DateTime.Now:yyyyMMdd}.json",
             OverwritePrompt = true,
         };
 
@@ -1981,15 +1985,15 @@ public partial class MainForm : Form
 
         try
         {
-            var document = RuleExport.Build(_appGuardRules, _ruleGroups);
+            var document = RuleExport.Build(_appGuardRules, _ruleGroups, scope);
             var json = RuleExport.Serialize(document);
 
             File.WriteAllText(dialog.FileName, json, new UTF8Encoding(false));
-            LocalLog.Operation($"导出规则：{document.Rules.Count} 条 → {dialog.FileName}");
+            LocalLog.Operation($"导出{pageName}：{document.Rules.Count} 条 → {dialog.FileName}");
 
             MessageBox.Show(
                 this,
-                $"已导出 {document.Rules.Count} 条规则（含分组）。\n\n{dialog.FileName}\n\n" +
+                $"已导出 {document.Rules.Count} 条{pageName}规则（含分组）。\n\n{dialog.FileName}\n\n" +
                 "注意：文件里包含程序完整路径，发给别人等于公开你在用哪些软件。",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
@@ -1997,16 +2001,24 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            ShowError("导出规则失败", ex);
+            ShowError($"导出{pageName}失败", ex);
         }
     }
 
-    /// <summary>导入规则（来自导出文件）。</summary>
-    private void OnImportRulesButtonClick(object? sender, EventArgs e)
+    private void OnImportBlocklistButtonClick(object? sender, EventArgs e)
+        => ImportRules(FirewallAction.Block);
+
+    private void OnImportWhitelistButtonClick(object? sender, EventArgs e)
+        => ImportRules(FirewallAction.Allow);
+
+    /// <summary>导入某一类规则（只能导入本页导出的文件）。</summary>
+    private void ImportRules(FirewallAction scope)
     {
+        var pageName = scope == FirewallAction.Block ? "黑名单" : "白名单";
+
         using var dialog = new OpenFileDialog
         {
-            Title = "导入规则",
+            Title = $"导入{pageName}",
             Filter = "WinAppGuard 规则 (*.json)|*.json|所有文件 (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false,
@@ -2040,6 +2052,18 @@ public partial class MainForm : Form
             return;
         }
 
+        // 不能把黑名单文件导进白名单页（反之亦然）—— 否则会悄悄创建另一类规则。
+        if (!RuleExport.TryMatchScope(document, scope, out var scopeError))
+        {
+            MessageBox.Show(
+                this,
+                $"不能在这个页面导入：\n\n{scopeError}",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
         if (document.Rules.Count == 0)
         {
             MessageBox.Show(
@@ -2061,8 +2085,8 @@ public partial class MainForm : Form
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
-            title: "导入规则",
-            question: $"确定要导入这 {document.Rules.Count} 条规则吗？",
+            title: $"导入{pageName}",
+            question: $"确定要把这 {document.Rules.Count} 条规则导入{pageName}吗？",
             details: new[]
             {
                 new KeyValuePair<string, string>("内容", RuleExport.Summarize(document)),
@@ -2344,7 +2368,7 @@ public partial class MainForm : Form
             ? rule.ApplicationNameText
             : $"IP {rule.IpAddress}";
 
-        _rulesHintLabel.Text = $"已选中 {what} —— 规则名 {rule.Name}";
+        _rulesHintLabel.Text = $"已选中 {what}";
     }
 
     /// <summary>构造「已选中 xxx —— ……」这行说明，让用户知道按钮为什么灰着。</summary>

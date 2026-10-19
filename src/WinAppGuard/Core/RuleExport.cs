@@ -33,6 +33,12 @@ internal sealed class RuleExportDocument
     /// <summary>格式版本。</summary>
     public int Version { get; set; } = RuleExport.CurrentVersion;
 
+    /// <summary>
+    /// 导出范围：<c>block</c>（黑名单）/ <c>allow</c>（白名单）。
+    /// 空字符串表示旧文件（没有这个字段），导入时按条目自身的动作校验。
+    /// </summary>
+    public string Scope { get; set; } = string.Empty;
+
     /// <summary>导出时间（UTC，仅供人看）。</summary>
     public DateTime ExportedUtc { get; set; } = DateTime.UtcNow;
 
@@ -61,14 +67,21 @@ internal static class RuleExport
     /// <summary>文件大小上限（2 MB，正常规则文件远小于这个）。</summary>
     internal const int MaxBytes = 2 * 1024 * 1024;
 
-    /// <summary>把当前规则 + 分组导出成文档。</summary>
+    /// <summary>
+    /// 把某一类规则（黑名单 = Block，白名单 = Allow）+ 分组导出成文档。
+    /// 两个页签各导各的，但用的是同一种文件格式。
+    /// </summary>
     internal static RuleExportDocument Build(
         IEnumerable<FirewallRuleItem> rules,
-        RuleGroupStore groups)
+        RuleGroupStore groups,
+        FirewallAction scope)
     {
-        var document = new RuleExportDocument();
+        var document = new RuleExportDocument
+        {
+            Scope = scope == FirewallAction.Block ? "block" : "allow",
+        };
 
-        foreach (var rule in rules)
+        foreach (var rule in rules.Where(rule => rule.Action == scope))
         {
             var isIp = !string.IsNullOrEmpty(rule.IpAddress);
 
@@ -139,6 +152,14 @@ internal static class RuleExport
             return false;
         }
 
+        parsed.Scope = (parsed.Scope ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (parsed.Scope.Length > 0 && parsed.Scope is not ("block" or "allow"))
+        {
+            error = $"规则文件的导出范围不认识：{parsed.Scope}。";
+            return false;
+        }
+
         if (parsed.Rules is null)
         {
             error = "文件里没有 Rules 数组。";
@@ -205,6 +226,37 @@ internal static class RuleExport
         }
 
         document = parsed;
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// 这份文件能不能在当前页导入。
+    ///
+    /// 规则分两个页签之后，**不能把"黑名单文件"导进白名单页** ——
+    /// 那会悄悄创建一批阻止规则，用户还以为自己在恢复白名单。
+    /// 旧文件没有 <see cref="RuleExportDocument.Scope"/>，就按条目动作判断：
+    /// 只要混了两类，同样拒绝，避免"导进去一半"。
+    /// </summary>
+    internal static bool TryMatchScope(
+        RuleExportDocument document, FirewallAction expected, out string error)
+    {
+        var expectedScope = expected == FirewallAction.Block ? "block" : "allow";
+        var expectedName = expected == FirewallAction.Block ? "黑名单" : "白名单";
+        var otherName = expected == FirewallAction.Block ? "白名单" : "黑名单";
+
+        if (document.Scope.Length > 0 && document.Scope != expectedScope)
+        {
+            error = $"这个文件是「{otherName}」导出的，请到「{otherName}」页导入。";
+            return false;
+        }
+
+        if (document.Rules.Any(entry => entry.Action != expectedScope))
+        {
+            error = $"文件里混有「{otherName}」规则，请到对应页面分别导入。";
+            return false;
+        }
+
         error = string.Empty;
         return true;
     }

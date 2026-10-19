@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    3.0 起把「不依赖界面」的逻辑抽到这里：
+      - WFP 规则读写（Core/Wfp）
+      - 审计（Core/Audit）
+      - 规则模型 / 设置 / 日志 / 进程与连接查询
+    服务（WinAppGuardSvc）和界面（WinAppGuard）都引用它。
+    刻意 **不引用 WinForms**：服务是控制台/服务进程，不应该拖进 UI 框架。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <AssemblyName>WinAppGuard.Core</AssemblyName>
+    <RootNamespace>WinAppGuard</RootNamespace>
+
+    <Version>2.5</Version>
+    <Company>lovercyh</Company>
+    <Copyright>Copyright © 2026 lovercyh</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      这些类型是 internal（不对外暴露）：
+        - WinAppGuard（界面程序集）要用它们；
+        - SelfCheck（开发期工具）要直接调用 WFP 封装做真实往返测试。
+      只给这两个程序集开放可见性，产品外部依然看不到。
+    -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuard</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuard.SelfCheck</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

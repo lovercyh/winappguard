@@ -257,8 +257,22 @@ internal static class CliRunner
     /// <summary>版本号（<c>1.4.0+&lt;commit&gt;</c> 里只取前面那段）。</summary>
     private static string BuildVersionText()
     {
-        var version = System.Windows.Forms.Application.ProductVersion;
-        var plus = version.IndexOf('+');
-        return plus > 0 ? version[..plus] : version;
+        // ⚠️ 这里原本用 System.Windows.Forms.Application.ProductVersion。
+        //    3.0 起 Core 是独立类库（服务也要引用它），不能依赖 WinForms；
+        //    改成读入口程序集的 InformationalVersion，语义不变。
+        var entry = System.Reflection.Assembly.GetEntryAssembly();
+        var informational = entry?
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .FirstOrDefault()?
+            .InformationalVersion;
+
+        if (string.IsNullOrEmpty(informational))
+        {
+            return entry?.GetName().Version?.ToString(3) ?? "0.0.0";
+        }
+
+        var plus = informational.IndexOf('+');
+        return plus > 0 ? informational[..plus] : informational;
     }
 }

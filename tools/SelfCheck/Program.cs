@@ -6823,17 +6823,48 @@ internal static class Program
         W($"文件大小 = {new FileInfo(target).Length / 1024.0:F0} KB");
         W();
 
+        // 3.0 起产品拆成多个程序集（UI + Core + 以后还有服务/Contracts）。
+        // 只审计 UI 会让"真正干活的那一半"逃过审计 —— 那会变成**假报告**。
+        // 这里把同一目录下的自有程序集一起审计；任何一项不过，整份审计都不过。
+        var targets = new List<string> { target };
+        var coreSibling = Path.Combine(
+            Path.GetDirectoryName(target)!, "WinAppGuard.Core.dll");
+
+        if (File.Exists(coreSibling))
+        {
+            targets.Add(coreSibling);
+        }
+
         var results = new List<(string Title, bool Passed)>();
 
-        using var stream = File.OpenRead(target);
-        using var pe = new PEReader(stream);
-        var metadata = pe.GetMetadataReader();
+        foreach (var assembly in targets)
+        {
+            var label = Path.GetFileNameWithoutExtension(assembly);
 
-        AuditAssemblies(metadata, results);
-        AuditNetworking(metadata, results);
-        AuditNativeImports(metadata);
-        AuditSensitiveApis(metadata);
-        AuditNativeNetworkImports(metadata, results);
+            W($"===== 审计 {label} =====");
+            W($"    路径 = {assembly}");
+            W($"    大小 = {new FileInfo(assembly).Length / 1024.0:F0} KB");
+            W();
+
+            using var stream = File.OpenRead(assembly);
+            using var pe = new PEReader(stream);
+            var metadata = pe.GetMetadataReader();
+
+            // 每个函数都在 results 末尾追加若干条；给它们统一加上程序集前缀，
+            // 这样失败时能一眼看出是哪一个程序集的问题。
+            var before = results.Count;
+
+            AuditAssemblies(metadata, results);
+            AuditNetworking(metadata, results);
+            AuditNativeImports(metadata);
+            AuditSensitiveApis(metadata);
+            AuditNativeNetworkImports(metadata, results);
+
+            for (var i = before; i < results.Count; i++)
+            {
+                results[i] = ($"[{label}] {results[i].Title}", results[i].Passed);
+            }
+        }
 
         PrintSummary(results, showFirewallResidue: false);
 
@@ -6918,7 +6949,11 @@ internal static class Program
                         && !n.StartsWith("Microsoft", StringComparison.OrdinalIgnoreCase)
                         && !n.StartsWith("mscorlib", StringComparison.OrdinalIgnoreCase)
                         && !n.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase)
-                        && !n.StartsWith("WindowsBase", StringComparison.OrdinalIgnoreCase))
+                        && !n.StartsWith("WindowsBase", StringComparison.OrdinalIgnoreCase)
+                        // 3.0 起自有程序集不在"第三方"之列，但它们也不能藏着掖着：
+                        // 调用方会把同一目录下的自有程序集**逐个审计**。
+                        && !n.Equals("WinAppGuard.Core", StringComparison.OrdinalIgnoreCase)
+                        && !n.Equals("WinAppGuard.Contracts", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         W($"    共 {names.Count} 个");

@@ -68,6 +68,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 3.0 起：WFP / 审计 / 规则引擎都在 Core，类库不引用 WinForms。 -->
+    <ProjectReference Include="..\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       托盘图标从嵌入资源里读。
       指定 LogicalName 是为了不依赖编译器推断出的资源名（那样改目录结构就容易悄悄失效）。

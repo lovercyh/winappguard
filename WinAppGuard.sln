@@ -7,6 +7,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WinAppGuard", "src\WinAppGuard\WinAppGuard.csproj", "{0DA7E23C-A35B-4494-9B31-4D766B2D60E7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WinAppGuard.Core", "src\WinAppGuard.Core\WinAppGuard.Core.csproj", "{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,11 +31,24 @@ Global
 		{0DA7E23C-A35B-4494-9B31-4D766B2D60E7}.Release|x64.Build.0 = Release|Any CPU
 		{0DA7E23C-A35B-4494-9B31-4D766B2D60E7}.Release|x86.ActiveCfg = Release|Any CPU
 		{0DA7E23C-A35B-4494-9B31-4D766B2D60E7}.Release|x86.Build.0 = Release|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Debug|x64.Build.0 = Debug|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Debug|x86.Build.0 = Debug|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Release|x64.ActiveCfg = Release|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Release|x64.Build.0 = Release|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Release|x86.ActiveCfg = Release|Any CPU
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{0DA7E23C-A35B-4494-9B31-4D766B2D60E7} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{92E12DB1-6AAB-4F5C-A717-E484D6926B2F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

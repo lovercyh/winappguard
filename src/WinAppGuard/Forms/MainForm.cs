@@ -684,6 +684,7 @@ public partial class MainForm : Form
         // 三列都只有一个值，除了占地方没有任何信息量。
         AddRuleColumn("类型", nameof(FirewallRuleItem.RuleKindText), 60);
         AddRuleColumn("分组", nameof(FirewallRuleItem.Group), 90);
+        AddRuleColumn("范围", nameof(FirewallRuleItem.ScopeText), 150);
         AddRuleColumn("程序名 / IP", nameof(FirewallRuleItem.ApplicationNameText), 160);
         AddRuleColumn("程序路径", nameof(FirewallRuleItem.ApplicationPath), 280, fill: true);
         AddRuleColumn("自动解除", nameof(FirewallRuleItem.ExpiryText), 120);
@@ -700,6 +701,7 @@ public partial class MainForm : Form
     private void SetupWhitelistGrid()
     {
         AddColumn(_whitelistGrid, "分组", nameof(FirewallRuleItem.Group), 90);
+        AddColumn(_whitelistGrid, "范围", nameof(FirewallRuleItem.ScopeText), 150);
         AddColumn(_whitelistGrid, "程序名", nameof(FirewallRuleItem.ApplicationNameText), 160);
         AddColumn(_whitelistGrid, "程序路径", nameof(FirewallRuleItem.ApplicationPath), 280, fill: true);
         AddColumn(_whitelistGrid, "启用", nameof(FirewallRuleItem.EnabledText), 70);
@@ -1761,6 +1763,13 @@ public partial class MainForm : Form
         var name = Path.GetFileName(path);
         var strictModeOn = StrictModeManager.IsEnabled;
 
+        var scope = RuleScopeForm.Ask(DialogOwner, RuleScope.Any);
+
+        if (scope is null)
+        {
+            return;
+        }
+
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "加入白名单",
@@ -1770,6 +1779,7 @@ public partial class MainForm : Form
                 new KeyValuePair<string, string>("程序名", name),
                 new KeyValuePair<string, string>("完整路径", path),
                 new KeyValuePair<string, string>("生效条件", "只在严格模式下有意义"),
+                new KeyValuePair<string, string>("作用范围", scope.Describe()),
             },
             warnings: new[]
             {
@@ -1788,8 +1798,8 @@ public partial class MainForm : Form
 
         try
         {
-            var ruleName = RuleEngine.CreateAllowRule(path);
-            LocalLog.Operation($"加入白名单：{path}（规则 {ruleName}）");
+            var ruleName = RuleEngine.CreateAllowRule(path, RuleExpiry.Never, scope);
+            LocalLog.Operation($"加入白名单：{path}（范围 {scope.Describe()}，规则 {ruleName}）");
             AfterRulesChanged();
         }
         catch (Exception ex)
@@ -2903,6 +2913,13 @@ public partial class MainForm : Form
             return;
         }
 
+        var scope = RuleScopeForm.Ask(DialogOwner, RuleScope.Any);
+
+        if (scope is null)
+        {
+            return;
+        }
+
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "加入黑名单",
@@ -2911,12 +2928,15 @@ public partial class MainForm : Form
             {
                 new KeyValuePair<string, string>("程序名", name),
                 new KeyValuePair<string, string>("完整路径", path),
-                new KeyValuePair<string, string>("生效范围", "出站方向的 TCP 和 UDP 全部阻止（永久）"),
-                new KeyValuePair<string, string>("将创建规则", RuleNaming.BuildBlockRuleName(path)),
+                new KeyValuePair<string, string>("生效范围", scope.Describe()),
+                new KeyValuePair<string, string>("将创建规则",
+                    new WfpRule(path, FirewallAction.Block, RuleExpiry.Never, scope).DisplayName),
             },
             warnings: new[]
             {
-                "确认后该程序会立刻无法联网（已经建立的连接也会断开）。",
+                scope.IsAny
+                    ? "确认后该程序会立刻无法联网（已经建立的连接也会断开）。"
+                    : $"只拦「{scope.Describe()}」：其它端口 / 网络位置上的连接不受影响。",
                 "这是永久规则，要恢复请回到这一页删除它。",
                 "想限时阻止（30 分钟 / 2 小时 / 下次重启），请到「联网连接」页操作。",
             },
@@ -2929,8 +2949,8 @@ public partial class MainForm : Form
 
         try
         {
-            var ruleName = RuleEngine.CreateBlockRule(path);
-            LocalLog.Operation($"加入黑名单：{path}（规则 {ruleName}）");
+            var ruleName = RuleEngine.CreateBlockRule(path, RuleExpiry.Never, scope);
+            LocalLog.Operation($"加入黑名单：{path}（范围 {scope.Describe()}，规则 {ruleName}）");
             AfterRulesChanged();
         }
         catch (Exception ex)

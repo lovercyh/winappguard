@@ -129,7 +129,8 @@ internal static class Program
                          && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -236,6 +237,14 @@ internal static class Program
             else if (args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunRulesIoTest();
+            }
+            else if (args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunRuleScopeTest();
+            }
+            else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpScopeTest();
             }
             else if (args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3379,6 +3388,242 @@ internal static class Program
     }
 
     /// <summary>
+    /// 2.5：精细化范围（协议 / 端口 / 网络位置）的离线自检。
+    ///
+    /// 只验证"我们自己的编码与校验"；**真正的过滤效果**必须用 --wfp-scope-test 在虚拟机里验证
+    /// （它会给测试程序建一条只拦 43 端口的规则，再确认 443 仍然通）。
+    /// </summary>
+    private static void RunRuleScopeTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   精细化范围：协议 / 远端端口 / 网络位置（离线）             #");
+        W("################################################################");
+        W();
+
+        // ---------------- 1. 往返 ----------------
+        W("===== 1. 范围编码往返 =====");
+
+        var scopes = new[]
+        {
+            RuleScope.Any,
+            new RuleScope(RuleProtocol.Tcp, 443, 443, NetworkProfile.Any),
+            new RuleScope(RuleProtocol.Udp, 8000, 8100, NetworkProfile.Public),
+            new RuleScope(RuleProtocol.Tcp, 0, 0, NetworkProfile.Domain),
+            new RuleScope(RuleProtocol.Udp, 53, 53, NetworkProfile.Private),
+        };
+
+        foreach (var scope in scopes)
+        {
+            var token = scope.Encode();
+            var ok = RuleScope.TryParse(token, out var back);
+
+            W($"    {scope.Describe()} → \"{token}\" → {back.Describe()}");
+            CheckAssertion(results, $"范围往返：{scope.Describe()}",
+                ok
+                && back.Protocol == scope.Protocol
+                && back.PortFrom == scope.PortFrom
+                && back.PortTo == scope.PortTo
+                && back.Profile == scope.Profile);
+        }
+
+        // ---------------- 2. 非法组合必须被拒绝 ----------------
+        W();
+        W("===== 2. 非法组合 =====");
+
+        var invalid = new (string Name, RuleScope Scope)[]
+        {
+            ("端口 + 任意协议", new RuleScope(RuleProtocol.Any, 443, 443, NetworkProfile.Any)),
+            ("起始大于结束", new RuleScope(RuleProtocol.Tcp, 900, 800, NetworkProfile.Any)),
+            ("端口为 0", new RuleScope(RuleProtocol.Tcp, 0, 443, NetworkProfile.Any)),
+            ("端口越界", new RuleScope(RuleProtocol.Tcp, 70000, 70000, NetworkProfile.Any)),
+        };
+
+        foreach (var (name, scope) in invalid)
+        {
+            var reason = scope.Validate();
+            W($"    {name} → {(reason is null ? "被接受（错误！）" : reason)}");
+            CheckAssertion(results, $"拒绝非法范围：{name}", reason is not null);
+        }
+
+        // ---------------- 3. 端口文本解析 ----------------
+        W();
+        W("===== 3. 端口输入解析 =====");
+
+        CheckAssertion(results, "单个端口 443",
+            RuleScopeForm.TryParsePorts("443", out var singleFrom, out var singleTo, out _)
+            && singleFrom == 443 && singleTo == 443);
+
+        CheckAssertion(results, "端口范围 8000-8100",
+            RuleScopeForm.TryParsePorts("8000-8100", out var rangeFrom, out var rangeTo, out _)
+            && rangeFrom == 8000 && rangeTo == 8100);
+
+        CheckAssertion(results, "留空表示不限",
+            RuleScopeForm.TryParsePorts("  ", out var emptyFrom, out var emptyTo, out _)
+            && emptyFrom == 0 && emptyTo == 0);
+
+        CheckAssertion(results, "乱填的端口被拒绝",
+            !RuleScopeForm.TryParsePorts("abc", out _, out _, out _)
+            && !RuleScopeForm.TryParsePorts("8000-", out _, out _, out _)
+            && !RuleScopeForm.TryParsePorts("900-800", out _, out _, out _));
+
+        // ---------------- 4. 规则说明与规则名 ----------------
+        W();
+        W("===== 4. 规则说明 / 规则名 =====");
+
+        var scopedRule = new WfpRule(
+            @"C:\Tools\a.exe",
+            FirewallAction.Block,
+            RuleExpiry.Never,
+            new RuleScope(RuleProtocol.Tcp, 443, 443, NetworkProfile.Public));
+
+        W($"    说明 = {scopedRule.Description}");
+        W($"    规则名 = {scopedRule.DisplayName}");
+
+        CheckAssertion(results, "带范围的规则说明能原样解析回来",
+            WfpRule.TryParse(scopedRule.Description, out var parsedRule)
+            && parsedRule.Scope.Protocol == RuleProtocol.Tcp
+            && parsedRule.Scope.PortFrom == 443
+            && parsedRule.Scope.Profile == NetworkProfile.Public);
+
+        CheckAssertion(results, "规则名带上范围后缀（避免同程序不同范围重名）",
+            scopedRule.DisplayName.EndsWith("_tcp443-pub", StringComparison.Ordinal));
+
+        CheckAssertion(results, "旧格式（v1，无范围）仍然能解析",
+            WfpRule.TryParse(@"AppGuard|1|Block|C:\Tools\a.exe|", out var legacyRule)
+            && legacyRule.Scope.IsAny);
+
+        CheckAssertion(results, "看不懂的范围标记不被猜测（宁可不认这条规则）",
+            !WfpRule.TryParse(@"AppGuard|2|Block|C:\Tools\a.exe||tcp-443-443-xyz", out _));
+
+        // ---------------- 5. 导出文件带范围 ----------------
+        W();
+        W("===== 5. 导出文件包含范围 =====");
+
+        var groupStore = new RuleGroupStore(
+            Path.Combine(Path.GetTempPath(), $"wag-scope-groups-{Guid.NewGuid():N}.json"));
+
+        var item = new FirewallRuleItem
+        {
+            Name = scopedRule.DisplayName,
+            ApplicationPath = scopedRule.ApplicationPath,
+            Description = scopedRule.Description,
+            Grouping = "AppGuard",
+            Enabled = true,
+            Action = FirewallAction.Block,
+            Direction = FirewallDirection.Outbound,
+            Protocol = 256,
+            Scope = scopedRule.Scope,
+        };
+
+        var document = RuleExport.Build(new[] { item }, groupStore, FirewallAction.Block);
+        var json = RuleExport.Serialize(document);
+
+        CheckAssertion(results, "导出文件里写入了范围标记",
+            json.Contains("\"Scope\": \"tcp-443-443-pub\""));
+
+        if (RuleExport.TryParse(json, out var parsedDocument, out _) && parsedDocument is not null)
+        {
+            var entry = parsedDocument.Rules.Single();
+            CheckAssertion(results, "导入解析后范围仍然正确",
+                RuleScope.TryParse(entry.Scope, out var importedScope)
+                && importedScope.PortFrom == 443
+                && importedScope.Profile == NetworkProfile.Public);
+        }
+        else
+        {
+            results.Add(("导出的范围文件能被解析", false));
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 2.5：真实 WFP 过滤器上的范围验证（**需要管理员**，只在虚拟机里跑）。
+    /// </summary>
+    private static void RunWfpScopeTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   精细化范围：真实过滤器（需管理员；只拦 43，443 应仍然通）   #");
+        W("################################################################");
+        W();
+
+        var exe = Environment.ProcessPath ?? string.Empty;
+        W($"    测试程序 = {exe}");
+
+        var portScope = new RuleScope(RuleProtocol.Tcp, 43, 43, NetworkProfile.Any);
+        var portRule = new WfpRule(exe, FirewallAction.Block, RuleExpiry.Never, portScope);
+
+        var profileScope = new RuleScope(RuleProtocol.Tcp, 43, 43, NetworkProfile.Public);
+        var profileRule = new WfpRule(exe, FirewallAction.Block, RuleExpiry.Never, profileScope);
+
+        var profileRuleWritten = false;
+
+        using var engine = WfpEngine.Open();
+        engine.EnsureSublayer(persistent: true);
+
+        try
+        {
+            // 基线：43 和 443 都应该通
+            var baseline43 = ProbeConnect("whois.cymru.com", 43);
+            var baseline443 = ProbeConnect("example.com", 443);
+            W($"    基线：whois:43={baseline43}，example:443={baseline443}");
+
+            WfpRuleStore.Add(engine, portRule);
+            Thread.Sleep(1500);
+
+            var blocked43 = !ProbeConnect("whois.cymru.com", 43);
+            var still443 = ProbeConnect("example.com", 443);
+
+            W($"    只拦 43 后：whois:43 被拦={blocked43}，example:443 仍通={still443}");
+
+            CheckAssertion(results, "按远端端口拦住了 43", blocked43);
+            CheckAssertion(results, "同一个程序连 443 不受影响（端口条件真的生效）", still443);
+
+            // 网络位置条件：先看 BFE 是否接受这个条件
+            try
+            {
+                WfpRuleStore.Add(engine, profileRule);
+                profileRuleWritten = true;
+                W("    网络位置条件：BFE 接受了这条过滤器");
+                CheckAssertion(results, "WFP 接受 CURRENT_PROFILE_ID 条件", true);
+            }
+            catch (WfpException ex)
+            {
+                W($"    网络位置条件：BFE 拒绝 —— {ex.Message}");
+                CheckAssertion(results, "WFP 接受 CURRENT_PROFILE_ID 条件", false);
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (profileRuleWritten)
+                {
+                    WfpRuleStore.Remove(engine, profileRule);
+                }
+
+                WfpRuleStore.Remove(engine, portRule);
+                Thread.Sleep(500);
+
+                var restored43 = ProbeConnect("whois.cymru.com", 43);
+                W($"    清理后 whois:43 恢复={restored43}");
+                CheckAssertion(results, "删除规则后 43 恢复", restored43);
+            }
+            catch (Exception ex)
+            {
+                W($"    ！清理失败：{ex.Message}");
+                CheckAssertion(results, "删除规则后 43 恢复", false);
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: true);
+    }
+
+    /// <summary>
     /// 2.1.1 界面打磨项的接线自检（**离线**）：搜索、空状态、危险按钮、快捷键、
     /// 右键菜单、窗口状态持久化、横幅提示。
     ///
@@ -3548,6 +3793,12 @@ internal static class Program
             && blockGrid.Columns[nameof(FirewallRuleItem.Group)] is not null
             && TryGetField<DataGridViewBuffered>(form, "_whitelistGrid", out var allowGrid)
             && allowGrid.Columns[nameof(FirewallRuleItem.Group)] is not null);
+
+        CheckAssertion(results, "两个规则表格都有「范围」列（协议/端口/网络位置）",
+            TryGetField<DataGridViewBuffered>(form, "_rulesGrid", out var blockGridForScope)
+            && blockGridForScope.Columns[nameof(FirewallRuleItem.ScopeText)] is not null
+            && TryGetField<DataGridViewBuffered>(form, "_whitelistGrid", out var allowGridForScope)
+            && allowGridForScope.Columns[nameof(FirewallRuleItem.ScopeText)] is not null);
 
         // 分组筛选下拉的取值映射：0=全部、1=未分组、其它=具体分组。
         if (TryGetField<ComboBox>(form, "_rulesGroupCombo", out var groupCombo))

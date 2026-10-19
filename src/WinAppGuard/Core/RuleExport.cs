@@ -22,6 +22,9 @@ internal sealed class RuleExportEntry
 
     /// <summary>分组名；空字符串 = 未分组。</summary>
     public string Group { get; set; } = string.Empty;
+
+    /// <summary>作用范围标记（协议/端口/网络位置）；空字符串 = 不限。</summary>
+    public string Scope { get; set; } = string.Empty;
 }
 
 /// <summary>一条导出文件 = 一个文档。</summary>
@@ -92,6 +95,7 @@ internal static class RuleExport
                 Action = rule.Action == FirewallAction.Block ? "block" : "allow",
                 Expiry = rule.Expiry.Encode(),
                 Group = groups.GetGroup(rule.Name),
+                Scope = rule.Scope.Encode(),
             });
         }
 
@@ -188,6 +192,7 @@ internal static class RuleExport
             entry.Value = (entry.Value ?? string.Empty).Trim();
             entry.Expiry ??= string.Empty;
             entry.Group = (entry.Group ?? string.Empty).Trim();
+            entry.Scope = (entry.Scope ?? string.Empty).Trim();
 
             if (entry.Kind is not ("program" or "ip"))
             {
@@ -222,6 +227,12 @@ internal static class RuleExport
             if (entry.Group.Length > 40)
             {
                 entry.Group = entry.Group[..40];
+            }
+
+            if (!RuleScope.TryParse(entry.Scope, out _))
+            {
+                error = $"{position}的作用范围看不懂：{entry.Scope}。";
+                return false;
             }
         }
 

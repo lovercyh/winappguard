@@ -51,11 +51,21 @@ internal static class WfpNativeMethods
     /// <summary>FWP_MATCH_EQUAL。</summary>
     internal const uint FWP_MATCH_EQUAL = 0;
 
+    /// <summary>FWP_MATCH_RANGE（端口范围用）。</summary>
+    internal const uint FWP_MATCH_RANGE = 5;
+
+    /// <summary>FWP_RANGE_TYPE（端口范围条件值的类型）。</summary>
+    internal const uint FWP_RANGE_TYPE = 0x102;
+
+
     /// <summary>FWP_EMPTY：让 BFE 自己算权重。</summary>
     internal const uint FWP_EMPTY = 0;
 
     /// <summary>FWP_UINT8。</summary>
     internal const uint FWP_UINT8 = 1;
+
+    /// <summary>FWP_UINT16（端口号用）。</summary>
+    internal const uint FWP_UINT16 = 2;
 
     /// <summary>FWP_UINT32。</summary>
     internal const uint FWP_UINT32 = 3;
@@ -128,6 +138,18 @@ internal static class WfpNativeMethods
     /// </summary>
     internal static readonly Guid ConditionIpRemoteAddress = new("b235ae9a-1d64-49b8-a44c-5ff3d9095045");
 
+    /// <summary>FWPM_CONDITION_IP_PROTOCOL：IP 协议号（TCP=6 / UDP=17）。值类型：FWP_UINT8。</summary>
+    internal static readonly Guid ConditionIpProtocol = new("3971ef2b-623e-4f9a-8cb1-6e79b806b9a7");
+
+    /// <summary>FWPM_CONDITION_IP_REMOTE_PORT：远端端口。值类型：FWP_UINT16；范围用 FWP_RANGE。</summary>
+    internal static readonly Guid ConditionIpRemotePort = new("c35a604d-d22b-4e1a-91b4-68f674ee674b");
+
+    /// <summary>
+    /// FWPM_CONDITION_CURRENT_PROFILE_ID：当前网络类别（域 / 专用 / 公用）。值类型：FWP_UINT32。
+    /// 数值与 <c>NLM_NETWORK_CATEGORY</c> 一致：0=公用、1=专用、2=域。
+    /// </summary>
+    internal static readonly Guid ConditionCurrentProfileId = new("ab3033c9-c0e3-4759-937d-5758c65d4ae3");
+
     /// <summary>
     /// 子层权重。WFP 在**不同子层之间**先比子层权重（数值大的优先）。
     ///
@@ -197,6 +219,15 @@ internal static class WfpNativeMethods
     {
         public uint Type;
         public IntPtr Value;
+    }
+
+
+    /// <summary>FWP_RANGE0：端口范围匹配用。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FwpRange
+    {
+        public FwpValue Low;
+        public FwpValue High;
     }
 
     /// <summary>FWPM_FILTER_CONDITION0。</summary>
@@ -350,6 +381,8 @@ internal static class WfpNativeMethods
         CheckLayout<FwpmSession>(72, "FWPM_SESSION0");
         CheckLayout<FwpValue>(16, "FWP_VALUE0");
         CheckLayout<FwpConditionValue>(16, "FWP_CONDITION_VALUE0");
+        CheckLayout<FwpValue>(16, "FWP_VALUE0");
+        CheckLayout<FwpRange>(32, "FWP_RANGE0");
         CheckLayout<FwpByteBlob>(16, "FWP_BYTE_BLOB");
     }
 

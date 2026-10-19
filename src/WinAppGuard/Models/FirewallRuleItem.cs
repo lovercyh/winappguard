@@ -77,6 +77,15 @@ public sealed class FirewallRuleItem
             : string.IsNullOrEmpty(ApplicationPath) ? "（所有程序）" : Path.GetFileName(ApplicationPath);
 
     /// <summary>
+    /// 精细化范围（2.5）：协议 / 远端端口 / 网络位置。
+    /// 只在程序规则上有意义；IP 规则恒为「任意」。
+    /// </summary>
+    internal RuleScope Scope { get; set; } = RuleScope.Any;
+
+    /// <summary>范围的显示文本，例如「TCP 443 · 公用网络」。</summary>
+    public string ScopeText => Scope.Describe();
+
+    /// <summary>
     /// 分组名（2.4 新增）。空字符串 = 未分组。
     /// 分组只影响界面怎么归类，不影响规则是否生效；存储在 rule-groups.json。
     /// </summary>

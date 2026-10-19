@@ -47,6 +47,10 @@ internal static class RuleEngine
     internal static string CreateBlockRule(string programPath, RuleExpiry expiry)
         => Save(programPath, FirewallAction.Block, expiry);
 
+    /// <summary>创建带精细化范围（协议 / 端口 / 网络位置）的阻止规则。</summary>
+    internal static string CreateBlockRule(string programPath, RuleExpiry expiry, RuleScope scope)
+        => Save(programPath, FirewallAction.Block, expiry, scope);
+
     /// <summary>为指定程序创建「允许联网」规则。</summary>
     internal static string CreateAllowRule(string programPath)
         => Save(programPath, FirewallAction.Allow, RuleExpiry.Never);
@@ -57,6 +61,10 @@ internal static class RuleEngine
     /// </summary>
     internal static string CreateAllowRule(string programPath, RuleExpiry expiry)
         => Save(programPath, FirewallAction.Allow, expiry);
+
+    /// <summary>创建带精细化范围的允许规则（白名单）。</summary>
+    internal static string CreateAllowRule(string programPath, RuleExpiry expiry, RuleScope scope)
+        => Save(programPath, FirewallAction.Allow, expiry, scope);
 
     /// <summary>
     /// 创建一条「封禁 IP」规则（直接按远端 IP 拦，不做域名解析）。
@@ -255,7 +263,8 @@ internal static class RuleEngine
     // 内部
     // ------------------------------------------------------------------
 
-    private static string Save(string programPath, FirewallAction action, RuleExpiry expiry)
+    private static string Save(
+        string programPath, FirewallAction action, RuleExpiry expiry, RuleScope? scope = null)
     {
         // 路径合法性、自我保护、系统关键进程保护都在这里统一把关 ——
         // 2.0 换掉了存储方式，但**这些安全闸一条都没有放宽**。
@@ -263,7 +272,7 @@ internal static class RuleEngine
             programPath,
             forBlocking: action == FirewallAction.Block);
 
-        var rule = new WfpRule(fullPath, action, expiry);
+        var rule = new WfpRule(fullPath, action, expiry, scope);
 
         using var engine = OpenEngine();
         WfpRuleStore.Add(engine, rule);
@@ -303,6 +312,7 @@ internal static class RuleEngine
         Direction = FirewallDirection.Outbound,
         Protocol = 256,
         Expiry = rule.Expiry,
+        Scope = rule.Scope,
     };
 
     /// <summary>把「封禁 IP」规则映射成界面使用的规则项。</summary>

@@ -77,6 +77,8 @@ Write-Host "    .\dist-tools\$exeName --audit [dll]       出厂审计：读编�
 Write-Host "    .\dist-tools\$exeName --ui-polish-test    界面打磨：搜索 / 空状态 / 快捷键 / ui-state（离线）"
 Write-Host "    .\dist-tools\$exeName --ui-dpi-test       界面：150% 字体下的布局（离线）"
 Write-Host "    .\dist-tools\$exeName --rules-io-test     规则：分组与导入导出（离线，不建规则）"
+Write-Host "    .\dist-tools\$exeName --rule-scope-test   规则：协议/端口/网络位置（离线，不建规则）"
+Write-Host "    .\dist-tools\$exeName --wfp-scope-test    规则：真实过滤器的端口/网络位置（需管理员，只拦 43）"
 Write-Host "    .\dist-tools\$exeName --wfp-status        WFP：只读，打印当前规则与子层状态"
 Write-Host "    .\dist-tools\$exeName --wfp-test          WFP：地基（结构体 / 子层 / 过滤器 / 动态会话，需管理员）"
 Write-Host "    .\dist-tools\$exeName --wfp-rule-test     WFP：规则模型（编码解析 / V4+V6 / 幂等，需管理员）"
@@ -90,7 +92,7 @@ Write-Host "    .\dist-tools\$exeName --audit-service-test 记录：完整服务
 Write-Host "    .\dist-tools\$exeName --audit-live-test   记录：实时采集（连接 + 拦截事件，需管理员）"
 Write-Host "    .\dist-tools\$exeName --audit-ui-test     记录：页结构（工具条 / 表格 / 开关，离线）"
 Write-Host ''
-Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 8 项离线检查依次跑一遍。）"
+Write-Host "（也可以直接双击 dist-tools\运行自检.cmd —— 它会把 9 项离线检查依次跑一遍。）"
 Write-Host "  两个 --strict-mode-* 刻意不在那个启动器里：它们需要管理员、而且会真的断开网络，只适合手动单独跑。"
 
 # 生成一个双击即可运行的启动器，方便在虚拟机里验证。
@@ -116,7 +118,7 @@ if not exist "%EXE%" (
 
 echo.
 echo ============================================================
-echo   [1/8]  connection filter and sort  (offline, no UI)
+echo   [1/9]  connection filter and sort  (offline, no UI)
 echo          keyword matching / numeric port and IP sorting
 echo ============================================================
 echo.
@@ -124,7 +126,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [2/8]  temporary block expiry  (offline, no system changes)
+echo   [2/9]  temporary block expiry  (offline, no system changes)
 echo          encode / parse / expire judgement, incl. truncation
 echo ============================================================
 echo.
@@ -132,7 +134,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [3/8]  ownership core check  (offline, no network)
+echo   [3/9]  ownership core check  (offline, no network)
 echo          cache / expiry / capacity / switch / settings
 echo ============================================================
 echo.
@@ -140,7 +142,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [4/8]  ownership online lookup check
+echo   [4/9]  ownership online lookup check
 echo          NOTE: uses the network, only whois.cymru.com:43
 echo ============================================================
 echo.
@@ -148,7 +150,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [5/8]  UI layout check
+echo   [5/9]  UI layout check
 echo          NOTE: a window will flash briefly, then close
 echo          offline / no admin needed
 echo ============================================================
@@ -157,7 +159,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [6/8]  UI polish wiring  (offline)
+echo   [6/9]  UI polish wiring  (offline)
 echo          rules search / empty states / shortcuts / ui-state
 echo ============================================================
 echo.
@@ -165,7 +167,7 @@ echo.
 
 echo.
 echo ============================================================
-echo   [7/8]  high-DPI layout at 150%%  (offline)
+echo   [7/9]  high-DPI layout at 150%%  (offline)
 echo          banner fit / toolbar overlap / button text fit
 echo ============================================================
 echo.
@@ -173,11 +175,19 @@ echo.
 
 echo.
 echo ============================================================
-echo   [8/8]  rule groups and import/export  (offline)
+echo   [8/9]  rule groups and import/export  (offline)
 echo          group store round-trip / export-import / bad files
 echo ============================================================
 echo.
 "%EXE%" --rules-io-test --no-pause
+
+echo.
+echo ============================================================
+echo   [9/9]  rule scope: protocol / port / network profile  (offline)
+echo          encode-parse round-trip / validation / rule naming
+echo ============================================================
+echo.
+"%EXE%" --rule-scope-test --no-pause
 
 echo.
 echo ---- done. press any key to close ----

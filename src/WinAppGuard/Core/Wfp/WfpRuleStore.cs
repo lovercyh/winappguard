@@ -43,7 +43,7 @@ internal static class WfpRuleStore
     /// <summary>算出一条规则在某一层上的过滤器 key（确定性，重复执行结果相同）。</summary>
     internal static Guid FilterKeyFor(WfpRule rule, Guid layerKey)
         => WfpEngine.BuildFilterKey(
-            $"rule|{rule.Action}|{rule.ApplicationPath}|{layerKey}");
+            $"rule|{rule.Action}|{rule.ApplicationPath}|{rule.Scope.Encode()}|{layerKey}");
 
     /// <summary>
     /// 写入一条规则（两层都写），返回实际写入的过滤器条数。
@@ -70,15 +70,32 @@ internal static class WfpRuleStore
             var key = FilterKeyFor(rule, layer);
 
             engine.TryDeleteFilter(key);
-            engine.AddAppIdFilter(
-                key,
-                rule.DisplayName,
-                rule.Description,
-                rule.ApplicationPath,
-                layer,
-                action,
-                weight,
-                persistent);
+
+            if (rule.Scope.IsAny)
+            {
+                engine.AddAppIdFilter(
+                    key,
+                    rule.DisplayName,
+                    rule.Description,
+                    rule.ApplicationPath,
+                    layer,
+                    action,
+                    weight,
+                    persistent);
+            }
+            else
+            {
+                engine.AddScopedAppIdFilter(
+                    key,
+                    rule.DisplayName,
+                    rule.Description,
+                    rule.ApplicationPath,
+                    layer,
+                    action,
+                    weight,
+                    persistent,
+                    rule.Scope);
+            }
 
             written++;
         }
@@ -104,7 +121,7 @@ internal static class WfpRuleStore
                 continue;
             }
 
-            if (seen.Add($"{rule.Action}|{rule.ApplicationPath}"))
+            if (seen.Add($"{rule.Action}|{rule.ApplicationPath}|{rule.Scope.Encode()}"))
             {
                 rules.Add(rule);
             }

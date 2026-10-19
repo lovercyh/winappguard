@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using WinAppGuard.Interop;
+using WinAppGuard.Models;
 
 namespace WinAppGuard.Core.Wfp;
 
@@ -463,6 +464,23 @@ internal sealed class WfpEngine : IDisposable
         => AddFilterCore(filterKey, displayName, description, layerKey, action, weight, persistent, exePath);
 
     /// <summary>
+    /// 加一条**带精细化范围**的程序规则（协议 / 远端端口 / 网络位置）。
+    /// 范围里全是「任意」时等价于普通的程序规则。
+    /// </summary>
+    internal ulong AddScopedAppIdFilter(
+        Guid filterKey,
+        string displayName,
+        string? description,
+        string exePath,
+        Guid layerKey,
+        uint action,
+        ulong weight,
+        bool persistent,
+        RuleScope scope)
+        => AddFilterCore(
+            filterKey, displayName, description, layerKey, action, weight, persistent, exePath, scope);
+
+    /// <summary>
     /// 加一条**不带任何条件**的过滤器 —— 它会匹配该层上的**所有**流量。
     ///
     /// 严格模式的"阻止全部"用的就是它：放在权重 0，上面再挂白名单的放行过滤器（权重更高）。
@@ -488,7 +506,8 @@ internal sealed class WfpEngine : IDisposable
         uint action,
         ulong weight,
         bool persistent,
-        string? exePath)
+        string? exePath,
+        RuleScope? scope = null)
     {
         ThrowIfDisposed();
 
@@ -497,6 +516,7 @@ internal sealed class WfpEngine : IDisposable
         var namePtr = IntPtr.Zero;
         var descriptionPtr = IntPtr.Zero;
         var conditionPtr = IntPtr.Zero;
+        var rangePtr = IntPtr.Zero;
 
         try
         {
@@ -510,7 +530,7 @@ internal sealed class WfpEngine : IDisposable
                 descriptionPtr = Marshal.StringToHGlobalUni(description);
             }
 
-            uint conditionCount = 0;
+            var conditions = new List<WfpNativeMethods.FwpmFilterCondition>();
 
             if (exePath is not null)
             {
@@ -520,8 +540,7 @@ internal sealed class WfpEngine : IDisposable
                     throw new WfpException($"取程序身份（{exePath}）", appIdResult);
                 }
 
-                conditionPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>());
-                var condition = new WfpNativeMethods.FwpmFilterCondition
+                conditions.Add(new WfpNativeMethods.FwpmFilterCondition
                 {
                     FieldKey = WfpNativeMethods.ConditionAleAppId,
                     MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
@@ -530,9 +549,102 @@ internal sealed class WfpEngine : IDisposable
                         Type = WfpNativeMethods.FWP_BYTE_BLOB_TYPE,
                         Value = appIdPtr,
                     },
-                };
-                Marshal.StructureToPtr(condition, conditionPtr, false);
-                conditionCount = 1;
+                });
+            }
+
+            // ---- 2.5 的精细化条件 ----
+            if (scope is { IsAny: false })
+            {
+                if (scope.Protocol != RuleProtocol.Any)
+                {
+                    conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                    {
+                        FieldKey = WfpNativeMethods.ConditionIpProtocol,
+                        MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                        ConditionValue = new WfpNativeMethods.FwpConditionValue
+                        {
+                            Type = WfpNativeMethods.FWP_UINT8,
+                            Value = (IntPtr)(int)scope.Protocol,
+                        },
+                    });
+                }
+
+                if (scope.HasPort)
+                {
+                    if (scope.IsSinglePort)
+                    {
+                        conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                        {
+                            FieldKey = WfpNativeMethods.ConditionIpRemotePort,
+                            MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                            ConditionValue = new WfpNativeMethods.FwpConditionValue
+                            {
+                                Type = WfpNativeMethods.FWP_UINT16,
+                                Value = (IntPtr)scope.PortFrom,
+                            },
+                        });
+                    }
+                    else
+                    {
+                        // 端口范围：条件值类型是 FWP_RANGE_TYPE，指向一个 FWP_RANGE0。
+                        rangePtr = Marshal.AllocHGlobal(Marshal.SizeOf<WfpNativeMethods.FwpRange>());
+
+                        var range = new WfpNativeMethods.FwpRange
+                        {
+                            Low = new WfpNativeMethods.FwpValue
+                            {
+                                Type = WfpNativeMethods.FWP_UINT16,
+                                Value = (IntPtr)scope.PortFrom,
+                            },
+                            High = new WfpNativeMethods.FwpValue
+                            {
+                                Type = WfpNativeMethods.FWP_UINT16,
+                                Value = (IntPtr)scope.PortTo,
+                            },
+                        };
+
+                        Marshal.StructureToPtr(range, rangePtr, false);
+
+                        conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                        {
+                            FieldKey = WfpNativeMethods.ConditionIpRemotePort,
+                            MatchType = WfpNativeMethods.FWP_MATCH_RANGE,
+                            ConditionValue = new WfpNativeMethods.FwpConditionValue
+                            {
+                                Type = WfpNativeMethods.FWP_RANGE_TYPE,
+                                Value = rangePtr,
+                            },
+                        });
+                    }
+                }
+
+                if (scope.HasProfile)
+                {
+                    conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                    {
+                        FieldKey = WfpNativeMethods.ConditionCurrentProfileId,
+                        MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                        ConditionValue = new WfpNativeMethods.FwpConditionValue
+                        {
+                            Type = WfpNativeMethods.FWP_UINT32,
+                            Value = (IntPtr)(int)scope.Profile,
+                        },
+                    });
+                }
+            }
+
+            var conditionCount = (uint)conditions.Count;
+
+            if (conditions.Count > 0)
+            {
+                var size = Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>();
+                conditionPtr = Marshal.AllocHGlobal(size * conditions.Count);
+
+                for (var i = 0; i < conditions.Count; i++)
+                {
+                    Marshal.StructureToPtr(
+                        conditions[i], IntPtr.Add(conditionPtr, i * size), false);
+                }
             }
 
             var filter = new WfpNativeMethods.FwpmFilter
@@ -574,6 +686,11 @@ internal sealed class WfpEngine : IDisposable
             if (conditionPtr != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(conditionPtr);
+            }
+
+            if (rangePtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(rangePtr);
             }
 
             if (namePtr != IntPtr.Zero)

@@ -1,3 +1,4 @@
+using System.Text;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
@@ -126,6 +127,20 @@ public partial class MainForm : Form
 
     private string _whitelistKeyword = string.Empty;
     private string _whitelistSummaryBase = "白名单共 0 个程序";
+
+    // ---------- 2.4：规则分组 ----------
+
+    /// <summary>规则名 → 分组名（存在 rule-groups.json）。</summary>
+    private readonly RuleGroupStore _ruleGroups = new();
+
+    /// <summary>黑名单分组筛选：null = 全部；"" = 未分组；其它 = 具体分组。</summary>
+    private string? _blockGroupFilter;
+
+    /// <summary>白名单分组筛选，语义同上。</summary>
+    private string? _allowGroupFilter;
+
+    /// <summary>重建分组下拉框时抑制事件，避免来回触发筛选。</summary>
+    private bool _suppressGroupFilterEvents;
 
     /// <summary>白名单页是否"用户真的点选过"某一行（理由同 <see cref="_ruleSelectionConfirmed"/>）。</summary>
     private bool _whitelistSelectionConfirmed;
@@ -668,6 +683,7 @@ public partial class MainForm : Form
         // 不再放 动作/方向/协议 三列：这里每一条都是「阻止 / 出站 / 任意」，
         // 三列都只有一个值，除了占地方没有任何信息量。
         AddRuleColumn("类型", nameof(FirewallRuleItem.RuleKindText), 60);
+        AddRuleColumn("分组", nameof(FirewallRuleItem.Group), 90);
         AddRuleColumn("程序名 / IP", nameof(FirewallRuleItem.ApplicationNameText), 160);
         AddRuleColumn("程序路径", nameof(FirewallRuleItem.ApplicationPath), 280, fill: true);
         AddRuleColumn("自动解除", nameof(FirewallRuleItem.ExpiryText), 120);
@@ -683,6 +699,7 @@ public partial class MainForm : Form
     /// <summary>「严格模式下白名单」表格的列。</summary>
     private void SetupWhitelistGrid()
     {
+        AddColumn(_whitelistGrid, "分组", nameof(FirewallRuleItem.Group), 90);
         AddColumn(_whitelistGrid, "程序名", nameof(FirewallRuleItem.ApplicationNameText), 160);
         AddColumn(_whitelistGrid, "程序路径", nameof(FirewallRuleItem.ApplicationPath), 280, fill: true);
         AddColumn(_whitelistGrid, "启用", nameof(FirewallRuleItem.EnabledText), 70);
@@ -827,6 +844,25 @@ public partial class MainForm : Form
 
             _whitelistRules.Clear();
             _whitelistRules.AddRange(_appGuardRules.Where(rule => rule.Action == FirewallAction.Allow));
+
+            // 分组信息不在 WFP 规则里，存在本机 rule-groups.json：刷新时贴上去。
+            foreach (var rule in _rules)
+            {
+                rule.Group = _ruleGroups.GetGroup(rule.Name);
+            }
+
+            foreach (var rule in _whitelistRules)
+            {
+                rule.Group = _ruleGroups.GetGroup(rule.Name);
+            }
+
+            // 顺手清掉"规则已经被删、分组记录还留着"的孤儿条目。
+            if (_ruleGroups.Prune(_appGuardRules.Select(rule => rule.Name)) > 0)
+            {
+                _ruleGroups.Save();
+            }
+
+            RefreshGroupFilters();
 
             // 绑定到表格的是**筛选后**的视图：搜索时只显示匹配项，
             // 但 _rules / _whitelistRules 始终完整（清空与摘要统计都按完整列表算）。
@@ -1362,11 +1398,12 @@ public partial class MainForm : Form
 
         if (keyword.Length == 0)
         {
-            _rulesView.AddRange(_rules);
+            _rulesView.AddRange(_rules.Where(rule => MatchesGroup(rule, _blockGroupFilter)));
         }
         else
         {
-            _rulesView.AddRange(_rules.Where(rule => MatchesRule(rule, keyword)));
+            _rulesView.AddRange(_rules.Where(rule =>
+                MatchesGroup(rule, _blockGroupFilter) && MatchesRule(rule, keyword)));
         }
 
         // 复用 RebindRules：它负责 ResetBindings + 恢复选中 + 刷新按钮状态。
@@ -1382,6 +1419,13 @@ public partial class MainForm : Form
            || Contains(rule.ApplicationPath, keyword)
            || Contains(rule.Name, keyword)
            || Contains(rule.ExpiryText, keyword);
+
+    /// <summary>
+    /// 分组筛选：null = 全部；"" = 未分组；其它 = 精确匹配（不区分大小写）。
+    /// </summary>
+    private static bool MatchesGroup(FirewallRuleItem rule, string? groupFilter)
+        => groupFilter is null
+           || string.Equals(rule.Group, groupFilter, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>摘要文字：没有搜索时就是总数；搜索时追加「筛选出 N 条」。</summary>
     private void UpdateRulesSummaryText()
@@ -1400,6 +1444,105 @@ public partial class MainForm : Form
 
         _rulesKeyword = keyword;
         ApplyRulesFilter(CaptureRuleSelection());
+    }
+
+    // ==================================================================
+    // 分组筛选（2.4）
+    // ==================================================================
+
+    /// <summary>重建两个分组下拉框（保留用户当前的选择）。</summary>
+    private void RefreshGroupFilters()
+    {
+        var groups = _ruleGroups.AllGroups();
+
+        RebuildGroupCombo(_rulesGroupCombo, ref _blockGroupFilter, groups);
+        RebuildGroupCombo(_whitelistGroupCombo, ref _allowGroupFilter, groups);
+    }
+
+    /// <summary>
+    /// 下拉项固定是「全部分组 / 未分组 / 各分组」。
+    /// 当前选中的分组如果已经不存在了（比如规则全被删掉），自动回到「全部分组」——
+    /// 否则界面会停在一个空列表上，用户以为规则丢了。
+    /// </summary>
+    private void RebuildGroupCombo(
+        ComboBox combo, ref string? filter, IReadOnlyList<string> groups)
+    {
+        _suppressGroupFilterEvents = true;
+
+        try
+        {
+            combo.Items.Clear();
+            combo.Items.Add("全部分组");
+            combo.Items.Add("未分组");
+
+            foreach (var group in groups)
+            {
+                combo.Items.Add(group);
+            }
+
+            var index = 0;
+
+            if (filter is not null)
+            {
+                if (filter.Length == 0)
+                {
+                    index = 1;
+                }
+                else
+                {
+                    var found = combo.Items.IndexOf(filter);
+
+                    if (found >= 0)
+                    {
+                        index = found;
+                    }
+                    else
+                    {
+                        filter = null;
+                    }
+                }
+            }
+
+            combo.SelectedIndex = index;
+        }
+        finally
+        {
+            _suppressGroupFilterEvents = false;
+        }
+    }
+
+    private void OnBlockGroupFilterChanged(object? sender, EventArgs e)
+    {
+        if (_suppressGroupFilterEvents)
+        {
+            return;
+        }
+
+        _blockGroupFilter = _rulesGroupCombo.SelectedIndex switch
+        {
+            0 => null,
+            1 => string.Empty,
+            _ => _rulesGroupCombo.SelectedItem as string,
+        };
+
+        ApplyRulesFilter(CaptureRuleSelection());
+    }
+
+    private void OnAllowGroupFilterChanged(object? sender, EventArgs e)
+    {
+        if (_suppressGroupFilterEvents)
+        {
+            return;
+        }
+
+        _allowGroupFilter = _whitelistGroupCombo.SelectedIndex switch
+        {
+            0 => null,
+            1 => string.Empty,
+            _ => _whitelistGroupCombo.SelectedItem as string,
+        };
+
+        ApplyWhitelistFilter(CaptureWhitelistSelection());
     }
 
     /// <summary>规则表格：路径和规则名经常显示不全，悬停给完整内容。</summary>
@@ -1440,11 +1583,12 @@ public partial class MainForm : Form
 
         if (keyword.Length == 0)
         {
-            _whitelistView.AddRange(_whitelistRules);
+            _whitelistView.AddRange(_whitelistRules.Where(rule => MatchesGroup(rule, _allowGroupFilter)));
         }
         else
         {
-            _whitelistView.AddRange(_whitelistRules.Where(rule => MatchesRule(rule, keyword)));
+            _whitelistView.AddRange(_whitelistRules.Where(rule =>
+                MatchesGroup(rule, _allowGroupFilter) && MatchesRule(rule, keyword)));
         }
 
         RebindWhitelist(selectedRuleName);
@@ -1548,6 +1692,7 @@ public partial class MainForm : Form
         var rule = GetConfirmedWhitelistRule();
 
         _whitelistRemoveButton.Enabled = rule is not null;
+        _whitelistGroupButton.Enabled = rule is not null;
         _whitelistClearButton.Enabled = _whitelistRules.Count > 0;
 
         if (_whitelistRules.Count == 0)
@@ -1771,6 +1916,299 @@ public partial class MainForm : Form
         }
     }
 
+    // ==================================================================
+    // 规则分组 / 导入导出（2.4）
+    // ==================================================================
+
+    private void OnRulesGroupButtonClick(object? sender, EventArgs e)
+        => AssignGroupToRule(GetConfirmedRule());
+
+    private void OnWhitelistGroupButtonClick(object? sender, EventArgs e)
+        => AssignGroupToRule(GetConfirmedWhitelistRule());
+
+    /// <summary>给一条规则设置分组（空字符串 = 未分组）。</summary>
+    private void AssignGroupToRule(FirewallRuleItem? rule)
+    {
+        if (rule is null)
+        {
+            return;
+        }
+
+        var group = RuleGroupPrompt.Ask(DialogOwner, _ruleGroups.AllGroups(), rule.Group);
+
+        if (group is null)
+        {
+            return;
+        }
+
+        _ruleGroups.SetGroup(rule.Name, group);
+        _ruleGroups.Save();
+
+        LocalLog.Operation($"规则分组：{rule.Name} → {(group.Length == 0 ? "未分组" : group)}");
+
+        rule.Group = group;
+        RefreshGroupFilters();
+        ApplyRulesFilter(CaptureRuleSelection());
+        ApplyWhitelistFilter(CaptureWhitelistSelection());
+    }
+
+    /// <summary>导出全部规则（黑名单 + 白名单 + 封禁 IP），含分组。</summary>
+    private void OnExportRulesButtonClick(object? sender, EventArgs e)
+    {
+        if (_appGuardRules.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "当前没有任何规则可导出。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        using var dialog = new SaveFileDialog
+        {
+            Title = "导出规则",
+            Filter = "WinAppGuard 规则 (*.json)|*.json|所有文件 (*.*)|*.*",
+            FileName = $"winappguard-rules-{DateTime.Now:yyyyMMdd}.json",
+            OverwritePrompt = true,
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            var document = RuleExport.Build(_appGuardRules, _ruleGroups);
+            var json = RuleExport.Serialize(document);
+
+            File.WriteAllText(dialog.FileName, json, new UTF8Encoding(false));
+            LocalLog.Operation($"导出规则：{document.Rules.Count} 条 → {dialog.FileName}");
+
+            MessageBox.Show(
+                this,
+                $"已导出 {document.Rules.Count} 条规则（含分组）。\n\n{dialog.FileName}\n\n" +
+                "注意：文件里包含程序完整路径，发给别人等于公开你在用哪些软件。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            ShowError("导出规则失败", ex);
+        }
+    }
+
+    /// <summary>导入规则（来自导出文件）。</summary>
+    private void OnImportRulesButtonClick(object? sender, EventArgs e)
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "导入规则",
+            Filter = "WinAppGuard 规则 (*.json)|*.json|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        string json;
+
+        try
+        {
+            json = File.ReadAllText(dialog.FileName, Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            ShowError("读取规则文件失败", ex);
+            return;
+        }
+
+        if (!RuleExport.TryParse(json, out var document, out var error) || document is null)
+        {
+            MessageBox.Show(
+                this,
+                $"不能导入这个文件：\n\n{error}",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (document.Rules.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "文件里没有任何规则。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var previewLines = document.Rules.Take(10).Select(DescribeImportEntry).ToList();
+        var preview = string.Join(Environment.NewLine, previewLines);
+
+        if (document.Rules.Count > previewLines.Count)
+        {
+            preview += Environment.NewLine + $"    …… 还有 {document.Rules.Count - previewLines.Count} 条";
+        }
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "导入规则",
+            question: $"确定要导入这 {document.Rules.Count} 条规则吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("内容", RuleExport.Summarize(document)),
+                new KeyValuePair<string, string>("文件", Path.GetFileName(dialog.FileName)),
+                new KeyValuePair<string, string>("导出时间", document.ExportedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")),
+            },
+            warnings: new[]
+            {
+                "将要导入的规则（最多显示 10 条）：",
+                preview,
+                "已存在的同名规则会自动跳过；系统关键进程等受保护程序也会被跳过。",
+                "导入只会创建规则，**不会删除**你现有的任何规则。",
+            },
+            confirmText: "导入");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        ApplyImportedRules(document);
+    }
+
+    private static string DescribeImportEntry(RuleExportEntry entry)
+    {
+        var action = entry.Action == "block" ? "阻止" : "允许";
+        var kind = entry.Kind == "ip" ? "IP" : "程序";
+        var expiry = string.IsNullOrEmpty(entry.Expiry)
+            ? "永久"
+            : RuleExpiry.Parse(entry.Expiry).Describe(DateTime.UtcNow);
+        var group = entry.Group.Length == 0 ? string.Empty : $" ｜ 分组 {entry.Group}";
+
+        return $"[{kind}] {action} {entry.Value}（{expiry}）{group}";
+    }
+
+    /// <summary>
+    /// 真正创建导入的规则：全部走 <see cref="RuleEngine"/>，不绕过任何安全闸。
+    /// </summary>
+    private void ApplyImportedRules(RuleExportDocument document)
+    {
+        var names = new HashSet<string>(
+            _appGuardRules.Select(rule => rule.Name),
+            StringComparer.OrdinalIgnoreCase);
+
+        var created = 0;
+        var existed = 0;
+        var protectedSkipped = 0;
+        var failed = 0;
+
+        foreach (var entry in document.Rules)
+        {
+            try
+            {
+                string ruleName;
+
+                if (entry.Kind == "ip")
+                {
+                    var ipRule = new WfpIpRule(entry.Value);
+                    ruleName = ipRule.DisplayName;
+
+                    if (names.Contains(ruleName))
+                    {
+                        existed++;
+                    }
+                    else
+                    {
+                        RuleEngine.CreateIpBlockRule(entry.Value);
+                        created++;
+                        names.Add(ruleName);
+                    }
+                }
+                else
+                {
+                    if (ProtectedProcesses.IsProtected(entry.Value, out _))
+                    {
+                        protectedSkipped++;
+                        continue;
+                    }
+
+                    var expiry = RuleExpiry.Parse(entry.Expiry);
+
+                    ruleName = entry.Action == "block"
+                        ? RuleNaming.BuildBlockRuleName(entry.Value)
+                        : RuleNaming.BuildAllowRuleName(entry.Value);
+
+                    if (names.Contains(ruleName))
+                    {
+                        existed++;
+                    }
+                    else
+                    {
+                        if (entry.Action == "block")
+                        {
+                            RuleEngine.CreateBlockRule(entry.Value, expiry);
+                        }
+                        else
+                        {
+                            RuleEngine.CreateAllowRule(entry.Value, expiry);
+                        }
+
+                        created++;
+                        names.Add(ruleName);
+                    }
+                }
+
+                if (entry.Group.Length > 0)
+                {
+                    _ruleGroups.SetGroup(ruleName, entry.Group);
+                }
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                LocalLog.Warning($"导入规则失败：{entry.Value} — {ex.Message}");
+            }
+        }
+
+        _ruleGroups.Save();
+        AfterRulesChanged();
+
+        var lines = new List<string>
+        {
+            $"新建 {created} 条",
+            $"已存在跳过 {existed} 条",
+        };
+
+        if (protectedSkipped > 0)
+        {
+            lines.Add($"受保护程序跳过 {protectedSkipped} 条");
+        }
+
+        if (failed > 0)
+        {
+            lines.Add($"失败 {failed} 条（详见日志）");
+        }
+
+        LocalLog.Operation($"导入规则：{string.Join("，", lines)}");
+
+        MessageBox.Show(
+            this,
+            "导入完成：\n\n" + string.Join(Environment.NewLine, lines.Select(line => "· " + line)),
+            AppConstants.AppName,
+            MessageBoxButtons.OK,
+            failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+    }
+
     /// <summary>
     /// 抓取当前选中的规则名。和 <see cref="CaptureSelection"/> 一样，
     /// 没被用户主动点选过时返回 null，避免把表格自动选中的第一条当成用户的选择。
@@ -1888,6 +2326,7 @@ public partial class MainForm : Form
         var rule = GetConfirmedRule();
 
         _rulesDeleteButton.Enabled = rule is not null;
+        _rulesGroupButton.Enabled = rule is not null;
 
         // 按「表格里实际显示了几条」来判断，而不是按内存缓存 ——
         // 按钮状态应该和用户看到的东西一致。

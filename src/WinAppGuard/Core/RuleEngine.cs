@@ -52,6 +52,13 @@ internal static class RuleEngine
         => Save(programPath, FirewallAction.Allow, RuleExpiry.Never);
 
     /// <summary>
+    /// 为指定程序创建「允许联网」规则，并指定到期时间。
+    /// 导入规则时需要它：导出的白名单规则可能带限时（虽然界面目前只建永久白名单）。
+    /// </summary>
+    internal static string CreateAllowRule(string programPath, RuleExpiry expiry)
+        => Save(programPath, FirewallAction.Allow, expiry);
+
+    /// <summary>
     /// 创建一条「封禁 IP」规则（直接按远端 IP 拦，不做域名解析）。
     /// </summary>
     /// <param name="address">IPv4 或 IPv6 地址。</param>

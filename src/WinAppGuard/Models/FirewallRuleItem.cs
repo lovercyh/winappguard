@@ -77,6 +77,12 @@ public sealed class FirewallRuleItem
             : string.IsNullOrEmpty(ApplicationPath) ? "（所有程序）" : Path.GetFileName(ApplicationPath);
 
     /// <summary>
+    /// 分组名（2.4 新增）。空字符串 = 未分组。
+    /// 分组只影响界面怎么归类，不影响规则是否生效；存储在 rule-groups.json。
+    /// </summary>
+    public string Group { get; set; } = string.Empty;
+
+    /// <summary>
     /// 这条规则拦的是「程序」还是「IP」。
     /// 黑名单页把两类规则放在一起，必须让用户一眼看出区别 ——
     /// 「解除阻止」对程序是恢复联网，对 IP 是解除封禁，含义并不一样。

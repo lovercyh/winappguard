@@ -67,6 +67,10 @@ partial class MainForm
     private Label _rulesSummaryLabel = null!;
     private Button _rulesDeleteButton = null!;
     private Button _rulesAddButton = null!;
+    private ComboBox _rulesGroupCombo = null!;
+    private Button _rulesGroupButton = null!;
+    private Button _rulesExportButton = null!;
+    private Button _rulesImportButton = null!;
     private Button _rulesDeleteAllButton = null!;
     private Label _rulesHintLabel = null!;
     private TextBox _rulesSearchBox = null!;
@@ -81,6 +85,8 @@ partial class MainForm
     private Button _whitelistRefreshButton = null!;
     private Label _whitelistSummaryLabel = null!;
     private TextBox _whitelistSearchBox = null!;
+    private ComboBox _whitelistGroupCombo = null!;
+    private Button _whitelistGroupButton = null!;
     private Button _whitelistRemoveButton = null!;
     private Button _whitelistAddButton = null!;
     private Label _whitelistHintLabel = null!;
@@ -210,6 +216,10 @@ partial class MainForm
         _rulesSummaryLabel = new Label();
         _rulesDeleteButton = new Button();
         _rulesAddButton = new Button();
+        _rulesGroupCombo = new ComboBox();
+        _rulesGroupButton = new Button();
+        _rulesExportButton = new Button();
+        _rulesImportButton = new Button();
         _rulesDeleteAllButton = new Button();
         _rulesHintLabel = new Label();
         _rulesSearchBox = new TextBox();
@@ -219,6 +229,8 @@ partial class MainForm
         _whitelistRefreshButton = new Button();
         _whitelistSummaryLabel = new Label();
         _whitelistSearchBox = new TextBox();
+        _whitelistGroupCombo = new ComboBox();
+        _whitelistGroupButton = new Button();
         _whitelistRemoveButton = new Button();
         _whitelistAddButton = new Button();
         _whitelistHintLabel = new Label();
@@ -636,9 +648,13 @@ partial class MainForm
         _rulesToolPanel.Controls.Add(_rulesSummaryLabel);
         _rulesToolPanel.Controls.Add(_rulesDeleteButton);
         _rulesToolPanel.Controls.Add(_rulesAddButton);
+        _rulesToolPanel.Controls.Add(_rulesGroupButton);
+        _rulesToolPanel.Controls.Add(_rulesExportButton);
+        _rulesToolPanel.Controls.Add(_rulesImportButton);
         _rulesToolPanel.Controls.Add(_rulesDeleteAllButton);
         _rulesToolPanel.Controls.Add(_rulesHintLabel);
         _rulesToolPanel.Controls.Add(_rulesSearchBox);
+        _rulesToolPanel.Controls.Add(_rulesGroupCombo);
 
         _rulesRefreshButton.Location = new Point(0, 4);
         _rulesRefreshButton.Name = "_rulesRefreshButton";
@@ -675,6 +691,38 @@ partial class MainForm
         _rulesAddButton.UseVisualStyleBackColor = true;
         _rulesAddButton.Click += OnRulesAddButtonClick;
 
+        _rulesGroupButton.Enabled = false;
+        _rulesGroupButton.Location = new Point(316, 42);
+        _rulesGroupButton.Name = "_rulesGroupButton";
+        _rulesGroupButton.Size = new Size(110, 28);
+        _rulesGroupButton.TabIndex = 8;
+        _rulesGroupButton.Text = "分组…";
+        _rulesGroupButton.UseVisualStyleBackColor = true;
+        _rulesGroupButton.Click += OnRulesGroupButtonClick;
+
+        _rulesExportButton.Location = new Point(436, 42);
+        _rulesExportButton.Name = "_rulesExportButton";
+        _rulesExportButton.Size = new Size(100, 28);
+        _rulesExportButton.TabIndex = 9;
+        _rulesExportButton.Text = "导出…";
+        _rulesExportButton.UseVisualStyleBackColor = true;
+        _rulesExportButton.Click += OnExportRulesButtonClick;
+
+        _rulesImportButton.Location = new Point(544, 42);
+        _rulesImportButton.Name = "_rulesImportButton";
+        _rulesImportButton.Size = new Size(100, 28);
+        _rulesImportButton.TabIndex = 10;
+        _rulesImportButton.Text = "导入…";
+        _rulesImportButton.UseVisualStyleBackColor = true;
+        _rulesImportButton.Click += OnImportRulesButtonClick;
+
+        _rulesGroupCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _rulesGroupCombo.Location = new Point(340, 8);
+        _rulesGroupCombo.Name = "_rulesGroupCombo";
+        _rulesGroupCombo.Size = new Size(130, 23);
+        _rulesGroupCombo.TabIndex = 11;
+        _rulesGroupCombo.SelectedIndexChanged += OnBlockGroupFilterChanged;
+
         // ⚠️ 这是不可撤销的批量操作：和普通按钮分开摆（挪到第一行最右）、用红色文字，
         //    避免手一滑就把所有规则删光。确认框里仍会列出条数并要求两次确认。
         _rulesDeleteAllButton.ForeColor = Color.FromArgb(180, 30, 30);
@@ -688,7 +736,7 @@ partial class MainForm
 
         _rulesHintLabel.AutoSize = true;
         _rulesHintLabel.ForeColor = SystemColors.GrayText;
-        _rulesHintLabel.Location = new Point(320, 47);
+        _rulesHintLabel.Location = new Point(652, 47);
         _rulesHintLabel.Name = "_rulesHintLabel";
         _rulesHintLabel.Size = new Size(300, 17);
         _rulesHintLabel.TabIndex = 5;
@@ -762,8 +810,10 @@ partial class MainForm
         _whitelistToolPanel.Controls.Add(_whitelistSearchBox);
         _whitelistToolPanel.Controls.Add(_whitelistRemoveButton);
         _whitelistToolPanel.Controls.Add(_whitelistAddButton);
+        _whitelistToolPanel.Controls.Add(_whitelistGroupButton);
         _whitelistToolPanel.Controls.Add(_whitelistHintLabel);
         _whitelistToolPanel.Controls.Add(_whitelistClearButton);
+        _whitelistToolPanel.Controls.Add(_whitelistGroupCombo);
 
         _whitelistRefreshButton.Location = new Point(0, 4);
         _whitelistRefreshButton.Name = "_whitelistRefreshButton";
@@ -788,6 +838,13 @@ partial class MainForm
         _whitelistSearchBox.TabIndex = 2;
         _whitelistSearchBox.TextChanged += OnWhitelistSearchTextChanged;
 
+        _whitelistGroupCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _whitelistGroupCombo.Location = new Point(340, 8);
+        _whitelistGroupCombo.Name = "_whitelistGroupCombo";
+        _whitelistGroupCombo.Size = new Size(130, 23);
+        _whitelistGroupCombo.TabIndex = 6;
+        _whitelistGroupCombo.SelectedIndexChanged += OnAllowGroupFilterChanged;
+
         _whitelistRemoveButton.Enabled = false;
         _whitelistRemoveButton.Location = new Point(0, 42);
         _whitelistRemoveButton.Name = "_whitelistRemoveButton";
@@ -796,6 +853,15 @@ partial class MainForm
         _whitelistRemoveButton.Text = "移出白名单";
         _whitelistRemoveButton.UseVisualStyleBackColor = true;
         _whitelistRemoveButton.Click += OnWhitelistRemoveButtonClick;
+
+        _whitelistGroupButton.Enabled = false;
+        _whitelistGroupButton.Location = new Point(320, 42);
+        _whitelistGroupButton.Name = "_whitelistGroupButton";
+        _whitelistGroupButton.Size = new Size(110, 28);
+        _whitelistGroupButton.TabIndex = 7;
+        _whitelistGroupButton.Text = "分组…";
+        _whitelistGroupButton.UseVisualStyleBackColor = true;
+        _whitelistGroupButton.Click += OnWhitelistGroupButtonClick;
 
         // 严格模式下，没进白名单的程序**连不上网**，因此也不会出现在「联网连接」页里 ——
         // 那种情况下只能按路径添加，否则用户会被"想加却找不到它"卡死。
@@ -809,7 +875,7 @@ partial class MainForm
 
         _whitelistHintLabel.AutoSize = true;
         _whitelistHintLabel.ForeColor = SystemColors.GrayText;
-        _whitelistHintLabel.Location = new Point(320, 47);
+        _whitelistHintLabel.Location = new Point(440, 47);
         _whitelistHintLabel.Name = "_whitelistHintLabel";
         _whitelistHintLabel.Size = new Size(300, 17);
         _whitelistHintLabel.TabIndex = 4;

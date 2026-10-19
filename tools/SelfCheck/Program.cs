@@ -128,7 +128,8 @@ internal static class Program
                          && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -231,6 +232,10 @@ internal static class Program
             else if (args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunUiPolishTest();
+            }
+            else if (args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunRulesIoTest();
             }
             else if (args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1293,6 +1298,29 @@ internal static class Program
 
             rules.Clear();
             rules.AddRange(appRules.Where(rule => rule.Action == FirewallAction.Block));
+
+            // 截图里展示一下分组列（真实数据在 rule-groups.json，渲染时不碰用户的文件）。
+            foreach (var rule in appRules)
+            {
+                if (rule.ApplicationNameText.Contains("game") || rule.ApplicationNameText.Contains("douyin"))
+                {
+                    rule.Group = "游戏";
+                }
+            }
+
+            if (TryGetField<ComboBox>(form, "_rulesGroupCombo", out var docsBlockGroups))
+            {
+                docsBlockGroups.Items.Clear();
+                docsBlockGroups.Items.AddRange(new object[] { "全部分组", "未分组", "游戏" });
+                docsBlockGroups.SelectedIndex = 0;
+            }
+
+            if (TryGetField<ComboBox>(form, "_whitelistGroupCombo", out var docsAllowGroups))
+            {
+                docsAllowGroups.Items.Clear();
+                docsAllowGroups.Items.AddRange(new object[] { "全部分组", "未分组", "游戏" });
+                docsAllowGroups.SelectedIndex = 0;
+            }
 
             if (TryGetField<List<FirewallRuleItem>>(form, "_whitelistRules", out var whitelistRules))
             {
@@ -3127,6 +3155,188 @@ internal static class Program
         };
 
     /// <summary>
+    /// 规则分组与导入导出自检（**离线**：临时文件，不碰 WFP）。
+    ///
+    /// 重点验证"导出的文件能原样导回来"：到期时间、动作、IP/程序类型、分组，
+    /// 任何一项在往返中丢了，用户都会得到一条"看起来一样、实际不一样"的规则。
+    /// </summary>
+    private static void RunRulesIoTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempDir = Path.Combine(Path.GetTempPath(), $"wag-rules-{Guid.NewGuid():N}");
+        var groupFile = Path.Combine(tempDir, "rule-groups.json");
+
+        W("################################################################");
+        W("#   规则分组 + 导入导出（离线：临时文件，不建任何规则）          #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            // ---------------- 1. 分组存储 ----------------
+            W("===== 1. 规则分组存储 =====");
+
+            var groups = new RuleGroupStore(groupFile);
+
+            groups.SetGroup("AppGuard_Block_a.exe_11111111", "游戏");
+            groups.SetGroup("AppGuard_Block_b.exe_22222222", "游戏");
+            groups.SetGroup("AppGuard_Allow_c.exe_33333333", "办公");
+            groups.SetGroup("AppGuard_Block_d.exe_44444444", "");   // 未分组：应当被移除
+
+            CheckAssertion(results, "能给规则设置分组",
+                groups.GetGroup("AppGuard_Block_a.exe_11111111") == "游戏");
+            CheckAssertion(results, "空分组名等于「未分组」",
+                groups.GetGroup("AppGuard_Block_d.exe_44444444").Length == 0);
+            CheckAssertion(results, "分组名去重后是两个",
+                groups.AllGroups().Count == 2 && groups.AllGroups().Contains("游戏"));
+
+            groups.Save();
+            var reloaded = new RuleGroupStore(groupFile);
+            CheckAssertion(results, "分组能存盘并读回（往返）",
+                reloaded.GetGroup("AppGuard_Allow_c.exe_33333333") == "办公");
+
+            var pruned = reloaded.Prune(new[]
+            {
+                "AppGuard_Block_a.exe_11111111",
+                "AppGuard_Allow_c.exe_33333333",
+            });
+            W($"    清理孤儿分组记录：{pruned} 条");
+            CheckAssertion(results, "已删除规则的分组记录会被清掉", pruned == 1);
+            CheckAssertion(results, "仍在使用的分组不受影响",
+                reloaded.GetGroup("AppGuard_Block_a.exe_11111111") == "游戏");
+
+            File.WriteAllText(groupFile, "{ 这不是合法 json", Encoding.UTF8);
+            var brokenGroups = new RuleGroupStore(groupFile);
+            CheckAssertion(results, "分组文件损坏时按空表处理，不抛异常",
+                brokenGroups.AllGroups().Count == 0);
+
+            // ---------------- 2. 导出文档 ----------------
+            W();
+            W("===== 2. 导出 → 导入（往返）=====");
+
+            var gameRule = new FirewallRuleItem
+            {
+                Name = RuleNaming.BuildBlockRuleName(@"C:\Games\game.exe"),
+                ApplicationPath = @"C:\Games\game.exe",
+                Description = "测试",
+                Grouping = "AppGuard",
+                Enabled = true,
+                Action = FirewallAction.Block,
+                Direction = FirewallDirection.Outbound,
+                Protocol = 256,
+            };
+
+            var allowRule = new FirewallRuleItem
+            {
+                Name = RuleNaming.BuildAllowRuleName(@"C:\Tools\tool.exe"),
+                ApplicationPath = @"C:\Tools\tool.exe",
+                Description = "测试",
+                Grouping = "AppGuard",
+                Enabled = true,
+                Action = FirewallAction.Allow,
+                Direction = FirewallDirection.Outbound,
+                Protocol = 256,
+                Expiry = RuleExpiry.At(DateTime.UtcNow.AddHours(2)),
+            };
+
+            var ipRule = new FirewallRuleItem
+            {
+                Name = "AppGuard_BlockIp_1.2.3.4",
+                ApplicationPath = string.Empty,
+                IpAddress = "1.2.3.4",
+                Description = "测试",
+                Grouping = "AppGuard",
+                Enabled = true,
+                Action = FirewallAction.Block,
+                Direction = FirewallDirection.Outbound,
+                Protocol = 256,
+            };
+
+            var groupStore = new RuleGroupStore(Path.Combine(tempDir, "export-groups.json"));
+            groupStore.SetGroup(gameRule.Name, "游戏");
+            groupStore.SetGroup(allowRule.Name, "办公");
+
+            var document = RuleExport.Build(new[] { gameRule, allowRule, ipRule }, groupStore);
+            CheckAssertion(results, "导出文档包含全部三条规则", document.Rules.Count == 3);
+
+            var json = RuleExport.Serialize(document);
+            CheckAssertion(results, "导出内容是合法 JSON 且带格式标记",
+                json.Contains(RuleExport.FormatName));
+
+            if (!RuleExport.TryParse(json, out var parsed, out var error) || parsed is null)
+            {
+                CheckAssertion(results, $"导出的文件能被解析（错误：{error}）", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            CheckAssertion(results, "导入解析出的条数一致", parsed.Rules.Count == 3);
+
+            var parsedGame = parsed.Rules.Single(entry => entry.Value == @"C:\Games\game.exe");
+            var parsedAllow = parsed.Rules.Single(entry => entry.Value == @"C:\Tools\tool.exe");
+            var parsedIp = parsed.Rules.Single(entry => entry.Value == "1.2.3.4");
+
+            CheckAssertion(results, "程序阻止规则的类型/动作保留",
+                parsedGame.Kind == "program" && parsedGame.Action == "block");
+            CheckAssertion(results, "允许规则的类型/动作保留",
+                parsedAllow.Kind == "program" && parsedAllow.Action == "allow");
+            CheckAssertion(results, "IP 规则被识别成 ip", parsedIp.Kind == "ip");
+
+            var allowExpiry = RuleExpiry.Parse(parsedAllow.Expiry);
+            CheckAssertion(results, "限时规则的到期时间保留（±1 分钟）",
+                allowExpiry.Kind == RuleExpiryKind.AtTime
+                && allowExpiry.ExpiresAtUtc is { } at
+                && Math.Abs((at - allowRule.Expiry.ExpiresAtUtc!.Value).TotalMinutes) < 1);
+
+            CheckAssertion(results, "永久规则的到期字段为空",
+                parsedGame.Expiry.Length == 0 && parsedIp.Expiry.Length == 0);
+            CheckAssertion(results, "分组名随文件一起导出/导入",
+                parsedGame.Group == "游戏" && parsedAllow.Group == "办公");
+            CheckAssertion(results, "摘要能说清阻止/允许数量",
+                RuleExport.Summarize(parsed).Contains("阻止 2 条")
+                && RuleExport.Summarize(parsed).Contains("允许 1 条"));
+
+            // ---------------- 3. 坏文件必须被拒绝 ----------------
+            W();
+            W("===== 3. 坏文件拒绝（不能把半个坏文件拿去建规则）=====");
+
+            var rejections = new (string Name, string Json)[]
+            {
+                ("不是 JSON", "{ 这不是合法 json"),
+                ("不是我们的格式", "{\"Format\":\"SomethingElse\",\"Version\":1,\"Rules\":[]}"),
+                ("版本过新", "{\"Format\":\"WinAppGuard.Rules\",\"Version\":99,\"Rules\":[]}"),
+                ("类型不认识", "{\"Format\":\"WinAppGuard.Rules\",\"Version\":1,\"Rules\":[{\"Kind\":\"dll\",\"Value\":\"C:\\\\a.exe\",\"Action\":\"block\"}]}"),
+                ("动作不认识", "{\"Format\":\"WinAppGuard.Rules\",\"Version\":1,\"Rules\":[{\"Kind\":\"program\",\"Value\":\"C:\\\\a.exe\",\"Action\":\"maybe\"}]}"),
+                ("相对路径", "{\"Format\":\"WinAppGuard.Rules\",\"Version\":1,\"Rules\":[{\"Kind\":\"program\",\"Value\":\"a.exe\",\"Action\":\"block\"}]}"),
+                ("非法 IP", "{\"Format\":\"WinAppGuard.Rules\",\"Version\":1,\"Rules\":[{\"Kind\":\"ip\",\"Value\":\"999.1.1.1\",\"Action\":\"block\"}]}"),
+            };
+
+            foreach (var (name, badJson) in rejections)
+            {
+                var accepted = RuleExport.TryParse(badJson, out _, out var reason);
+                W($"    {name} → {(accepted ? "被接受（错误！）" : "拒绝：" + reason)}");
+                CheckAssertion(results, $"坏文件被拒绝：{name}", !accepted);
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
     /// 2.1.1 界面打磨项的接线自检（**离线**）：搜索、空状态、危险按钮、快捷键、
     /// 右键菜单、窗口状态持久化、横幅提示。
     ///
@@ -3262,6 +3472,56 @@ internal static class Program
         else
         {
             results.Add(("找得到开源标识 _openSourceLink", false));
+        }
+
+        // ---------------- 3c. 规则分组与导入导出（2.4） ----------------
+        W();
+        W("===== 3c. 规则分组与导入导出 =====");
+
+        CheckAssertion(results, "黑名单有分组筛选下拉",
+            TryGetField<ComboBox>(form, "_rulesGroupCombo", out _));
+        CheckAssertion(results, "白名单有分组筛选下拉",
+            TryGetField<ComboBox>(form, "_whitelistGroupCombo", out _));
+
+        CheckAssertion(results, "黑名单有「分组… / 导出… / 导入…」按钮",
+            TryGetField<Button>(form, "_rulesGroupButton", out var blockGroupButton)
+            && blockGroupButton.Text.Contains("分组")
+            && TryGetField<Button>(form, "_rulesExportButton", out var exportButton)
+            && exportButton.Text.Contains("导出")
+            && TryGetField<Button>(form, "_rulesImportButton", out var importButton)
+            && importButton.Text.Contains("导入"));
+
+        CheckAssertion(results, "白名单有「分组…」按钮",
+            TryGetField<Button>(form, "_whitelistGroupButton", out var allowGroupButton)
+            && allowGroupButton.Text.Contains("分组"));
+
+        CheckAssertion(results, "两个规则表格都有「分组」列",
+            TryGetField<DataGridViewBuffered>(form, "_rulesGrid", out var blockGrid)
+            && blockGrid.Columns[nameof(FirewallRuleItem.Group)] is not null
+            && TryGetField<DataGridViewBuffered>(form, "_whitelistGrid", out var allowGrid)
+            && allowGrid.Columns[nameof(FirewallRuleItem.Group)] is not null);
+
+        // 分组筛选下拉的取值映射：0=全部、1=未分组、其它=具体分组。
+        if (TryGetField<ComboBox>(form, "_rulesGroupCombo", out var groupCombo))
+        {
+            groupCombo.Items.Clear();
+            groupCombo.Items.Add("全部分组");
+            groupCombo.Items.Add("未分组");
+            groupCombo.Items.Add("游戏");
+
+            groupCombo.SelectedIndex = 2;
+            var selectedGroup = TryGetField<string>(form, "_blockGroupFilter", out var filter) ? filter : "<读不到>";
+            W($"    选「游戏」→ 筛选值 = {selectedGroup ?? "null"}");
+            CheckAssertion(results, "选具体分组时按组名筛选", selectedGroup == "游戏");
+
+            groupCombo.SelectedIndex = 1;
+            _ = TryGetField<string>(form, "_blockGroupFilter", out var ungroupedFilter);
+            CheckAssertion(results, "选「未分组」时筛选值为空字符串（不是 null）",
+                ungroupedFilter == string.Empty);
+
+            groupCombo.SelectedIndex = 0;
+            _ = TryGetField<string>(form, "_blockGroupFilter", out var allFilter);
+            CheckAssertion(results, "选「全部分组」时不筛选", allFilter is null);
         }
 
         // ---------------- 4. 快捷键 ----------------

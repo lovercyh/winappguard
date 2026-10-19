@@ -617,20 +617,6 @@ internal sealed class WfpEngine : IDisposable
                         });
                     }
                 }
-
-                if (scope.HasProfile)
-                {
-                    conditions.Add(new WfpNativeMethods.FwpmFilterCondition
-                    {
-                        FieldKey = WfpNativeMethods.ConditionCurrentProfileId,
-                        MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
-                        ConditionValue = new WfpNativeMethods.FwpConditionValue
-                        {
-                            Type = WfpNativeMethods.FWP_UINT32,
-                            Value = (IntPtr)(int)scope.Profile,
-                        },
-                    });
-                }
             }
 
             var conditionCount = (uint)conditions.Count;

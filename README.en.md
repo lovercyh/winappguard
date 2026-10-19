@@ -59,9 +59,8 @@ from *"what is talking to the internet right now?"* and end with *"blocked"*.
   while strict mode is on", and the page states whether it is currently in effect. The whitelist
   page can add a program **by path** — under strict mode an unlisted program never reaches the
   network, so it would never show up on the Connections page.
-- **Fine-grained rules** — narrow a rule to a **protocol** (TCP / UDP), a **remote port**
-  (single or range) and a **network profile** (public / private / domain). The rule lists show a
-  *Scope* column.
+- **Fine-grained rules** — narrow a rule to a **protocol** (TCP / UDP) and a **remote port**
+  (single or range). The rule lists show a *Scope* column.
 - **Rule groups** — a *Group* column and a group filter on both lists. Groups only affect how
   rules are organised in the UI; they never change whether a rule is active.
 - **Rule export / import** — each list (blocklist / whitelist) has its own *Export* and *Import*,

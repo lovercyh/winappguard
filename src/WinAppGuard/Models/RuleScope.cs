@@ -16,29 +16,14 @@ internal enum RuleProtocol
 }
 
 /// <summary>
-/// 网络位置。数值取自 <c>NLM_NETWORK_CATEGORY</c>（netlistmgr.h），
-/// 也正是 WFP 的 <c>FWPM_CONDITION_CURRENT_PROFILE_ID</c> 期望的「网络类别」。
-/// </summary>
-internal enum NetworkProfile
-{
-    /// <summary>不限网络位置。</summary>
-    Any = -1,
-
-    /// <summary>公用网络（NLM_NETWORK_CATEGORY_PUBLIC = 0）。</summary>
-    Public = 0,
-
-    /// <summary>专用网络（NLM_NETWORK_CATEGORY_PRIVATE = 1）。</summary>
-    Private = 1,
-
-    /// <summary>域网络（NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED = 2）。</summary>
-    Domain = 2,
-}
-
-/// <summary>
-/// 2.5 的「精细化范围」：协议 / 远端端口 / 网络位置。
+/// 2.5 的「精细化范围」：协议 / 远端端口。
 ///
 /// 为什么是"远端端口"而不是本地端口：用户说"只允许它连 443"时想的是目标端口；
 /// 本地端口通常是随机分配的，按它限制没有意义。
+///
+/// **网络位置（域 / 专用 / 公用）刻意不在其中**：
+/// 2.5 开发时试过 `FWPM_CONDITION_CURRENT_PROFILE_ID`，虚拟机实测只有「任意网络」能拦住，
+/// 指定公用/专用网络时规则不生效 —— 与其留一个假开关，不如直接不做。
 ///
 /// 约束（来自 WFP 的行为，不是我们的偏好）：
 ///   - **端口必须配合 TCP 或 UDP**：协议为「任意」时指定端口，WFP 无法匹配；
@@ -47,17 +32,14 @@ internal enum NetworkProfile
 internal sealed record RuleScope(
     RuleProtocol Protocol,
     int PortFrom,
-    int PortTo,
-    NetworkProfile Profile)
+    int PortTo)
 {
     /// <summary>完全不限制。</summary>
-    internal static readonly RuleScope Any = new(RuleProtocol.Any, 0, 0, NetworkProfile.Any);
+    internal static readonly RuleScope Any = new(RuleProtocol.Any, 0, 0);
 
     internal bool HasPort => PortFrom > 0 || PortTo > 0;
 
-    internal bool HasProfile => Profile != NetworkProfile.Any;
-
-    internal bool IsAny => Protocol == RuleProtocol.Any && !HasPort && !HasProfile;
+    internal bool IsAny => Protocol == RuleProtocol.Any && !HasPort;
 
     /// <summary>单端口（不是范围）时返回 true。</summary>
     internal bool IsSinglePort => HasPort && PortFrom == PortTo;
@@ -97,12 +79,6 @@ internal sealed record RuleScope(
             return "协议取值不合法。";
         }
 
-        if (Profile is not (NetworkProfile.Any or NetworkProfile.Public
-            or NetworkProfile.Private or NetworkProfile.Domain))
-        {
-            return "网络位置取值不合法。";
-        }
-
         return null;
     }
 
@@ -120,24 +96,15 @@ internal sealed record RuleScope(
         : IsSinglePort ? PortFrom.ToString(CultureInfo.InvariantCulture)
         : $"{PortFrom}-{PortTo}";
 
-    /// <summary>网络位置的中文名。</summary>
-    internal string ProfileText => Profile switch
-    {
-        NetworkProfile.Public => "公用网络",
-        NetworkProfile.Private => "专用网络",
-        NetworkProfile.Domain => "域网络",
-        _ => "任意网络",
-    };
-
-    /// <summary>给表格显示的一行说明，例如「TCP 443 · 公用网络」。</summary>
+    /// <summary>给表格显示的一行说明，例如「TCP 443」。</summary>
     internal string Describe() => IsAny
         ? "任意"
-        : string.Join(" · ", new[] { ProtocolText, PortText, ProfileText }
+        : string.Join(" · ", new[] { ProtocolText, PortText }
             .Where(part => !part.StartsWith("任意", StringComparison.Ordinal)));
 
     /// <summary>
     /// 写进 WFP 说明字段的紧凑标记（只含 ASCII，且不含 <c>|</c>）：
-    /// <c>tcp-443-443-any</c> / <c>udp-8000-8100-pub</c>；完全不限制时为空字符串。
+    /// <c>tcp-443-443</c> / <c>udp-8000-8100</c>；完全不限制时为空字符串。
     /// </summary>
     internal string Encode()
     {
@@ -153,18 +120,15 @@ internal sealed record RuleScope(
             _ => "any",
         };
 
-        var profile = Profile switch
-        {
-            NetworkProfile.Public => "pub",
-            NetworkProfile.Private => "pri",
-            NetworkProfile.Domain => "dom",
-            _ => "any",
-        };
-
-        return $"{protocol}-{PortFrom}-{PortTo}-{profile}";
+        return $"{protocol}-{PortFrom}-{PortTo}";
     }
 
-    /// <summary>解析 <see cref="Encode"/> 的产物；认不出来就当「不限」（但会给出 false）。</summary>
+    /// <summary>
+    /// 解析 <see cref="Encode"/> 的产物；认不出来就当「不限」（但会给出 false）。
+    ///
+    /// 兼容 4 段的旧标记（2.5 开发期短暂存在过「网络位置」字段，末尾多一段）：
+    /// 只取前三段，忽略最后一段 —— 这样当时建过的规则不会变成"看不懂"而无法删除。
+    /// </summary>
     internal static bool TryParse(string? token, out RuleScope scope)
     {
         scope = Any;
@@ -176,7 +140,7 @@ internal sealed record RuleScope(
 
         var parts = token.Trim().Split('-');
 
-        if (parts.Length != 4)
+        if (parts.Length is not (3 or 4))
         {
             return false;
         }
@@ -189,16 +153,7 @@ internal sealed record RuleScope(
             _ => (RuleProtocol)(-1),
         };
 
-        var profile = parts[3].ToLowerInvariant() switch
-        {
-            "pub" => NetworkProfile.Public,
-            "pri" => NetworkProfile.Private,
-            "dom" => NetworkProfile.Domain,
-            "any" => NetworkProfile.Any,
-            _ => (NetworkProfile)(-2),
-        };
-
-        if ((int)protocol < 0 || (int)profile == -2)
+        if ((int)protocol < 0)
         {
             return false;
         }
@@ -209,7 +164,7 @@ internal sealed record RuleScope(
             return false;
         }
 
-        var parsed = new RuleScope(protocol, from, to, profile);
+        var parsed = new RuleScope(protocol, from, to);
 
         if (parsed.Validate() is not null)
         {
@@ -222,7 +177,7 @@ internal sealed record RuleScope(
 
     /// <summary>
     /// 规则名后缀（区分同一程序的不同范围）：
-    /// 例如 <c>tcp443</c> / <c>udp8000-8100</c> / <c>tcp443-pub</c>；不限制时为空。
+    /// 例如 <c>tcp443</c> / <c>udp8000-8100</c>；不限制时为空。
     /// </summary>
     internal string NameSuffix()
     {
@@ -243,21 +198,6 @@ internal sealed record RuleScope(
             builder.Append(IsSinglePort
                 ? PortFrom.ToString(CultureInfo.InvariantCulture)
                 : $"{PortFrom}-{PortTo}");
-        }
-
-        if (HasProfile)
-        {
-            if (builder.Length > 0)
-            {
-                builder.Append('-');
-            }
-
-            builder.Append(Profile switch
-            {
-                NetworkProfile.Public => "pub",
-                NetworkProfile.Private => "pri",
-                _ => "dom",
-            });
         }
 
         return builder.ToString();

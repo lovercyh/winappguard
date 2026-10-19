@@ -4,17 +4,20 @@ using WinAppGuard.Models;
 namespace WinAppGuard.Forms;
 
 /// <summary>
-/// 「作用范围」对话框：协议 / 远端端口 / 网络位置。
+/// 「作用范围」对话框：协议 / 远端端口。
 ///
 /// 为什么单独一个对话框而不塞进"添加程序"里：
 ///   大多数人只想"把这个程序拦掉"（范围=任意），多一点选项就会劝退；
-///   需要精细化的人则希望一次看清三项设置。
+///   需要精细化的人则希望一次看清两项设置。
+///
+/// 网络位置（域/专用/公用）**刻意没有**：2.5 实测 WFP 的
+/// <c>CURRENT_PROFILE_ID</c> 条件在指定网络类别时不生效（只有「任意」能拦），
+/// 留一个不工作的选项比没有更糟。
 /// </summary>
 internal sealed class RuleScopeForm : Form
 {
     private readonly ComboBox _protocol;
     private readonly TextBox _ports;
-    private readonly ComboBox _profile;
     private readonly Label _error;
 
     private RuleScopeForm(RuleScope current)
@@ -25,7 +28,7 @@ internal sealed class RuleScopeForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(470, 250);
+        ClientSize = new Size(470, 210);
         Font = new Font("Microsoft YaHei UI", 9F);
 
         var layout = new TableLayoutPanel
@@ -33,7 +36,7 @@ internal sealed class RuleScopeForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             Padding = new Padding(16),
-            RowCount = 5,
+            RowCount = 4,
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -64,26 +67,10 @@ internal sealed class RuleScopeForm : Form
                 ? current.PortFrom.ToString(CultureInfo.InvariantCulture)
                 : $"{current.PortFrom}-{current.PortTo}";
 
-        var profileLabel = new Label { Text = "网络位置：", AutoSize = true, Anchor = AnchorStyles.Left };
-        _profile = new ComboBox
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Dock = DockStyle.Top,
-        };
-        _profile.Items.AddRange(new object[] { "任意网络", "公用网络", "专用网络", "域网络" });
-        _profile.SelectedIndex = current.Profile switch
-        {
-            NetworkProfile.Public => 1,
-            NetworkProfile.Private => 2,
-            NetworkProfile.Domain => 3,
-            _ => 0,
-        };
-
         var hint = new Label
         {
             Text = "说明：\n· 端口是**远端端口**（目标是 443 就填 443）；\n" +
-                   "· 指定端口时必须选 TCP 或 UDP（协议「任意」时无法按端口匹配）；\n" +
-                   "· 网络位置就是 Windows 的「公用 / 专用 / 域」网络。",
+                   "· 指定端口时必须选 TCP 或 UDP（协议「任意」时无法按端口匹配）。",
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
             Dock = DockStyle.Fill,
@@ -97,11 +84,21 @@ internal sealed class RuleScopeForm : Form
             Dock = DockStyle.Fill,
         };
 
+        layout.Controls.Add(protocolLabel, 0, 0);
+        layout.Controls.Add(_protocol, 1, 0);
+        layout.Controls.Add(portLabel, 0, 1);
+        layout.Controls.Add(_ports, 1, 1);
+        layout.Controls.Add(hint, 0, 2);
+        layout.SetColumnSpan(hint, 2);
+        layout.Controls.Add(_error, 0, 3);
+        layout.SetColumnSpan(_error, 2);
+
         var buttons = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.RightToLeft,
-            Dock = DockStyle.Fill,
-            AutoSize = true,
+            Dock = DockStyle.Bottom,
+            Height = 46,
+            Padding = new Padding(0, 8, 12, 8),
         };
 
         var okButton = new Button
@@ -130,27 +127,14 @@ internal sealed class RuleScopeForm : Form
         {
             _protocol.SelectedIndex = 0;
             _ports.Clear();
-            _profile.SelectedIndex = 0;
         };
 
         buttons.Controls.Add(okButton);
         buttons.Controls.Add(cancelButton);
         buttons.Controls.Add(resetButton);
 
-        layout.Controls.Add(protocolLabel, 0, 0);
-        layout.Controls.Add(_protocol, 1, 0);
-        layout.Controls.Add(portLabel, 0, 1);
-        layout.Controls.Add(_ports, 1, 1);
-        layout.Controls.Add(profileLabel, 0, 2);
-        layout.Controls.Add(_profile, 1, 2);
-        layout.Controls.Add(hint, 0, 3);
-        layout.SetColumnSpan(hint, 2);
-        layout.Controls.Add(_error, 0, 4);
-        layout.SetColumnSpan(_error, 2);
-
         Controls.Add(layout);
         Controls.Add(buttons);
-        buttons.Dock = DockStyle.Bottom;
 
         AcceptButton = okButton;
         CancelButton = cancelButton;
@@ -169,21 +153,13 @@ internal sealed class RuleScopeForm : Form
             _ => RuleProtocol.Any,
         };
 
-        var profile = _profile.SelectedIndex switch
-        {
-            1 => NetworkProfile.Public,
-            2 => NetworkProfile.Private,
-            3 => NetworkProfile.Domain,
-            _ => NetworkProfile.Any,
-        };
-
         if (!TryParsePorts(_ports.Text, out var from, out var to, out var portError))
         {
             _error.Text = portError;
             return;
         }
 
-        var scope = new RuleScope(protocol, from, to, profile);
+        var scope = new RuleScope(protocol, from, to);
         var validation = scope.Validate();
 
         if (validation is not null)

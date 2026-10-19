@@ -3408,10 +3408,10 @@ internal static class Program
         var scopes = new[]
         {
             RuleScope.Any,
-            new RuleScope(RuleProtocol.Tcp, 443, 443, NetworkProfile.Any),
-            new RuleScope(RuleProtocol.Udp, 8000, 8100, NetworkProfile.Public),
-            new RuleScope(RuleProtocol.Tcp, 0, 0, NetworkProfile.Domain),
-            new RuleScope(RuleProtocol.Udp, 53, 53, NetworkProfile.Private),
+            new RuleScope(RuleProtocol.Tcp, 443, 443),
+            new RuleScope(RuleProtocol.Udp, 8000, 8100),
+            new RuleScope(RuleProtocol.Tcp, 0, 0),
+            new RuleScope(RuleProtocol.Udp, 53, 53),
         };
 
         foreach (var scope in scopes)
@@ -3424,8 +3424,7 @@ internal static class Program
                 ok
                 && back.Protocol == scope.Protocol
                 && back.PortFrom == scope.PortFrom
-                && back.PortTo == scope.PortTo
-                && back.Profile == scope.Profile);
+                && back.PortTo == scope.PortTo);
         }
 
         // ---------------- 2. 非法组合必须被拒绝 ----------------
@@ -3434,10 +3433,10 @@ internal static class Program
 
         var invalid = new (string Name, RuleScope Scope)[]
         {
-            ("端口 + 任意协议", new RuleScope(RuleProtocol.Any, 443, 443, NetworkProfile.Any)),
-            ("起始大于结束", new RuleScope(RuleProtocol.Tcp, 900, 800, NetworkProfile.Any)),
-            ("端口为 0", new RuleScope(RuleProtocol.Tcp, 0, 443, NetworkProfile.Any)),
-            ("端口越界", new RuleScope(RuleProtocol.Tcp, 70000, 70000, NetworkProfile.Any)),
+            ("端口 + 任意协议", new RuleScope(RuleProtocol.Any, 443, 443)),
+            ("起始大于结束", new RuleScope(RuleProtocol.Tcp, 900, 800)),
+            ("端口为 0", new RuleScope(RuleProtocol.Tcp, 0, 443)),
+            ("端口越界", new RuleScope(RuleProtocol.Tcp, 70000, 70000)),
         };
 
         foreach (var (name, scope) in invalid)
@@ -3476,7 +3475,7 @@ internal static class Program
             @"C:\Tools\a.exe",
             FirewallAction.Block,
             RuleExpiry.Never,
-            new RuleScope(RuleProtocol.Tcp, 443, 443, NetworkProfile.Public));
+            new RuleScope(RuleProtocol.Tcp, 443, 443));
 
         W($"    说明 = {scopedRule.Description}");
         W($"    规则名 = {scopedRule.DisplayName}");
@@ -3484,18 +3483,21 @@ internal static class Program
         CheckAssertion(results, "带范围的规则说明能原样解析回来",
             WfpRule.TryParse(scopedRule.Description, out var parsedRule)
             && parsedRule.Scope.Protocol == RuleProtocol.Tcp
-            && parsedRule.Scope.PortFrom == 443
-            && parsedRule.Scope.Profile == NetworkProfile.Public);
+            && parsedRule.Scope.PortFrom == 443);
 
         CheckAssertion(results, "规则名带上范围后缀（避免同程序不同范围重名）",
-            scopedRule.DisplayName.EndsWith("_tcp443-pub", StringComparison.Ordinal));
+            scopedRule.DisplayName.EndsWith("_tcp443", StringComparison.Ordinal));
+
+        CheckAssertion(results, "旧标记（4 段，带网络位置）仍能解析 —— 老规则不会变成看不懂",
+            RuleScope.TryParse("tcp-443-443-any", out var legacyScope)
+            && legacyScope.PortFrom == 443);
 
         CheckAssertion(results, "旧格式（v1，无范围）仍然能解析",
             WfpRule.TryParse(@"AppGuard|1|Block|C:\Tools\a.exe|", out var legacyRule)
             && legacyRule.Scope.IsAny);
 
         CheckAssertion(results, "看不懂的范围标记不被猜测（宁可不认这条规则）",
-            !WfpRule.TryParse(@"AppGuard|2|Block|C:\Tools\a.exe||tcp-443-443-xyz", out _));
+            !WfpRule.TryParse(@"AppGuard|2|Block|C:\Tools\a.exe||tcp-443-xyz", out _));
 
         // ---------------- 5. 导出文件带范围 ----------------
         W();
@@ -3521,7 +3523,7 @@ internal static class Program
         var json = RuleExport.Serialize(document);
 
         CheckAssertion(results, "导出文件里写入了范围标记",
-            json.Contains("\"Scope\": \"tcp-443-443-pub\""));
+            json.Contains("\"Scope\": \"tcp-443-443\""));
 
         if (RuleExport.TryParse(json, out var parsedDocument, out _) && parsedDocument is not null)
         {
@@ -3529,7 +3531,7 @@ internal static class Program
             CheckAssertion(results, "导入解析后范围仍然正确",
                 RuleScope.TryParse(entry.Scope, out var importedScope)
                 && importedScope.PortFrom == 443
-                && importedScope.Profile == NetworkProfile.Public);
+                && importedScope.Protocol == RuleProtocol.Tcp);
         }
         else
         {
@@ -3554,13 +3556,8 @@ internal static class Program
         var exe = Environment.ProcessPath ?? string.Empty;
         W($"    测试程序 = {exe}");
 
-        var portScope = new RuleScope(RuleProtocol.Tcp, 43, 43, NetworkProfile.Any);
+        var portScope = new RuleScope(RuleProtocol.Tcp, 43, 43);
         var portRule = new WfpRule(exe, FirewallAction.Block, RuleExpiry.Never, portScope);
-
-        var profileScope = new RuleScope(RuleProtocol.Tcp, 43, 43, NetworkProfile.Public);
-        var profileRule = new WfpRule(exe, FirewallAction.Block, RuleExpiry.Never, profileScope);
-
-        var profileRuleWritten = false;
 
         using var engine = WfpEngine.Open();
         engine.EnsureSublayer(persistent: true);
@@ -3582,30 +3579,11 @@ internal static class Program
 
             CheckAssertion(results, "按远端端口拦住了 43", blocked43);
             CheckAssertion(results, "同一个程序连 443 不受影响（端口条件真的生效）", still443);
-
-            // 网络位置条件：先看 BFE 是否接受这个条件
-            try
-            {
-                WfpRuleStore.Add(engine, profileRule);
-                profileRuleWritten = true;
-                W("    网络位置条件：BFE 接受了这条过滤器");
-                CheckAssertion(results, "WFP 接受 CURRENT_PROFILE_ID 条件", true);
-            }
-            catch (WfpException ex)
-            {
-                W($"    网络位置条件：BFE 拒绝 —— {ex.Message}");
-                CheckAssertion(results, "WFP 接受 CURRENT_PROFILE_ID 条件", false);
-            }
         }
         finally
         {
             try
             {
-                if (profileRuleWritten)
-                {
-                    WfpRuleStore.Remove(engine, profileRule);
-                }
-
                 WfpRuleStore.Remove(engine, portRule);
                 Thread.Sleep(500);
 

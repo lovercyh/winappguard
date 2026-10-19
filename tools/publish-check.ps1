@@ -92,6 +92,7 @@ Write-Host "    .\dist-tools\$exeName --rule-scope-test   规则：协议 / 远�
 Write-Host "    .\dist-tools\$exeName --ipc-codec-test    服务：IPC 编解码（离线）"
 Write-Host "    .\dist-tools\$exeName --service-ui-test    服务：状态显示（离线）"
 Write-Host "    .\dist-tools\$exeName --service-install-test 服务：安装/查询/卸载（需管理员；会删除全部规则）"
+Write-Host "    .\dist-tools\$exeName --service-ping-test  服务：IPC 身份边界（管理员可连 / 标准用户不可连）"
 Write-Host "    .\dist-tools\$exeName --wfp-scope-test    规则：真实过滤器的端口条件（需管理员，只拦 43）"
 Write-Host "    .\dist-tools\$exeName --wfp-status        WFP：只读，打印当前规则与子层状态"
 Write-Host "    .\dist-tools\$exeName --wfp-test          WFP：地基（结构体 / 子层 / 过滤器 / 动态会话，需管理员）"

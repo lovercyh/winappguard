@@ -134,7 +134,8 @@ internal static class Program
                          && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ipc-codec-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -257,6 +258,10 @@ internal static class Program
             else if (args.Contains("--service-install-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceInstallTest();
+            }
+            else if (args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServicePingTest();
             }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3570,6 +3575,41 @@ internal static class Program
             (label.Text ?? string.Empty).Contains("运行中", StringComparison.Ordinal)
             && (label.Text ?? string.Empty).Contains("4 条规则", StringComparison.Ordinal));
 
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// IPC 身份边界（M1.5）：管理员能连上，普通用户连不上。
+    ///
+    /// 这个模式**刻意不自动提权** —— 否则普通用户一跑就被 UAC 提权，
+    /// 测出来的永远是"管理员能连"。
+    ///
+    /// 用法：服务安装并运行后，分别在管理员终端和标准用户终端各跑一次。
+    /// </summary>
+    private static void RunServicePingTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var elevated = AdminHelper.IsRunningAsAdmin();
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1.5));
+
+        W("################################################################");
+        W("#   IPC 身份边界（管理员可连 / 普通用户不可连）                   #");
+        W("################################################################");
+        W();
+        W($"    当前身份 = {(elevated ? "管理员（已提权）" : "标准用户（未提权）")}");
+        W($"    连接结果 = {(status is null ? "连不上" : $"连上了（服务 v{status.ServiceVersion}）")}");
+        W();
+
+        if (elevated)
+        {
+            CheckAssertion(results, "管理员能查到服务状态（前提：服务已安装并运行）", status is not null);
+        }
+        else
+        {
+            CheckAssertion(results, "标准用户被拒绝（这是 M1.5 的预期边界）", status is null);
+        }
+
+        W("    提示：这个模式不会自动提权；请在两种账号下各跑一次。");
         PrintSummary(results, showFirewallResidue: false);
     }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -8,6 +9,7 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Wfp;
@@ -130,7 +132,9 @@ internal static class Program
                          && !args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ipc-codec-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -241,6 +245,14 @@ internal static class Program
             else if (args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunRuleScopeTest();
+            }
+            else if (args.Contains("--ipc-codec-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunIpcCodecTest();
+            }
+            else if (args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceUiTest();
             }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3383,6 +3395,176 @@ internal static class Program
                 // 临时目录删不掉不影响结论。
             }
         }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// IPC 编解码自检（**离线**）：长度前缀、上限、非法长度、JSON 往返。
+    /// 真正的"非管理员被拒绝"只能在虚拟机里用标准用户验证（见 --service-auth-test）。
+    /// </summary>
+    private static void RunIpcCodecTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   IPC 编解码（离线：长度前缀 / 上限 / 非法输入 / JSON 往返）    #");
+        W("################################################################");
+        W();
+
+        CheckAssertion(results, "协议版本为 1", ServiceProtocol.Version == 1);
+        CheckAssertion(results, "管道名带协议版本（不兼容时会连不上而不是误解）",
+            ServiceProtocol.PipeName.EndsWith(".v1", StringComparison.Ordinal));
+
+        // ---------------- 1. 请求往返 + 长度前缀 ----------------
+        W("===== 1. 请求往返 =====");
+
+        var request = new ServiceRequest { Command = ServiceProtocol.Commands.Status };
+        using var requestStream = new MemoryStream();
+
+        PipeCodec.WriteAsync(requestStream, request, CancellationToken.None).GetAwaiter().GetResult();
+
+        var header = new byte[4];
+        requestStream.Position = 0;
+        requestStream.ReadExactly(header);
+
+        var declaredLength = BinaryPrimitives.ReadInt32LittleEndian(header);
+        W($"    声明长度 = {declaredLength}，实际负载 = {requestStream.Length - 4}");
+
+        CheckAssertion(results, "长度前缀与实际负载一致",
+            declaredLength == requestStream.Length - 4);
+
+        requestStream.Position = 0;
+        var parsedRequest = PipeCodec.ReadAsync<ServiceRequest>(requestStream, CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        CheckAssertion(results, "请求能原样读回",
+            parsedRequest is not null
+            && parsedRequest.Id == request.Id
+            && parsedRequest.Command == ServiceProtocol.Commands.Status
+            && parsedRequest.ProtocolVersion == ServiceProtocol.Version);
+
+        // ---------------- 2. 状态往返 ----------------
+        W();
+        W("===== 2. 状态往返 =====");
+
+        var status = new ServiceStatus
+        {
+            ServiceVersion = "3.0",
+            SublayerPresent = true,
+            BlockRuleCount = 3,
+            AllowRuleCount = 1,
+            IpRuleCount = 2,
+        };
+
+        using var statusStream = new MemoryStream();
+        PipeCodec.WriteAsync(statusStream, status, CancellationToken.None).GetAwaiter().GetResult();
+        statusStream.Position = 0;
+
+        var parsedStatus = PipeCodec.ReadAsync<ServiceStatus>(statusStream, CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        CheckAssertion(results, "状态字段全部保留",
+            parsedStatus is not null
+            && parsedStatus.ServiceVersion == "3.0"
+            && parsedStatus.SublayerPresent
+            && parsedStatus.BlockRuleCount == 3
+            && parsedStatus.AllowRuleCount == 1
+            && parsedStatus.IpRuleCount == 2);
+
+        // ---------------- 3. 超长消息 ----------------
+        W();
+        W("===== 3. 上限与非法输入 =====");
+
+        var huge = new ServiceRequest
+        {
+            Command = new string('x', ServiceProtocol.MaxMessageBytes),
+        };
+
+        var oversizedRejected = false;
+
+        try
+        {
+            using var _ = new MemoryStream();
+            PipeCodec.WriteAsync(_, huge, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidDataException)
+        {
+            oversizedRejected = true;
+        }
+
+        CheckAssertion(results, "超长消息被拒绝（不能拿大消息拖死服务）", oversizedRejected);
+
+        foreach (var length in new[] { 0, -5, ServiceProtocol.MaxMessageBytes + 1 })
+        {
+            using var stream = new MemoryStream();
+            var badHeader = new byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(badHeader, length);
+            stream.Write(badHeader, 0, 4);
+            stream.Position = 0;
+
+            var rejected = false;
+
+            try
+            {
+                _ = PipeCodec.ReadAsync<ServiceRequest>(stream, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch (InvalidDataException)
+            {
+                rejected = true;
+            }
+
+            CheckAssertion(results, $"非法长度 {length} 被拒绝", rejected);
+        }
+
+        CheckAssertion(results, "空流（对方直接关闭）返回 null，不抛异常",
+            PipeCodec.ReadAsync<ServiceRequest>(new MemoryStream(), CancellationToken.None)
+                .GetAwaiter().GetResult() is null);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>服务状态标签的两种状态（离线 / 运行中）。</summary>
+    private static void RunServiceUiTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   服务状态显示（离线 / 运行中；离线自检）                     #");
+        W("################################################################");
+        W();
+
+        MainForm.SuppressBackgroundServices = true;
+
+        using var form = new MainForm(isAutostart: false);
+        TrySetField(form, "_runtimeInitialized", true);
+
+        if (!TryGetField<ToolStripStatusLabel>(form, "_serviceStatusLabel", out var label))
+        {
+            CheckAssertion(results, "找得到服务状态标签 _serviceStatusLabel", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { null });
+        W($"    离线时 = {label.Text ?? string.Empty}");
+        CheckAssertion(results, "服务不可用时显示「离线模式」",
+            (label.Text ?? string.Empty).Contains("离线模式", StringComparison.Ordinal));
+
+        var status = new ServiceStatus
+        {
+            ServiceVersion = "3.0",
+            SublayerPresent = true,
+            BlockRuleCount = 3,
+            AllowRuleCount = 1,
+        };
+
+        InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { status });
+        W($"    运行时 = {label.Text ?? string.Empty}");
+        CheckAssertion(results, "服务正常时显示「运行中」和规则总数",
+            (label.Text ?? string.Empty).Contains("运行中", StringComparison.Ordinal)
+            && (label.Text ?? string.Empty).Contains("4 条规则", StringComparison.Ordinal));
 
         PrintSummary(results, showFirewallResidue: false);
     }

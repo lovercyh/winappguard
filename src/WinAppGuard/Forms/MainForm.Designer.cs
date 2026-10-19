@@ -135,6 +135,7 @@ partial class MainForm
 
     private StatusStrip _statusStrip = null!;
     private ToolStripStatusLabel _adminStatusLabel = null!;
+    private ToolStripStatusLabel _serviceStatusLabel = null!;
     private ToolStripStatusLabel _springLabel = null!;
     private ToolStripStatusLabel _startModeLabel = null!;
     private ToolStripStatusLabel _statusRulesLabel = null!;
@@ -271,6 +272,7 @@ partial class MainForm
         _exitButton = new Button();
         _statusStrip = new StatusStrip();
         _adminStatusLabel = new ToolStripStatusLabel();
+        _serviceStatusLabel = new ToolStripStatusLabel();
         _springLabel = new ToolStripStatusLabel();
         _startModeLabel = new ToolStripStatusLabel();
         _statusRulesLabel = new ToolStripStatusLabel();
@@ -1242,16 +1244,22 @@ partial class MainForm
         // ---------- 底部状态栏 ----------
         _statusStrip.Items.AddRange(new ToolStripItem[]
         {
-            _adminStatusLabel, _springLabel, _startModeLabel, _statusRulesLabel, _summaryLabel, _versionLabel,
+            _adminStatusLabel, _serviceStatusLabel, _springLabel, _startModeLabel, _statusRulesLabel, _summaryLabel, _versionLabel,
         });
         _statusStrip.Location = new Point(0, 678);
         _statusStrip.Name = "_statusStrip";
         _statusStrip.Size = new Size(1180, 22);
         _statusStrip.TabIndex = 5;
+        _statusStrip.ShowItemToolTips = true;
 
         _adminStatusLabel.Name = "_adminStatusLabel";
         _adminStatusLabel.Size = new Size(150, 17);
         _adminStatusLabel.Text = "管理员权限：检测中…";
+
+        _serviceStatusLabel.Name = "_serviceStatusLabel";
+        _serviceStatusLabel.Size = new Size(190, 17);
+        _serviceStatusLabel.Text = "服务：检测中…";
+        _serviceStatusLabel.ToolTipText = "WinAppGuard 防护服务的运行状态。";
 
         // 中间弹簧，把后面的信息挤到最右侧
         _springLabel.Name = "_springLabel";

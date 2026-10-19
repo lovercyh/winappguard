@@ -70,6 +70,8 @@
   <ItemGroup>
     <!-- 3.0 起：WFP / 审计 / 规则引擎都在 Core，类库不引用 WinForms。 -->
     <ProjectReference Include="..\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+    <!-- IPC 契约（服务与界面共用）。 -->
+    <ProjectReference Include="..\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

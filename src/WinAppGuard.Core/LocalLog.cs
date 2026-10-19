@@ -38,7 +38,25 @@ public static class LocalLog
     private static DateTime _lastCleanupDate = DateTime.MinValue;
 
     /// <summary>日志目录的完整路径。</summary>
-    public static string LogDirectory => DirectoryHolder.Value;
+    /// <summary>
+    /// 日志目录的完整路径。
+    ///
+    /// 3.0 起服务与界面共用这一套日志代码，但**目录不同**：
+    /// 服务以 SYSTEM 运行，不能往某个用户的 %LOCALAPPDATA% 里写。
+    /// 服务启动时调用 <see cref="UseDirectory"/> 指向 %ProgramData%。
+    /// </summary>
+    public static string LogDirectory => _overrideDirectory ?? DirectoryHolder.Value;
+
+    private static string? _overrideDirectory;
+
+    /// <summary>
+    /// 指定日志目录（只应在进程启动时调用一次）。
+    /// 传 null 或空字符串表示恢复默认（%LOCALAPPDATA%\WinAppGuard\logs）。
+    /// </summary>
+    public static void UseDirectory(string? directory)
+    {
+        _overrideDirectory = string.IsNullOrWhiteSpace(directory) ? null : directory;
+    }
 
     /// <summary>记录一般信息（启动、状态同步等）。</summary>
     public static void Info(string message) => Write("信息", message);

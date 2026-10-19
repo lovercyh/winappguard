@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    IPC 契约：**纯数据**，服务端和界面共用。
+    这里不允许放任何业务逻辑，也不引用 WFP/审计 —— 它只是"双方同意的消息格式"。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WinAppGuard.Contracts</AssemblyName>
+    <RootNamespace>WinAppGuard.Contracts</RootNamespace>
+    <Version>2.5</Version>
+  </PropertyGroup>
+
+</Project>

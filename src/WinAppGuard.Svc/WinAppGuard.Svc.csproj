@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    WinAppGuard 防护服务。
+    刻意用控制台子系统（不是 WinExe）：既能作为服务由 SCM 启动，
+    也能加 console 参数直接跑起来调试/自检。服务模式不会显示窗口。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <AssemblyName>WinAppGuardSvc</AssemblyName>
+    <RootNamespace>WinAppGuard.Service</RootNamespace>
+
+    <Version>2.5</Version>
+    <Company>lovercyh</Company>
+    <Copyright>Copyright © 2026 lovercyh</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+    <ProjectReference Include="..\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
+  </ItemGroup>
+
+  <!-- 与产品一致：Release 下自包含单文件，安装时不需要目标机装 .NET。 -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+</Project>

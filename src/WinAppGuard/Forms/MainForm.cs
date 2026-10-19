@@ -1,4 +1,5 @@
 using System.Text;
+using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
@@ -370,6 +371,9 @@ public partial class MainForm : Form
         KeyDown += OnMainFormKeyDown;
 
         ShowRuntimeStatus();
+
+        // 探测防护服务（异步：服务没装/没起时不能拖慢启动）。
+        ProbeServiceStatus();
 
         // 把日志目录直接摆在界面上，用户不用去猜日志藏在哪。
         _logPathLabel.Text = LocalLog.LogDirectory;
@@ -4112,6 +4116,54 @@ public partial class MainForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
+    }
+
+    /// <summary>
+    /// 异步探测防护服务状态，然后回到 UI 线程更新状态栏。
+    /// 连不上是**正常状态**（离线模式），不弹窗、不报错。
+    /// </summary>
+    private void ProbeServiceStatus()
+    {
+        _ = Task.Run(() =>
+        {
+            var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1.5));
+
+            try
+            {
+                if (IsDisposed || !IsHandleCreated)
+                {
+                    return;
+                }
+
+                BeginInvoke(new Action(() => UpdateServiceStatusLabel(status)));
+            }
+            catch (Exception)
+            {
+                // 窗口正在关闭：丢弃这次结果。
+            }
+        });
+    }
+
+    /// <summary>更新服务状态标签（自检直接调用它验证两种状态）。</summary>
+    internal void UpdateServiceStatusLabel(ServiceStatus? status)
+    {
+        if (status is null)
+        {
+            _serviceStatusLabel.Text = "服务：未运行（离线模式）";
+            _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
+            _serviceStatusLabel.ToolTipText =
+                "防护服务未安装或未运行：规则仍由本程序直接管理。\n" +
+                "3.0-b 起服务不可用时规则页只读。";
+            return;
+        }
+
+        _serviceStatusLabel.Text =
+            $"服务：运行中 · {status.BlockRuleCount + status.AllowRuleCount} 条规则";
+        _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
+        _serviceStatusLabel.ToolTipText =
+            $"服务版本 {status.ServiceVersion}，协议 v{status.ProtocolVersion}。\n" +
+            $"子层{(status.SublayerPresent ? "存在" : "缺失")}；" +
+            $"阻止 {status.BlockRuleCount} / 允许 {status.AllowRuleCount} / IP {status.IpRuleCount}。";
     }
 
     private void LayoutSettingsSections()

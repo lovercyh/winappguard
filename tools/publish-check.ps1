@@ -78,6 +78,8 @@ Write-Host "    .\dist-tools\$exeName --ui-polish-test    界面打磨：搜索 
 Write-Host "    .\dist-tools\$exeName --ui-dpi-test       界面：150% 字体下的布局（离线）"
 Write-Host "    .\dist-tools\$exeName --rules-io-test     规则：分组与导入导出（离线，不建规则）"
 Write-Host "    .\dist-tools\$exeName --rule-scope-test   规则：协议 / 远端端口（离线，不建规则）"
+Write-Host "    .\dist-tools\$exeName --ipc-codec-test    服务：IPC 编解码（离线）"
+Write-Host "    .\dist-tools\$exeName --service-ui-test    服务：状态显示（离线）"
 Write-Host "    .\dist-tools\$exeName --wfp-scope-test    规则：真实过滤器的端口条件（需管理员，只拦 43）"
 Write-Host "    .\dist-tools\$exeName --wfp-status        WFP：只读，打印当前规则与子层状态"
 Write-Host "    .\dist-tools\$exeName --wfp-test          WFP：地基（结构体 / 子层 / 过滤器 / 动态会话，需管理员）"

@@ -42,6 +42,14 @@ public static class StrictModeManager
 {
     private static WfpStrictSession? _session;
 
+    /// <summary>
+    /// 除"本程序 + 白名单 + 系统必需程序"之外还要放行的程序。
+    /// 3.0-c 起严格模式由服务持有会话，而真正要联网的是**界面**（查 IP 归属等），
+    /// 所以服务调用 <see cref="Enable"/> 时会把界面路径作为额外放行项传进来。
+    /// 记住它，<see cref="RefreshIfEnabled"/> 重建会话时不会漏掉。
+    /// </summary>
+    private static IReadOnlyList<string> _extraPrograms = Array.Empty<string>();
+
     /// <summary>严格模式当前是否生效（本次会话）。</summary>
     public static bool IsEnabled => _session is not null;
 
@@ -69,11 +77,23 @@ public static class StrictModeManager
     /// <summary>
     /// 开启严格模式：建立一个动态会话，放进「白名单放行 + 阻止全部」。
     /// </summary>
-    public static StrictModeChangeResult Enable()
+    /// <param name="extraPrograms">
+    /// 额外放行的程序（3.0-c：服务代界面开启时传入界面 exe）。
+    /// 传 null 表示沿用上次记住的清单。
+    /// </param>
+    public static StrictModeChangeResult Enable(IEnumerable<string>? extraPrograms = null)
     {
         if (IsEnabled)
         {
             return new StrictModeChangeResult(false, "严格模式已经在生效了。");
+        }
+
+        if (extraPrograms is not null)
+        {
+            _extraPrograms = extraPrograms
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         // ---- 收集白名单 ----
@@ -94,6 +114,8 @@ public static class StrictModeManager
         {
             candidates.Add(selfPath);
         }
+
+        candidates.AddRange(_extraPrograms);
 
         var systemPaths = SystemAllowList.GetPaths();
         candidates.AddRange(systemPaths);

@@ -60,6 +60,20 @@ public sealed class ServiceResponse
 
     /// <summary>本次操作影响的条数（删除 / 导入等）。</summary>
     public int Affected { get; set; }
+
+    // ---- 3.0-c ----
+
+    /// <summary>本工具的白名单程序（rules.allowTargets）。</summary>
+    public List<string>? Programs { get; set; }
+
+    /// <summary>系统 / 其它软件放行的程序（rules.allowTargets）。</summary>
+    public List<string>? OtherPrograms { get; set; }
+
+    /// <summary>不限程序的允许规则条数（rules.allowTargets）。</summary>
+    public int ProgramlessRuleCount { get; set; }
+
+    /// <summary>给人看的一句话（严格模式开关的结果说明）。</summary>
+    public string? Message { get; set; }
 }
 
 /// <summary>一条规则的 IPC 表示（与界面表格字段对应）。</summary>
@@ -108,4 +122,7 @@ public sealed class ServiceStatus
 
     /// <summary>严格模式是否正在生效（3.0-c 起由服务持有；3.0-a 恒为 false）。</summary>
     public bool StrictModeActive { get; set; }
+
+    /// <summary>严格模式当前放行的程序数量（3.0-c）。</summary>
+    public int StrictModePermittedCount { get; set; }
 }

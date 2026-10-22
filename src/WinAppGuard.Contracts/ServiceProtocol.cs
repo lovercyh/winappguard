@@ -68,6 +68,20 @@ public static class ServiceProtocol
 
         /// <summary>把界面本地（旧版本）的分组文件内容交给服务保存。</summary>
         public const string ImportGroups = "write.groups.import";
+
+        // ---- 3.0-c：严格模式（会话由服务持有）----
+
+        /// <summary>本工具白名单 + 其它来源允许规则（替界面读，界面不再碰 WFP）。</summary>
+        public const string AllowTargets = "rules.allowTargets";
+
+        public const string StrictEnable = "write.strict.enable";
+        public const string StrictDisable = "write.strict.disable";
+
+        /// <summary>白名单变化后重建严格模式会话（服务写规则时会自动调用，界面一般不用）。</summary>
+        public const string StrictRefresh = "write.strict.refresh";
+
+        /// <summary>1.x 升级兜底：按界面传来的设置文件路径还原全局默认出站。</summary>
+        public const string StrictRecoverLegacy = "write.strict.recoverLegacy";
     }
 
     /// <summary>JSON 序列化选项（双方必须一致）。</summary>

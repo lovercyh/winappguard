@@ -268,6 +268,10 @@ internal static class Program
             {
                 RunServiceRulesTest();
             }
+            else if (args.Contains("--service-strict-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceStrictTest();
+            }
             else if (args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunUiOfflineRulesTest();
@@ -3612,7 +3616,9 @@ internal static class Program
             || !TryGetField<Button>(form, "_whitelistAddButton", out var whitelistAdd)
             || !TryGetField<Label>(form, "_rulesNoticeLabel", out var notice)
             || !TryGetField<ToolStripStatusLabel>(form, "_serviceStatusLabel", out var serviceLabel)
-            || !TryGetField<ToolStripStatusLabel>(form, "_statusRulesLabel", out var rulesStatusLabel))
+            || !TryGetField<ToolStripStatusLabel>(form, "_statusRulesLabel", out var rulesStatusLabel)
+            || !TryGetField<Button>(form, "_strictModeToggleButton", out var strictToggle)
+            || !TryGetField<Label>(form, "_strictModeStatusLabel", out var strictStatus))
         {
             CheckAssertion(results, "找得到规则页的按钮与提示标签", false);
             PrintSummary(results, showFirewallResidue: false);
@@ -3639,6 +3645,9 @@ internal static class Program
             (notice.Text ?? string.Empty).Contains("只读", StringComparison.Ordinal));
         CheckAssertion(results, "离线时左下角不再显示旧的已阻止数量",
             (rulesStatusLabel.Text ?? string.Empty).Contains("只读", StringComparison.Ordinal));
+        CheckAssertion(results, "离线时严格模式开关禁用", !strictToggle.Enabled);
+        CheckAssertion(results, "离线时严格模式说明「不可用」",
+            (strictStatus.Text ?? string.Empty).Contains("不可用", StringComparison.Ordinal));
 
         // 模拟服务恢复
         TrySetField(form, "_serviceAvailable", true);
@@ -3650,6 +3659,9 @@ internal static class Program
         W($"    恢复：加入={addButton.Enabled}，导入={importButton.Enabled}");
         CheckAssertion(results, "恢复后「加入」重新可用", addButton.Enabled);
         CheckAssertion(results, "恢复后「导入」重新可用", importButton.Enabled);
+
+        InvokePrivate(form, "RefreshStrictModeStatus", Array.Empty<object?>());
+        CheckAssertion(results, "恢复后严格模式开关可用", strictToggle.Enabled);
 
         PrintSummary(results, showFirewallResidue: false);
     }
@@ -3713,6 +3725,153 @@ internal static class Program
 
         W("    提示：这个模式不会自动提权；请在两种账号下各跑一次。");
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 服务端严格模式（**需管理员 + 服务已安装运行**）：
+    /// 开启 → 过滤器出现 → 停服务 → 过滤器消失（立即撤销）→ 启动服务 → 状态复位。
+    ///
+    /// 这里用 `sc stop`（优雅停止）验证"服务被停 = 撤销"；
+    /// 崩溃路径由 BFE 的动态会话保证（`--wfp-strict-test` 已单独验证）。
+    /// </summary>
+    private static void RunServiceStrictTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var serviceWasStopped = false;
+
+        W("################################################################");
+        W("#   服务端严格模式（需管理员 + 服务已运行；会短暂停/启服务）      #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+
+            if (status is null)
+            {
+                CheckAssertion(results, "服务已安装并正在运行", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            // 保证从"未开启"开始。
+            if (status.StrictModeActive)
+            {
+                _ = Call(ServiceProtocol.Commands.StrictDisable, new ServiceRequest(), out _);
+            }
+
+            var baseline = CountOurFilters();
+            W($"    停服务前的过滤器数（基线）= {baseline}");
+
+            // ---- 1. 通过 IPC 开启 ----
+            var enable = Call(ServiceProtocol.Commands.StrictEnable, new ServiceRequest(), out var enableError);
+
+            W($"    开启：{(enable is null ? enableError : $"Ok={enable.Ok}")}");
+            CheckAssertion(results, "通过 IPC 开启严格模式成功", enable is { Ok: true });
+
+            var enabledStatus = enable?.Status;
+            W($"    状态：Active={enabledStatus?.StrictModeActive}，" +
+              $"放行 {enabledStatus?.StrictModePermittedCount} 个程序");
+            CheckAssertion(results, "服务状态报告严格模式已生效",
+                enabledStatus?.StrictModeActive == true);
+            CheckAssertion(results, "放行清单非空（白名单 + 本程序 + 系统程序）",
+                enabledStatus?.StrictModePermittedCount > 0);
+
+            var during = CountOurFilters();
+            W($"    开启后过滤器数 = {during}（基线 {baseline}）");
+            CheckAssertion(results, "严格模式会话的过滤器已进入 BFE", during > baseline);
+
+            // ---- 2. 停服务 → 立即撤销 ----
+            W("    停止服务…");
+            serviceWasStopped = true;
+            _ = RunSc("stop " + ServiceProtocol.ServiceName);
+
+            var stopped = WaitUntil(() => ServiceClient.TryGetStatus(TimeSpan.FromMilliseconds(500)) is null, 15000);
+
+            W($"    服务已停止 = {stopped}");
+            CheckAssertion(results, "服务已停止（IPC 连不上）", stopped);
+
+            // 进程退出可能比"IPC 连不上"晚一两秒，给 BFE 一点时间回收动态会话。
+            // 每 500ms 查一次：WFP 引擎要反复开关，不能像普通条件那样 20ms 轮询。
+            var filtersGone = false;
+            var afterStop = -1;
+
+            for (var attempt = 0; attempt < 30; attempt++)
+            {
+                afterStop = CountOurFilters();
+
+                if (afterStop == baseline)
+                {
+                    filtersGone = true;
+                    break;
+                }
+
+                Thread.Sleep(500);
+            }
+
+            W($"    停服务后过滤器数 = {afterStop}（预期回到基线 {baseline}）");
+            CheckAssertion(results, "停服务后严格模式过滤器全部消失", filtersGone);
+        }
+        finally
+        {
+            if (serviceWasStopped)
+            {
+                W("    重新启动服务…");
+                _ = RunSc("start " + ServiceProtocol.ServiceName);
+                WaitUntil(() => ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1)) is not null, 30000);
+            }
+        }
+
+        // ---- 3. 服务重启后状态复位 ----
+        var revived = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+        W($"    服务已恢复 = {revived is not null}，严格模式 = {revived?.StrictModeActive}");
+        CheckAssertion(results, "服务重新启动后 IPC 恢复", revived is not null);
+        CheckAssertion(results, "重启后严格模式是关闭状态", revived?.StrictModeActive == false);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static int CountOurFilters()
+    {
+        try
+        {
+            using var engine = WfpEngine.Open();
+            return engine.ListOurFilters().Count;
+        }
+        catch (Exception ex)
+        {
+            W($"    ！读取过滤器失败：{ex.Message}");
+            return -1;
+        }
+    }
+
+    /// <summary>跑 sc.exe（Windows 自带，不引第三方）。</summary>
+    private static bool RunSc(string arguments)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("sc.exe", arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+
+            if (process is null)
+            {
+                return false;
+            }
+
+            process.WaitForExit(15000);
+            return process.HasExited && process.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            W($"    ！sc {arguments} 失败：{ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>

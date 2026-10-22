@@ -19,7 +19,7 @@ internal sealed class RuleHandlers
     /// WFP / 规则文件都不是线程安全的：管道每个连接一个线程，必须串行化。
     /// 规则操作本身只有几毫秒，串行不会影响体验。
     /// </summary>
-    private static readonly object Gate = new();
+    internal static readonly object Gate = new();
 
     internal ServiceResponse Handle(ServiceRequest request)
     {
@@ -37,6 +37,7 @@ internal sealed class RuleHandlers
             {
                 ServiceProtocol.Commands.ListRules => List(request),
                 ServiceProtocol.Commands.FilterMap => FilterMap(request),
+                ServiceProtocol.Commands.AllowTargets => AllowTargets(request),
 
                 ServiceProtocol.Commands.AddProgramRule => AddProgram(request),
                 ServiceProtocol.Commands.AddIpRule => AddIp(request),
@@ -49,6 +50,11 @@ internal sealed class RuleHandlers
                 ServiceProtocol.Commands.PurgeExpiredRules => PurgeExpired(request),
                 ServiceProtocol.Commands.ImportGroups => ImportGroups(request),
 
+                ServiceProtocol.Commands.StrictEnable => Strict(request, enable: true),
+                ServiceProtocol.Commands.StrictDisable => Strict(request, enable: false),
+                ServiceProtocol.Commands.StrictRefresh => StrictRefresh(request),
+                ServiceProtocol.Commands.StrictRecoverLegacy => StrictRecoverLegacy(request),
+
                 _ => Fail(request, $"不支持的命令：{request.Command}"),
             };
         }
@@ -56,6 +62,98 @@ internal sealed class RuleHandlers
         {
             ServiceLog.Warning($"规则命令 {request.Command} 失败：{ex.Message}");
             return Fail(request, ex.Message);
+        }
+    }
+
+    private ServiceResponse AllowTargets(ServiceRequest request)
+    {
+        // 界面不再自己枚举防火墙规则：这里把两类信息一次读齐。
+        var ours = RuleEngine.GetAllowRulePrograms();
+        var targets = FirewallManager.GetOutboundAllowTargets();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Programs = ours.ToList(),
+            OtherPrograms = targets.OtherSoftwareAllowRulePrograms.ToList(),
+            ProgramlessRuleCount = targets.ProgramlessAllowRuleCount,
+        };
+    }
+
+    private ServiceResponse Strict(ServiceRequest request, bool enable)
+    {
+        var result = enable ? StrictModeHost.Enable() : StrictModeHost.Disable();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = result.Success,
+            Error = result.Success ? null : result.Message,
+            Message = result.Message,
+            Status = ControlServer.BuildStatus(),
+        };
+    }
+
+    private ServiceResponse StrictRefresh(ServiceRequest request)
+    {
+        StrictModeHost.RefreshIfEnabled();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Status = ControlServer.BuildStatus(),
+        };
+    }
+
+    private ServiceResponse StrictRecoverLegacy(ServiceRequest request)
+    {
+        var settingsPath = request.Value?.Trim() ?? string.Empty;
+
+        if (settingsPath.Length == 0)
+        {
+            return Fail(request, "没有提供设置文件路径。");
+        }
+
+        var result = StrictModeHost.RecoverLegacy(settingsPath);
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Message = result.Message,
+            Affected = result.WasLeftOn ? 1 : 0,
+        };
+    }
+
+    /// <summary>
+    /// 到期清理（服务自己的定时器用）：失败只记日志，不打扰任何客户端。
+    /// 与 IPC 命令共用同一把锁，避免和规则写入交叉。
+    /// </summary>
+    internal void PurgeExpiredQuietly()
+    {
+        lock (Gate)
+        {
+            try
+            {
+                var removed = RuleEngine.PurgeExpiredRules(
+                    DateTime.UtcNow, SystemUptime.BootTimeUtc, freshLogonSession: false);
+
+                if (removed.Count == 0)
+                {
+                    return;
+                }
+
+                _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
+                _groups.Save();
+
+                ServiceLog.Info($"规则：服务定时清理到期规则 {removed.Count} 条");
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning($"服务定时清理到期规则失败：{ex.Message}");
+            }
         }
     }
 
@@ -115,6 +213,12 @@ internal sealed class RuleHandlers
 
         ApplyGroup(name, request.Group);
 
+        // 严格模式开着时，白名单变化必须重建会话，否则新加的程序仍然上不了网。
+        if (action.Value == FirewallAction.Allow)
+        {
+            StrictModeHost.RefreshIfEnabled();
+        }
+
         ServiceLog.Info($"规则：{(action.Value == FirewallAction.Block ? "阻止" : "允许")} {path}（{name}）");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
@@ -154,6 +258,8 @@ internal sealed class RuleHandlers
         _groups.SetGroup(name, string.Empty);
         _groups.Save();
 
+        StrictModeHost.RefreshIfEnabled();
+
         ServiceLog.Info($"规则：删除 {name}");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
@@ -190,6 +296,11 @@ internal sealed class RuleHandlers
         // 删掉对应规则的孤儿分组记录。
         _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
         _groups.Save();
+
+        if (action == FirewallAction.Allow)
+        {
+            StrictModeHost.RefreshIfEnabled();
+        }
 
         ServiceLog.Info($"规则：清空{(action == FirewallAction.Block ? "黑名单" : "白名单")} {deleted} 条");
 
@@ -327,6 +438,12 @@ internal sealed class RuleHandlers
         }
 
         _groups.Save();
+
+        if (expected.Value == FirewallAction.Allow)
+        {
+            StrictModeHost.RefreshIfEnabled();
+        }
+
         ServiceLog.Info($"规则：导入 {created} 条（跳过 {skipped}，失败 {failed}）");
 
         return new ServiceResponse

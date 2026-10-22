@@ -102,6 +102,8 @@ internal static class Program
             return 4;
         }
 
+        TryRecoverLegacyStrictMode();
+
         Console.WriteLine("服务已启动。");
         Console.WriteLine();
         Console.WriteLine($"完成。界面程序：{Path.Combine(InstallDirectory, UiExeName)}");
@@ -133,6 +135,11 @@ internal static class Program
 
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
+
+        if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+        {
+            TryRecoverLegacyStrictMode();
+        }
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
             ? "修复完成，服务正在运行。"
@@ -198,6 +205,38 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine(rulesDeleted ? "卸载完成。" : "卸载完成，但规则未能全部删除（见上）。");
         return rulesDeleted ? 0 : 3;
+    }
+
+    /// <summary>
+    /// 1.x 升级兜底：把残留的「默认阻止出站」还原成「允许」。
+    ///
+    /// 放在安装/修复里，是因为这两个动作一定以**管理员**身份、在**用户会话**里运行：
+    /// 既能改 Windows 防火墙，又能读到当前用户的 settings.json。
+    /// （服务的 IPC 也会做一次，但服务不知道用户目录。）
+    /// </summary>
+    private static void TryRecoverLegacyStrictMode()
+    {
+        try
+        {
+            var result = StrictModeManager.RecoverIfLeftOn();
+
+            if (!result.WasLeftOn)
+            {
+                return;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine(result.Message);
+
+            if (!result.Restored)
+            {
+                Console.Error.WriteLine("⚠ 自动还原没有完全成功：请手工把 wf.msc 三套配置文件的「出站连接」都改成「允许」。");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"1.x 严格模式兜底失败（不影响安装）：{ex.Message}");
+        }
     }
 
     private static (string Ui, string Service) LocatePayload()

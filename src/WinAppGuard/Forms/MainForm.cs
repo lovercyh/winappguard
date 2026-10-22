@@ -140,6 +140,15 @@ public partial class MainForm : Form
     /// <summary>旧分组文件是否已经迁移过（只做一次）。</summary>
     private bool _groupsMigrated;
 
+    /// <summary>严格模式状态（由服务状态快照更新；3.0-c 起会话在服务里）。</summary>
+    private bool _strictModeEnabled;
+
+    /// <summary>严格模式当前放行的程序数（服务状态快照）。</summary>
+    private int _strictModePermittedCount;
+
+    /// <summary>1.x 遗留严格模式标志是否已经让服务处理过。</summary>
+    private bool _legacyStrictRecoveryDone;
+
     /// <summary>黑名单页的原始提示文案（离线时会被替换，恢复后还原）。</summary>
     private string _rulesNoticeDefault = string.Empty;
 
@@ -405,10 +414,9 @@ public partial class MainForm : Form
         // 设置页的分区宽度是手动算的，先按当前尺寸摆一次。
         LayoutSettingsSections();
 
-        // 严格模式是**会话级**的：如果上次没有正常退出（崩溃 / 被强杀 / 断电），
-        // 它留下的「默认阻止出站」必须在这一刻还原 —— 否则用户开机即断网。
-        // 放在最前面：连规则都还没读，先把网络救回来。
-        RecoverStrictModeIfLeftOn();
+        // 1.x 的严格模式兜底（把残留的「默认阻止出站」还原）现在由服务执行：
+        // 服务是 SYSTEM，不知道当前登录用户的设置文件，所以由界面在连上服务后
+        // 把 settings.json 路径传过去（见 RefreshRulesFromFirewall → RecoverLegacyStrictModeOnce）。
 
         // 启动时先把**已经到期**的临时阻断清掉，再读规则 ——
         // 这样第一屏显示的就是清理后的状态，不会先闪一下旧数据。
@@ -420,6 +428,18 @@ public partial class MainForm : Form
         // 放行状态（严格模式白名单）要在这之前读：它会让「放行」列第一屏就是对的。
         RefreshAllowTargets();
         RefreshRulesFromFirewall();
+
+        // 严格模式会话在服务里：先同步取一次状态，避免第一屏把"正在生效"显示成"未开启"。
+        if (_serviceAvailable)
+        {
+            var strictStatus = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+
+            if (strictStatus is not null)
+            {
+                _strictModeEnabled = strictStatus.StrictModeActive;
+                _strictModePermittedCount = strictStatus.StrictModePermittedCount;
+            }
+        }
 
         // 严格模式分区也要有个初值（它读的就是上面刚缓存好的白名单）。
         RefreshStrictModeStatus();
@@ -887,6 +907,9 @@ public partial class MainForm : Form
                 }
             }
 
+            // 1.x 遗留的严格模式标志（只处理一次；绝大多数机器上什么都不做）。
+            RecoverLegacyStrictModeOnce();
+
             _blockedPaths.Clear();
 
             foreach (var rule in _appGuardRules)
@@ -936,7 +959,7 @@ public partial class MainForm : Form
                 "白名单只在「严格模式」下起作用：严格模式开着时，只有这里列出的程序" +
                 "（以及系统必需程序）能上网。\r\n" +
                 "严格模式没开时，这些规则不会限制任何东西。\r\n" +
-                (StrictModeManager.IsEnabled
+                (_strictModeEnabled
                     ? "当前：严格模式已开启 —— 白名单正在生效。"
                     : "当前：严格模式未开启 —— 白名单暂不生效。");
 
@@ -1112,18 +1135,8 @@ public partial class MainForm : Form
     /// </summary>
     private void AfterRulesChanged()
     {
-        // 严格模式的放行清单是会话建立时算好的：白名单增删后必须重建会话，
-        // 否则新加的白名单程序在严格模式下仍然上不了网。
-        // 放在"读规则"之前做 —— 重建失败时下面的读取仍然能看到最新规则。
-        if (StrictModeManager.IsEnabled)
-        {
-            var refreshed = StrictModeManager.RefreshIfEnabled();
-            if (refreshed is { Success: false })
-            {
-                LocalLog.Error($"严格模式：白名单变化后重建会话失败：{refreshed.Message}");
-            }
-        }
-
+        // 3.0-c：严格模式会话由服务持有，服务在写规则时会自己重建会话
+        // （见 RuleHandlers 里的 StrictModeHost.RefreshIfEnabled）。
         RefreshRulesFromFirewall();
 
         // 规则变了，白名单也可能变了（加入/移出白名单、删除规则、严格模式开关）。
@@ -1190,46 +1203,61 @@ public partial class MainForm : Form
     }
 
     /// <summary>
-    /// 严格模式的启动兜底：上次没正常退出（崩溃 / 被强杀 / 断电）时，
-    /// 把残留的「默认阻止出站」还原成「允许」。
+    /// 严格模式的 1.x 启动兜底（3.0-c 起由服务执行）：
+    /// 上次没正常退出时，把残留的「默认阻止出站」还原成「允许」。
     ///
-    /// 为什么必须做：默认出站动作**不随程序退出而恢复**。
-    /// 漏掉这一步，用户下次开机就是"所有程序都上不了网"，
-    /// 而他很可能正是不敢碰 wf.msc 的那类人。
+    /// 界面只把**自己的设置文件路径**传给服务 —— 服务是 SYSTEM，不知道当前登录用户。
+    /// 只在服务可用时尝试；失败保留标记，下次刷新再试。
     /// </summary>
-    private void RecoverStrictModeIfLeftOn()
+    private void RecoverLegacyStrictModeOnce()
     {
+        if (_legacyStrictRecoveryDone)
+        {
+            return;
+        }
+
         try
         {
-            var result = StrictModeManager.RecoverIfLeftOn();
+            var settingsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppConstants.AppDataFolderName,
+                "settings.json");
 
-            if (!result.WasLeftOn)
+            if (!File.Exists(settingsPath))
             {
-                // 绝大多数情况：上次正常退出，什么都没留下。
+                _legacyStrictRecoveryDone = true;
                 return;
             }
 
-            if (result.Restored)
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.StrictRecoverLegacy,
+                    Value = settingsPath,
+                },
+                TimeSpan.FromSeconds(5),
+                out var error);
+
+            if (response is not { Ok: true })
+            {
+                LocalLog.Warning($"1.x 严格模式兜底失败（稍后重试）：{response?.Error ?? error}");
+                return;
+            }
+
+            _legacyStrictRecoveryDone = true;
+
+            if (response.Affected > 0)
             {
                 ShowTrayBalloon(
                     "严格模式已被自动还原",
-                    "上次没有正常退出，严格模式留下的「默认阻止出站」已经还原成「允许」，网络应该恢复正常了。");
-                return;
+                    string.IsNullOrWhiteSpace(response.Message)
+                        ? "上次（1.x）没有正常退出，严格模式留下的「默认阻止出站」已经还原成「允许」。"
+                        : response.Message);
             }
-
-            // 还原失败是最严重的情况之一，必须明确告诉用户怎么手工救回来。
-            MessageBox.Show(
-                this,
-                result.Message + "\n\n请手工恢复：Win+R 输入 wf.msc → 右键「属性」→ " +
-                "三套配置文件（域 / 专用 / 公用）标签页的「出站连接」都改成「允许」。",
-                AppConstants.AppName,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
         }
         catch (Exception ex)
         {
-            // 这里失败不能影响程序启动；标志还在，下次启动会再试一次。
-            LocalLog.Error("启动时还原严格模式失败", ex);
+            LocalLog.Warning($"1.x 严格模式兜底失败（稍后重试）：{ex.Message}");
         }
     }
 
@@ -1346,21 +1374,26 @@ public partial class MainForm : Form
         {
             var started = Environment.TickCount64;
 
-            // 2.0：本工具自己的规则已经搬到 WFP，白名单从这里读。
-            var ours = RuleEngine.GetAllowRulePrograms();
+            // 3.0-c：界面不再枚举防火墙规则，两类信息都由服务一次读齐。
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.AllowTargets },
+                TimeSpan.FromSeconds(5),
+                out var error);
 
-            // 「别的软件 / 系统的允许规则」仍然来自 Windows 防火墙 ——
-            // 那部分不归我们管，读它们只是为了在连接列表里如实标注
-            // "这个程序本来就被别处放行"。2.0 的 block 能压过它们，所以只是参考信息。
-            var targets = FirewallManager.GetOutboundAllowTargets();
+            if (response is not { Ok: true })
+            {
+                // 服务不可用：保留上一次的缓存（不要清空 —— 清空会让所有程序都显示"未放行"）。
+                LocalLog.Warning($"读取放行状态失败（保留上次缓存）：{response?.Error ?? error}");
+                return;
+            }
 
             _whitelistedPaths.Clear();
-            _whitelistedPaths.UnionWith(ours);
+            _whitelistedPaths.UnionWith(response.Programs ?? new List<string>());
 
             _otherAllowPaths.Clear();
-            _otherAllowPaths.UnionWith(targets.OtherSoftwareAllowRulePrograms);
+            _otherAllowPaths.UnionWith(response.OtherPrograms ?? new List<string>());
 
-            _programlessAllowRuleCount = targets.ProgramlessAllowRuleCount;
+            _programlessAllowRuleCount = response.ProgramlessRuleCount;
 
             // 耗时写进日志：这条路径的开销是本功能唯一的性能风险点，
             // 真机上一旦变慢，日志里就能直接看到。
@@ -2005,7 +2038,7 @@ public partial class MainForm : Form
 
         var path = dialog.FileName;
         var name = Path.GetFileName(path);
-        var strictModeOn = StrictModeManager.IsEnabled;
+        var strictModeOn = _strictModeEnabled;
 
         var scope = RuleScopeForm.Ask(DialogOwner, RuleScope.Any);
 
@@ -2077,7 +2110,7 @@ public partial class MainForm : Form
             return;
         }
 
-        var strictModeOn = StrictModeManager.IsEnabled;
+        var strictModeOn = _strictModeEnabled;
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -2145,7 +2178,7 @@ public partial class MainForm : Form
             return;
         }
 
-        var strictModeOn = StrictModeManager.IsEnabled;
+        var strictModeOn = _strictModeEnabled;
 
         var ruleList = string.Join(
             Environment.NewLine,
@@ -3364,7 +3397,7 @@ public partial class MainForm : Form
             "「规则」页里能看到这条规则，随时可以删掉（那就是移出白名单）。",
         };
 
-        if (!StrictModeManager.IsEnabled)
+        if (!_strictModeEnabled)
         {
             // 如实说明：严格模式没开时，这条规则暂时不改变什么。
             // 但**仍然允许**现在加 —— 「先加白名单、再开严格模式」正是推荐的用法。
@@ -3431,7 +3464,7 @@ public partial class MainForm : Form
             $"会删掉这条「允许出站」规则：{ruleName}",
         };
 
-        if (StrictModeManager.IsEnabled)
+        if (_strictModeEnabled)
         {
             // 这句必须在严格模式下说清楚：删掉白名单和"允许联网"是**相反**的效果。
             warnings.Add("⚠ 严格模式正在生效：删掉之后这个程序会立刻上不了网（新连接会被拦）。");
@@ -3506,7 +3539,7 @@ public partial class MainForm : Form
             warnings: rule.Action == FirewallAction.Allow
                 ? new[]
                 {
-                    StrictModeManager.IsEnabled
+                    _strictModeEnabled
                         ? "⚠ 严格模式正在生效：删掉这条「允许」规则之后，该程序会立刻上不了网（新连接会被拦）。"
                         : "这是一条「允许」规则（白名单）。严格模式当前没开，所以删掉它暂时不改变什么。",
                     "只会删除这一条规则，其他规则不受影响。",
@@ -4466,8 +4499,17 @@ public partial class MainForm : Form
             UpdateRulesActionState();
             UpdateWhitelistActionState();
             UpdateActionState();
+
+            // 会话活在服务里：服务不在了，严格模式必然已经撤销。
+            _strictModeEnabled = false;
+            _strictModePermittedCount = 0;
+            RefreshStrictModeStatus();
             return;
         }
+
+        _strictModeEnabled = status.StrictModeActive;
+        _strictModePermittedCount = status.StrictModePermittedCount;
+        RefreshStrictModeStatus();
 
         _serviceStatusLabel.Text =
             $"服务：运行中 · {status.BlockRuleCount + status.AllowRuleCount} 条规则";
@@ -4507,7 +4549,7 @@ public partial class MainForm : Form
     //   1. 开启前必须二次确认，并且**如实列出**会影响哪些程序；
     //   2. 状态显示一律**以实际读回来的值为准**，不信内存里的标志
     //      （用户可能在 wf.msc 里手工改过，那就得让状态文字跟着变）；
-    //   3. 每个出口都留了"恢复默认放行"的路（还有启动兜底，见 StrictModeManager）。
+    //   3. 每个出口都留了"恢复默认放行"的路（严格模式会话由服务持有，服务停止即撤销）。
     // ==================================================================
 
     /// <summary>本工具自己现在是否在白名单里（用界面缓存，不重新枚举全部规则）。</summary>
@@ -4536,15 +4578,15 @@ public partial class MainForm : Form
 
         if (enabled)
         {
-            lines.Add($"现在：只放行 {StrictModeManager.PermittedPrograms.Count} 个程序，其它程序的新连接会被拦掉。");
-            lines.Add("这是「会话内」的临时限制：关闭严格模式、或程序退出/崩溃，限制立刻消失。");
+            lines.Add($"现在：只放行 {_strictModePermittedCount} 个程序，其它程序的新连接会被拦掉。");
+            lines.Add("这是「会话内」的临时限制：关闭严格模式、或防护服务停止/崩溃，限制立刻消失。");
         }
         else
         {
             lines.Add("开启后：所有没加白名单的程序都上不了网（新连接会被拦掉），只放行白名单。");
             lines.Add("白名单 = 本工具的允许规则 + 本程序 + 系统必需程序（DNS、时间同步、Windows 更新等）。");
             lines.Add("2.0 是「真白名单」：Windows 自带和别的软件的允许规则不再自动放行。");
-            lines.Add("限制只存在于本次运行（会话内）：程序退出或崩溃时会自动撤销，不需要还原。");
+            lines.Add("限制只存在于本次服务运行期间（会话内）：服务停止或崩溃时会自动撤销，不需要还原。");
             lines.Add("它不会修改 Windows 防火墙的任何设置。");
         }
 
@@ -4569,16 +4611,18 @@ public partial class MainForm : Form
     {
         try
         {
-            var enabled = StrictModeManager.IsEnabled;
+            var enabled = _strictModeEnabled && _serviceAvailable;
 
-            _strictModeStatusLabel.Text = enabled
-                ? $"当前状态：严格模式生效中（放行 {StrictModeManager.PermittedPrograms.Count} 个程序）"
-                : "当前状态：未开启，默认放行";
+            _strictModeStatusLabel.Text = !_serviceAvailable
+                ? "当前状态：服务未运行，严格模式不可用"
+                : enabled
+                    ? $"当前状态：严格模式生效中（放行 {_strictModePermittedCount} 个程序）"
+                    : "当前状态：未开启，默认放行";
 
             _strictModeToggleButton.Text = enabled ? "关闭严格模式" : "开启严格模式…";
 
-            // 2.0 的严格模式不改任何全局设置，所以不存在"不能开启"的情况。
-            _strictModeToggleButton.Enabled = true;
+            // 会话归服务：服务不在就没有会话，按钮必须灰掉（不能假装还能开）。
+            _strictModeToggleButton.Enabled = _serviceAvailable;
 
             _strictModeDetailLabel.Text = BuildStrictModeDetailText(enabled);
         }
@@ -4591,7 +4635,7 @@ public partial class MainForm : Form
 
     private void OnStrictModeToggleClick(object? sender, EventArgs e)
     {
-        if (StrictModeManager.IsEnabled)
+        if (_strictModeEnabled)
         {
             DisableStrictMode();
         }
@@ -4628,8 +4672,21 @@ public partial class MainForm : Form
 
         try
         {
-            var result = StrictModeManager.Disable();
-            LocalLog.Operation($"严格模式已关闭：{result.Message}");
+            var response = CallService(
+                ServiceProtocol.Commands.StrictDisable,
+                new ServiceRequest(),
+                "关闭严格模式");
+
+            if (response is null)
+            {
+                RefreshStrictModeStatus();
+                return;
+            }
+
+            _strictModeEnabled = false;
+            _strictModePermittedCount = 0;
+
+            LocalLog.Operation($"严格模式已关闭：{response.Message}");
 
             AfterRulesChanged();
             RefreshStrictModeStatus();
@@ -4731,26 +4788,29 @@ public partial class MainForm : Form
 
         try
         {
-            var result = StrictModeManager.Enable();
+            var response = CallService(
+                ServiceProtocol.Commands.StrictEnable,
+                new ServiceRequest(),
+                "开启严格模式");
 
-            if (!result.Success)
+            if (response is null)
             {
-                // 例如：建立 WFP 会话失败（没有管理员权限、BFE 异常）。
-                MessageBox.Show(
-                    this, result.Message, AppConstants.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 RefreshStrictModeStatus();
                 return;
             }
 
-            LocalLog.Operation($"严格模式已开启：{result.Message}");
+            _strictModeEnabled = response.Status?.StrictModeActive ?? true;
+            _strictModePermittedCount = response.Status?.StrictModePermittedCount ?? 0;
+
+            LocalLog.Operation($"严格模式已开启：{response.Message}");
 
             // 严格模式不改规则，只建立了会话；状态文字要立刻更新。
             RefreshStrictModeStatus();
 
             ShowTrayBalloon(
                 "严格模式已开启",
-                $"只放行 {StrictModeManager.PermittedPrograms.Count} 个程序，其它程序的新连接会被拦掉。" +
-                "程序退出时会自动撤销。");
+                $"只放行 {_strictModePermittedCount} 个程序，其它程序的新连接会被拦掉。" +
+                "防护服务停止或崩溃时会自动撤销。");
         }
         catch (Exception ex)
         {

@@ -25,6 +25,7 @@ internal sealed class ControlServer : IDisposable
     private readonly CancellationTokenSource _cancellation = new();
     private Thread? _thread;
     private bool _loggedReady;
+    private System.Threading.Timer? _expiryTimer;
 
     internal void Start()
     {
@@ -35,6 +36,14 @@ internal sealed class ControlServer : IDisposable
         };
 
         _thread.Start();
+
+        // 到期清理归服务：界面关掉、没人点刷新时也要准时解除临时阻断。
+        _expiryTimer = new System.Threading.Timer(
+            _ => Rules.PurgeExpiredQuietly(),
+            state: null,
+            dueTime: TimeSpan.FromSeconds(3),
+            period: TimeSpan.FromSeconds(30));
+
         ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}");
     }
 
@@ -48,6 +57,12 @@ internal sealed class ControlServer : IDisposable
         {
             return;
         }
+
+        _expiryTimer?.Dispose();
+        _expiryTimer = null;
+
+        // 严格模式会话随服务一起撤销：停服务 = 立即恢复联网。
+        StrictModeHost.Shutdown();
 
         _thread?.Join(3000);
         _thread = null;
@@ -166,8 +181,10 @@ internal sealed class ControlServer : IDisposable
         // 规则命令统一交给 RuleHandlers；写命令的提权检查在下面先做。
         var isRuleCommand = request.Command == ServiceProtocol.Commands.ListRules
             || request.Command == ServiceProtocol.Commands.FilterMap
+            || request.Command == ServiceProtocol.Commands.AllowTargets
             || request.Command == ServiceProtocol.Commands.ImportGroups
-            || request.Command.StartsWith("write.rules.", StringComparison.OrdinalIgnoreCase);
+            || request.Command.StartsWith("write.rules.", StringComparison.OrdinalIgnoreCase)
+            || request.Command.StartsWith("write.strict.", StringComparison.OrdinalIgnoreCase);
 
         // 鉴权探针：不做任何事，只回答"当前客户端有没有提权"。
         if (string.Equals(request.Command, ServiceProtocol.Commands.AuthCheck, StringComparison.Ordinal))
@@ -224,6 +241,15 @@ internal sealed class ControlServer : IDisposable
 
     internal static ServiceStatus BuildStatus()
     {
+        // 与规则写入串行：WFP 的读和写不要同时发生（status 命令不走 RuleHandlers）。
+        lock (RuleHandlers.Gate)
+        {
+            return BuildStatusCore();
+        }
+    }
+
+    private static ServiceStatus BuildStatusCore()
+    {
         var status = new ServiceStatus
         {
             ServiceVersion = BuildVersion(),
@@ -253,6 +279,9 @@ internal sealed class ControlServer : IDisposable
         {
             ServiceLog.Warning($"读取服务状态失败：{ex.Message}");
         }
+
+        status.StrictModeActive = StrictModeHost.IsEnabled;
+        status.StrictModePermittedCount = StrictModeHost.PermittedCount;
 
         return status;
     }

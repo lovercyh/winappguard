@@ -53,21 +53,15 @@ internal sealed class ControlServer : IDisposable
             period: TimeSpan.FromSeconds(10));
 
         // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
+        ServiceLog.Info("启动：写入规则快照…");
         Rules.SaveSnapshotNow();
 
-        // 篡改防护：给子层 + 现有过滤器加保护性 DACL（普通用户不可删）。
-        try
-        {
-            using var engine = WfpEngine.Open();
-            engine.ProtectOurObjects();
-            ServiceLog.Info("篡改防护：已为子层与现有过滤器应用保护性 DACL。");
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning($"篡改防护：应用 DACL 失败（不影响规则功能）：{ex.Message}");
-        }
+        // 篡改防护：新建的子层/过滤器在创建时就带上保护性 DACL
+        // （见 WfpEngine.TryBuildProtectiveSd）。已有对象保持原有安全描述符，
+        // 不再做"先创建再改安全信息"——VM 实测那样会把服务启动卡死。
 
         // 审计采集随服务启动（设置里关着就不开）。
+        ServiceLog.Info("启动：启动审计采集…");
         AuditHost.StartIfEnabled();
 
         ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}");

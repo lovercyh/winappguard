@@ -116,10 +116,12 @@ internal static class Program
         }
 
         TryRecoverLegacyStrictMode();
+        ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         Console.WriteLine("服务已启动。");
         Console.WriteLine();
         Console.WriteLine($"完成。界面程序：{Path.Combine(InstallDirectory, UiExeName)}");
+        Console.WriteLine($"桌面快捷方式：{ShellShortcut.DesktopShortcutPath}");
         Console.WriteLine("卸载：WinAppGuardSetup.exe --uninstall");
         return 0;
     }
@@ -157,6 +159,7 @@ internal static class Program
         if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
         {
             TryRecoverLegacyStrictMode();
+            ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
         }
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
@@ -225,6 +228,8 @@ internal static class Program
 
     private static int Uninstall(bool keepData)
     {
+        ShellShortcut.DeleteDesktopShortcut();
+
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
             Console.WriteLine("停止服务…");

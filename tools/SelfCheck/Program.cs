@@ -3835,9 +3835,31 @@ internal static class Program
         {
             if (serviceWasStopped)
             {
+                // 等进程真正退出：IPC 先断，但服务可能还在 STOP_PENDING，
+                // 这时立刻 sc start 会被 SCM 拒绝（VM 实测就是这样"起不来"）。
+                W("    等待服务进程完全退出…");
+                WaitUntil(
+                    () => Process.GetProcessesByName("WinAppGuardSvc").Length == 0, 20000);
+
                 W("    重新启动服务…");
-                _ = RunSc("start " + ServiceProtocol.ServiceName);
-                WaitUntil(() => ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1)) is not null, 30000);
+                var startAccepted = false;
+
+                for (var attempt = 0; attempt < 20; attempt++)
+                {
+                    if (RunSc("start " + ServiceProtocol.ServiceName))
+                    {
+                        startAccepted = true;
+                        break;
+                    }
+
+                    Thread.Sleep(500);
+                }
+
+                W($"    sc start 被接受 = {startAccepted}");
+
+                WaitUntil(
+                    () => ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1)) is not null,
+                    40000);
             }
         }
 

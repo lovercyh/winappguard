@@ -63,47 +63,16 @@ internal static class Program
             return 0;
         }
 
-        // 4) 管理员权限检测。
-        //    正常情况下 app.manifest 已经声明了 requireAdministrator，进程启动时就已经提权；
-        //    这里再做一次运行时检查，是为了兜住「被计划任务以普通权限拉起」这类异常情况。
+        // 4) 权限：3.0-c 起界面以普通权限运行（asInvoker）。
+        //    查看/审计不需要管理员；改规则时由 CallService 走一次 UAC。
+        //    自启任务以「最高权限」运行，所以自启场景下 isAdmin 通常为 true。
         var isAdmin = AdminHelper.IsRunningAsAdmin();
 
         LocalLog.Info(
             $"程序启动：版本 {Application.ProductVersion}，" +
-            $"管理员权限={isAdmin}，" +
+            $"管理员权限={isAdmin}（按需提权），" +
             $"启动模式={(IsAutostart ? AppConstants.AutostartArgument : "手动")}，" +
             $"进程路径={Environment.ProcessPath}");
-
-        if (!isAdmin)
-        {
-            LocalLog.Warning("未以管理员身份运行，防火墙功能将不可用。");
-
-            if (IsAutostart)
-            {
-                // 自启场景下不能弹 UAC 去打扰用户，直接报告问题并退出。
-                MessageBox.Show(
-                    "WinAppGuard 未能以管理员身份启动，开机自启任务可能配置有误。\n" +
-                    "请在「任务计划程序」中确认 WinAppGuard 任务勾选了「使用最高权限运行」。",
-                    AppConstants.AppName,
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                return 0;
-            }
-
-            // 手动启动场景：询问用户是否提权重启。
-            var choice = MessageBox.Show(
-                "WinAppGuard 需要管理员权限才能管理 Windows 防火墙规则。\n是否以管理员身份重新启动？",
-                AppConstants.AppName,
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (choice == DialogResult.Yes)
-            {
-                AdminHelper.RestartAsAdmin(autostart: false);
-            }
-
-            return 0;
-        }
 
         // 5) 启动界面。
         ApplicationConfiguration.Initialize();

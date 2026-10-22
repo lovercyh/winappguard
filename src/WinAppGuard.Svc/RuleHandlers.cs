@@ -22,6 +22,12 @@ internal sealed class RuleHandlers
     /// <summary>最近一次检测到外部删除的时间（UTC）。</summary>
     private DateTime? _lastTamperUtc;
 
+    /// <summary>服务启动以来自动解除的到期规则总数。</summary>
+    private int _expiredPurged;
+
+    /// <summary>最近一次自动解除的程序路径。</summary>
+    private List<string> _lastPurgedPrograms = new();
+
     internal int TamperRebuiltCount
     {
         get { lock (Gate) { return _tamperRebuilt; } }
@@ -30,6 +36,16 @@ internal sealed class RuleHandlers
     internal DateTime? LastTamperUtc
     {
         get { lock (Gate) { return _lastTamperUtc; } }
+    }
+
+    internal int ExpiredPurgedCount
+    {
+        get { lock (Gate) { return _expiredPurged; } }
+    }
+
+    internal List<string> LastPurgedPrograms
+    {
+        get { lock (Gate) { return _lastPurgedPrograms.ToList(); } }
     }
 
     /// <summary>
@@ -194,6 +210,22 @@ internal sealed class RuleHandlers
         };
     }
 
+    private void RecordPurged(IReadOnlyList<(string RuleName, string ProgramPath)> removed)
+    {
+        if (removed.Count == 0)
+        {
+            return;
+        }
+
+        _expiredPurged += removed.Count;
+        _lastPurgedPrograms = removed
+            .Select(item => item.ProgramPath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
+    }
+
     /// <summary>
     /// 篡改防护（3.0-c）：拿权威副本（rules.json）和实际过滤器比对。
     ///
@@ -348,6 +380,7 @@ internal sealed class RuleHandlers
                 _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
                 _groups.Save();
                 SaveSnapshotNow();
+                RecordPurged(removed);
 
                 ServiceLog.Info($"规则：服务定时清理到期规则 {removed.Count} 条");
             }
@@ -568,6 +601,7 @@ internal sealed class RuleHandlers
             _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
             _groups.Save();
             SaveSnapshotNow();
+            RecordPurged(removed);
 
             ServiceLog.Info($"规则：清理到期临时规则 {removed.Count} 条");
         }

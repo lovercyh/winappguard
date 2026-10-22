@@ -2139,9 +2139,12 @@ internal static class Program
             results.Add(("能找到自动刷新定时器用于对照", false));
         }
 
-        var guardField = form.GetType().GetField("_isPurging", BindingFlags.Instance | BindingFlags.NonPublic);
-        results.Add(("有重入保护字段 _isPurging（定时器与手动刷新可能撞在一起）",
-            guardField?.FieldType == typeof(bool)));
+        // 3.0-c：到期清理归服务，界面不再自己跑写操作；用"上次解除计数"感知并提示。
+        var guardField = form.GetType().GetField(
+            "_lastExpiredPurged", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        results.Add(("有服务驱动的到期解除计数字段 _lastExpiredPurged",
+            guardField?.FieldType == typeof(int)));
     }
 
     /// <summary>

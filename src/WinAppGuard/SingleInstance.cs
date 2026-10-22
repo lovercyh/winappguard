@@ -59,6 +59,12 @@ public static class SingleInstance
 
             return isFirstInstance;
         }
+        catch (UnauthorizedAccessException)
+        {
+            // 已有一个**更高完整性级别**的实例在跑（例如开机自启的 HIGHEST 任务）：
+            // 普通权限进程打不开它的互斥体。不要再开第二个 —— 托盘里出现两个图标更糟。
+            return false;
+        }
         catch (Exception)
         {
             // 互斥体创建失败（权限、名称冲突等）时按「允许启动」处理 ——

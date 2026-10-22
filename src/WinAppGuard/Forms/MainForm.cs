@@ -86,12 +86,6 @@ public partial class MainForm : Form
     private DateTime _lastScanTime = DateTime.MinValue;
 
     /// <summary>
-    /// 是否正在清理到期的临时阻断规则。
-    /// 定时器和「手动刷新」有可能撞在一起，用这个标志保证同一时刻只跑一次。
-    /// </summary>
-    private bool _isPurging;
-
-    /// <summary>
     /// 列宽的「预览线」拖动器。
     ///
     /// 为什么不用 DataGridView 自带的实时拖动：它每移动一次鼠标就把整表重画一遍，
@@ -137,23 +131,17 @@ public partial class MainForm : Form
     /// <summary>每 5 秒探测一次服务状态（独立于"自动刷新连接"，关掉那个也要能发现服务停了）。</summary>
     private System.Windows.Forms.Timer? _serviceProbeTimer;
 
-    /// <summary>旧分组文件是否已经迁移过（只做一次）。</summary>
-    private bool _groupsMigrated;
-
     /// <summary>严格模式状态（由服务状态快照更新；3.0-c 起会话在服务里）。</summary>
     private bool _strictModeEnabled;
 
     /// <summary>严格模式当前放行的程序数（服务状态快照）。</summary>
     private int _strictModePermittedCount;
 
-    /// <summary>1.x 遗留严格模式标志是否已经让服务处理过。</summary>
-    private bool _legacyStrictRecoveryDone;
-
-    /// <summary>旧版本的用户级审计设置是否已经迁移到服务（只做一次）。</summary>
-    private bool _auditSettingsMigrated;
-
     /// <summary>上次看到的"自动重建规则"计数（用于弹一次托盘提示）。-1 = 还没同步过。</summary>
     private int _lastTamperRebuilt = -1;
+
+    /// <summary>上次看到的"到期自动解除"计数（用于弹一次托盘提示）。-1 = 还没同步过。</summary>
+    private int _lastExpiredPurged = -1;
 
     /// <summary>本次运行是否已经尝试过"自动拉起服务"（只试一次，避免反复弹 UAC）。</summary>
     private bool _triedAutoStartService;
@@ -425,15 +413,8 @@ public partial class MainForm : Form
         // 设置页的分区宽度是手动算的，先按当前尺寸摆一次。
         LayoutSettingsSections();
 
-        // 1.x 的严格模式兜底（把残留的「默认阻止出站」还原）现在由服务执行：
-        // 服务是 SYSTEM，不知道当前登录用户的设置文件，所以由界面在连上服务后
-        // 把 settings.json 路径传过去（见 RefreshRulesFromFirewall → RecoverLegacyStrictModeOnce）。
-
-        // 启动时先把**已经到期**的临时阻断清掉，再读规则 ——
-        // 这样第一屏显示的就是清理后的状态，不会先闪一下旧数据。
-        // 这一步在界面线程上同步做（实测约 45ms，只在启动时一次）；
-        // 之后的周期性检查都放后台线程（见 CheckExpiredBlocksAsync）。
-        PurgeExpiredBlocksAtStartup();
+        // 到期清理、1.x 迁移、旧分组/审计设置迁移都归服务 / 安装器：
+        // 3.0-c 起界面可能以普通权限运行，启动阶段不再触发任何写操作。
 
         // 先把防火墙规则读进来，这样第一屏就能正确显示「已阻止 / 未阻止」。
         // 放行状态（严格模式白名单）要在这之前读：它会让「放行」列第一屏就是对的。
@@ -840,7 +821,7 @@ public partial class MainForm : Form
         var isAdmin = AdminHelper.IsRunningAsAdmin();
         _adminStatusLabel.Text = isAdmin
             ? "管理员权限：已获得"
-            : "管理员权限：未获得（防火墙功能不可用）";
+            : "管理员权限：按需提权（修改规则 / 严格模式时弹一次 UAC）";
         _adminStatusLabel.ForeColor = isAdmin ? Color.FromArgb(0, 120, 0) : Color.Firebrick;
     }
 
@@ -929,26 +910,8 @@ public partial class MainForm : Form
                 _serviceAvailable = true;
                 _appGuardRules = response.Rules.Select(ToRuleItem).ToList();
 
-                // 3.0-b：把旧版本存在用户目录里的分组文件搬到服务（只做一次）。
-                // 放在"列表已成功拿到"之后：服务不可用时不会再多等一次 3 秒超时。
-                if (MigrateGroupsOnce() > 0)
-                {
-                    var refreshed = ServiceClient.TryRequest(
-                        new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
-                        TimeSpan.FromSeconds(3),
-                        out _);
-
-                    if (refreshed is { Ok: true, Rules: not null })
-                    {
-                        _appGuardRules = refreshed.Rules.Select(ToRuleItem).ToList();
-                    }
-                }
-
-                // 1.x 遗留的严格模式标志（只处理一次；绝大多数机器上什么都不做）。
-                RecoverLegacyStrictModeOnce();
-
-                // 3.0-c：2.x 的审计设置存在用户目录，服务看不到；首次连上时搬过去。
-                MigrateAuditSettingsOnce();
+                // 旧分组 / 审计设置 / 1.x 严格模式兜底都改由安装器在安装/修复时处理：
+                // 界面可能以普通权限运行，不应在刷新时触发提权。
             }
 
             _blockedPaths.Clear();
@@ -1093,118 +1056,6 @@ public partial class MainForm : Form
     }
 
     /// <summary>
-    /// 3.0-b 数据迁移：旧版本把分组存在用户目录，服务读不到。
-    /// 第一次成功连上服务时，把旧文件内容交给服务，成功后**删除旧文件**（移动语义）。
-    ///
-    /// 失败时保留旧文件、保留"未迁移"标记，下次刷新再试（不会丢分组）。
-    /// </summary>
-    /// <returns>实际迁入的分组条数；没有旧文件 / 失败返回 0。</returns>
-    private int MigrateGroupsOnce()
-    {
-        if (_groupsMigrated)
-        {
-            return 0;
-        }
-
-        try
-        {
-            var local = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                AppConstants.AppDataFolderName,
-                "rule-groups.json");
-
-            if (!File.Exists(local))
-            {
-                _groupsMigrated = true;
-                return 0;
-            }
-
-            var json = File.ReadAllText(local, Encoding.UTF8);
-
-            var response = ServiceClient.TryRequest(
-                new ServiceRequest { Command = ServiceProtocol.Commands.ImportGroups, Json = json },
-                TimeSpan.FromSeconds(3),
-                out var error);
-
-            if (response is not { Ok: true })
-            {
-                LocalLog.Warning($"分组迁移失败（旧文件保留，稍后重试）：{response?.Error ?? error}");
-                return 0;
-            }
-
-            _groupsMigrated = true;
-
-            try
-            {
-                File.Delete(local);
-            }
-            catch (Exception ex)
-            {
-                // 内容已经导入成功；文件删不掉最多下次再合并一遍（服务端"现有优先"，不会覆盖）。
-                LocalLog.Warning($"旧分组文件删除失败（内容已导入）：{ex.Message}");
-            }
-
-            LocalLog.Operation($"分组：已迁移 {response.Affected} 条到服务");
-            return response.Affected;
-        }
-        catch (Exception ex)
-        {
-            LocalLog.Warning($"分组迁移失败（旧文件保留，稍后重试）：{ex.Message}");
-            return 0;
-        }
-    }
-
-    /// <summary>
-    /// 3.0-c 设置迁移：2.x 的审计开关存在**用户**设置里，服务看不到。
-    ///
-    /// 只在服务的机器级设置文件还不存在时做一次：
-    /// 把当前用户的 AuditEnabled / 域名推测 / 保留期交给服务。
-    /// 之后一切以服务为准，用户设置不再写审计字段。
-    /// </summary>
-    private void MigrateAuditSettingsOnce()
-    {
-        if (_auditSettingsMigrated)
-        {
-            return;
-        }
-
-        try
-        {
-            if (File.Exists(ServicePaths.AuditSettingsFile))
-            {
-                _auditSettingsMigrated = true;
-                return;
-            }
-
-            var local = AppSettings.Load();
-
-            var response = ServiceClient.TryRequest(
-                new ServiceRequest
-                {
-                    Command = ServiceProtocol.Commands.AuditConfigure,
-                    AuditEnabled = local.AuditEnabled,
-                    AuditDomainLookup = local.AuditDomainLookupEnabled,
-                    AuditRetentionDays = local.AuditRetentionDays,
-                },
-                TimeSpan.FromSeconds(3),
-                out var error);
-
-            if (response is not { Ok: true })
-            {
-                LocalLog.Warning($"审计设置迁移失败（稍后重试）：{response?.Error ?? error}");
-                return;
-            }
-
-            _auditSettingsMigrated = true;
-            LocalLog.Operation("记录：已把旧版本的用户级设置迁移到服务。");
-        }
-        catch (Exception ex)
-        {
-            LocalLog.Warning($"审计设置迁移失败（稍后重试）：{ex.Message}");
-        }
-    }
-
-    /// <summary>
     /// 发一条写命令；失败时弹出原因并返回 null。
     /// 统一在这里处理"服务没起 / 未提权 / 服务拒绝"，避免每个调用点各写一遍。
     /// </summary>
@@ -1212,12 +1063,29 @@ public partial class MainForm : Form
     {
         request.Command = command;
 
-        var response = ServiceClient.TryRequest(
-            request, TimeSpan.FromSeconds(3), out var error);
+        ServiceResponse? response;
+        string? error;
+
+        if (AdminHelper.IsRunningAsAdmin())
+        {
+            response = ServiceClient.TryRequest(
+                request, TimeSpan.FromSeconds(5), out error);
+        }
+        else
+        {
+            // 普通权限：写操作走一次 UAC（提权助手 = WinAppGuardSvc.exe --elevated-ipc）。
+            response = ElevatedClient.TryRequest(request, out error);
+        }
 
         if (response is { Ok: true })
         {
             return response;
+        }
+
+        if (response is null && string.Equals(error, ElevatedClient.CancelledMessage, StringComparison.Ordinal))
+        {
+            LocalLog.Info($"{actionName}：用户取消了管理员授权。");
+            return null;
         }
 
         var reason = response?.Error ?? error ?? "防护服务没有响应。";
@@ -1227,9 +1095,9 @@ public partial class MainForm : Form
             this,
             $"{actionName}失败：\n\n{reason}\n\n" +
             (response is null
-                ? "连接不上防护服务：请确认它已安装并正在运行" +
+                ? "连接不上防护服务或提权失败：请确认服务已安装并正在运行" +
                   "（安装目录里的 WinAppGuardSetup.exe --repair）。"
-                : "服务拒绝了这次操作。如果是权限问题，请以管理员身份运行本程序。"),
+                : "服务拒绝了这次操作。如果是权限问题，请确认提权没有被安全软件拦截。"),
             AppConstants.AppName,
             MessageBoxButtons.OK,
             MessageBoxIcon.Warning);
@@ -1267,195 +1135,10 @@ public partial class MainForm : Form
     // （本机 735 条，实测约 45ms）。挂在界面线程上，每 30 秒就会有一次可见的卡顿。
     // ==================================================================
 
-    /// <summary>
-    /// 启动时的到期清理：**同步**做一次（约 45ms，只在启动时一次），
-    /// 这样紧接着读出来的规则就已经是清理后的状态，不会先闪一下旧数据。
-    /// </summary>
-    private void PurgeExpiredBlocksAtStartup()
-    {
-        try
-        {
-            // 把开机时刻和「是不是自启动」记进日志：这一类问题（重启了却没解除）
-            // 下次一看日志就能定位，不用再猜。
-            LocalLog.Info(
-                $"启动清理：开机时刻 = {SystemUptime.BootTimeUtc:yyyy-MM-dd HH:mm:ss} UTC，" +
-                $"本次是否由登录触发的开机自启拉起 = {_isAutostart}");
-
-            // freshLogonSession 传 _isAutostart：登录触发说明刚刚发生过一次登录，
-            // 「直到下次重启」那类规则就该在这一刻解除（快速启动会让开机时长不归零，
-            // 光靠开机时刻判断会漏掉，详见 RuleExpiry.IsExpired 的说明）。
-            var response = ServiceClient.TryRequest(
-                new ServiceRequest
-                {
-                    Command = ServiceProtocol.Commands.PurgeExpiredRules,
-                    FreshLogonSession = _isAutostart,
-                },
-                TimeSpan.FromSeconds(5),
-                out var error);
-
-            if (response is not { Ok: true })
-            {
-                // 启动阶段服务可能还没起来；这里不打扰用户，稍后的定时清理会再做。
-                LocalLog.Info($"启动清理跳过：{response?.Error ?? error}");
-                return;
-            }
-
-            NotifyExpiredBlocks(response.Rules?
-                .Select(item => (item.Name, item.Value))
-                .ToList() ?? new List<(string, string)>());
-        }
-        catch (Exception ex)
-        {
-            LocalLog.Error("启动时清理到期的临时阻断规则失败", ex);
-        }
-    }
-
-    /// <summary>
-    /// 严格模式的 1.x 启动兜底（3.0-c 起由服务执行）：
-    /// 上次没正常退出时，把残留的「默认阻止出站」还原成「允许」。
-    ///
-    /// 界面只把**自己的设置文件路径**传给服务 —— 服务是 SYSTEM，不知道当前登录用户。
-    /// 只在服务可用时尝试；失败保留标记，下次刷新再试。
-    /// </summary>
-    private void RecoverLegacyStrictModeOnce()
-    {
-        if (_legacyStrictRecoveryDone)
-        {
-            return;
-        }
-
-        try
-        {
-            var settingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                AppConstants.AppDataFolderName,
-                "settings.json");
-
-            if (!File.Exists(settingsPath))
-            {
-                _legacyStrictRecoveryDone = true;
-                return;
-            }
-
-            var response = ServiceClient.TryRequest(
-                new ServiceRequest
-                {
-                    Command = ServiceProtocol.Commands.StrictRecoverLegacy,
-                    Value = settingsPath,
-                },
-                TimeSpan.FromSeconds(5),
-                out var error);
-
-            if (response is not { Ok: true })
-            {
-                LocalLog.Warning($"1.x 严格模式兜底失败（稍后重试）：{response?.Error ?? error}");
-                return;
-            }
-
-            _legacyStrictRecoveryDone = true;
-
-            if (response.Affected > 0)
-            {
-                ShowTrayBalloon(
-                    "严格模式已被自动还原",
-                    string.IsNullOrWhiteSpace(response.Message)
-                        ? "上次（1.x）没有正常退出，严格模式留下的「默认阻止出站」已经还原成「允许」。"
-                        : response.Message);
-            }
-        }
-        catch (Exception ex)
-        {
-            LocalLog.Warning($"1.x 严格模式兜底失败（稍后重试）：{ex.Message}");
-        }
-    }
-
-    /// <summary>定时器到点、或用户手动刷新时调用。放后台线程做，不卡界面。</summary>
-    private async void CheckExpiredBlocksAsync()
-    {
-        if (_isPurging || IsDisposed || Disposing)
-        {
-            return;
-        }
-
-        _isPurging = true;
-
-        try
-        {
-            // 3.0-b：到期清理也是写操作，必须走服务。
-            // 后台定时调用，失败不弹窗（服务暂时不可用时每 3 秒弹一次会毁掉体验）。
-            var response = await Task.Run(() => ServiceClient.TryRequest(
-                new ServiceRequest { Command = ServiceProtocol.Commands.PurgeExpiredRules },
-                TimeSpan.FromSeconds(5),
-                out _));
-
-            if (response is not { Ok: true })
-            {
-                return;
-            }
-
-            var removed = response.Rules?
-                .Select(item => (item.Name, item.Value))
-                .ToList() ?? new List<(string, string)>();
-
-            // await 期间窗口可能已经被关了。
-            if (IsDisposed || Disposing)
-            {
-                return;
-            }
-
-            NotifyExpiredBlocks(removed);
-
-            // 什么时候需要重刷界面：
-            //   1. 真的删掉了规则 —— 规则页和连接页的「已阻止」显示都要跟着更新；
-            //   2. 内存里还有**临时**规则 —— 重刷一次能让「剩余 X 分钟」这个倒计时保持新鲜。
-            //      （规则页那列显示的是读取那一刻的快照，不重刷就会一直停在旧数字上。）
-            if (removed.Count > 0 || _appGuardRules.Any(rule => !rule.Expiry.IsPermanent))
-            {
-                AfterRulesChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            LocalLog.Error("清理到期的临时阻断规则失败", ex);
-        }
-        finally
-        {
-            _isPurging = false;
-        }
-    }
-
-    /// <summary>
-    /// 有一条或多条临时阻断到期被解除：记日志 + 弹一次托盘气泡。
-    ///
-    /// 为什么要弹气泡（产品负责人定的）：不声不响地解除会让人困惑 ——
-    /// 「这程序怎么又能联网了」。多条一起到期时只弹一个，把数量说清楚。
-    /// </summary>
-    private void NotifyExpiredBlocks(IReadOnlyList<(string RuleName, string ProgramPath)> removed)
-    {
-        if (removed.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var (ruleName, programPath) in removed)
-        {
-            LocalLog.Operation($"临时阻断到期，已自动解除：{programPath}（规则 {ruleName}）");
-        }
-
-        var names = removed
-            .Select(item => Path.GetFileName(item.ProgramPath))
-            .Where(name => !string.IsNullOrEmpty(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var text = removed.Count == 1
-            ? $"「{names.FirstOrDefault() ?? "该程序"}」的临时阻断已到期，已自动解除，它现在可以重新联网了。"
-            : $"{removed.Count} 个程序的临时阻断已到期，已自动解除：{string.Join("、", names)}";
-
-        ShowTrayBalloon("临时阻断已自动解除", text);
-    }
-
-    private void OnExpiryTimerTick(object? sender, EventArgs e) => CheckExpiredBlocksAsync();
+    // 到期清理与 1.x 迁移都归服务 / 安装器：
+    // 3.0-c 起界面可能以普通权限运行，启动和定时都不再触发任何写操作。
+    // 到期解除通过 ServiceStatus.ExpiredPurgedCount 感知（见 UpdateServiceStatusLabel）。
+    private void OnExpiryTimerTick(object? sender, EventArgs e) => ProbeServiceStatus();
 
     /// <summary>把「已阻止」状态写到当前这批连接数据上，并刷新表格。</summary>
     private void ApplyBlockedState()
@@ -3794,10 +3477,6 @@ public partial class MainForm : Form
 
     private async void OnRefreshButtonClick(object? sender, EventArgs e)
     {
-        // 顺手检查一次到期的临时阻断（产品负责人定的时机之一）。
-        // 它自己在后台线程跑，不会拖慢这次刷新。
-        CheckExpiredBlocksAsync();
-
         await RefreshConnectionsAsync();
     }
 
@@ -4284,7 +3963,15 @@ public partial class MainForm : Form
 
         try
         {
-            AutoStartManager.Enable(exePath);
+            if (AdminHelper.IsRunningAsAdmin())
+            {
+                AutoStartManager.Enable(exePath);
+            }
+            else if (!RunElevatedAutostart(enable: true, exePath))
+            {
+                throw new InvalidOperationException("已取消管理员授权，开机自启未开启。");
+            }
+
             LocalLog.Operation($"开启开机自启：任务名 {AppConstants.ScheduledTaskName}，执行的程序 {exePath}");
             RefreshAutoStartStatus();
 
@@ -4334,7 +4021,22 @@ public partial class MainForm : Form
 
         try
         {
-            var deleted = AutoStartManager.Disable();
+            bool deleted;
+
+            if (AdminHelper.IsRunningAsAdmin())
+            {
+                deleted = AutoStartManager.Disable();
+            }
+            else
+            {
+                if (!RunElevatedAutostart(enable: false, Environment.ProcessPath ?? Application.ExecutablePath))
+                {
+                    throw new InvalidOperationException("已取消管理员授权，开机自启任务未删除。");
+                }
+
+                deleted = true;
+            }
+
             LocalLog.Operation($"关闭开机自启：删除任务 {AppConstants.ScheduledTaskName}，实际删除={(deleted ? "是" : "任务本来就不存在")}");
             RefreshAutoStartStatus();
 
@@ -4618,6 +4320,55 @@ public partial class MainForm : Form
         _ = Task.Run(() => TryStartService(interactive: false));
     }
 
+    /// <summary>
+    /// 以提权助手执行「开启/关闭开机自启」（普通权限界面用）。
+    /// 助手是 WinAppGuardSvc.exe（同一份 exe，多一个模式）。
+    /// </summary>
+    private static bool RunElevatedAutostart(bool enable, string exePath)
+    {
+        var helper = Path.Combine(AppContext.BaseDirectory, "WinAppGuardSvc.exe");
+
+        if (!File.Exists(helper))
+        {
+            return false;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(helper)
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden,
+                Arguments = $"--elevated-autostart {(enable ? "enable" : "disable")} \"{exePath}\"",
+            };
+
+            using var process = Process.Start(startInfo);
+
+            if (process is null)
+            {
+                return false;
+            }
+
+            if (!process.WaitForExit(60_000))
+            {
+                return false;
+            }
+
+            return process.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            // 用户取消 UAC。
+            return false;
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"提权修改开机自启失败：{ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>用安装器的 --start-service 启动服务（顺带修正「延迟启动」）。</summary>
     private static bool TryStartService(bool interactive)
     {
@@ -4828,6 +4579,28 @@ public partial class MainForm : Form
         }
 
         _lastTamperRebuilt = status.TamperRebuiltCount;
+
+        // 临时阻断到期由服务定时解除；界面只负责提示 + 刷新列表。
+        if (_lastExpiredPurged >= 0 && status.ExpiredPurgedCount > _lastExpiredPurged)
+        {
+            var programs = (status.LastPurgedPrograms ?? new List<string>())
+                .Select(path => Path.GetFileName(path))
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var text = programs.Count == 0
+                ? "有临时阻断规则到期，已自动解除（详见服务日志）。"
+                : programs.Count == 1
+                    ? $"「{programs[0]}」的临时阻断已到期，已自动解除，它现在可以重新联网了。"
+                    : $"{programs.Count} 个程序的临时阻断已到期，已自动解除：{string.Join("、", programs.Take(8))}";
+
+            LocalLog.Operation($"临时阻断到期，服务已自动解除：{text}");
+            ShowTrayBalloon("临时阻断已自动解除", text);
+            RefreshRulesFromFirewall();
+        }
+
+        _lastExpiredPurged = status.ExpiredPurgedCount;
     }
 
     private void LayoutSettingsSections()

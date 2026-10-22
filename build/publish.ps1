@@ -1,4 +1,4 @@
-﻿<#
+<#
     WinAppGuard 单文件发布脚本
 
     用法（在项目根目录执行）：
@@ -76,4 +76,4 @@ Write-Host "==> 完成：dist\WinAppGuard.exe  （$sizeMB MB）"
 Write-Host "           dist\WinAppGuardSvc.exe  （$serviceMB MB）"
 Write-Host "           dist\WinAppGuardSetup.exe  （$setupMB MB）"
 Write-Host '    安装：管理员运行 dist\WinAppGuardSetup.exe --install'
-Write-Host '    双击界面会先弹出 UAC 确认框，这是预期行为。'
+Write-Host '    界面以普通权限运行；修改规则时才弹一次 UAC。'

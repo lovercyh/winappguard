@@ -3,14 +3,16 @@
   <assemblyIdentity version="1.0.0.0" name="WinAppGuard.app" />
 
   <!--
-    请求管理员权限。
-    原因：创建/删除 Windows 防火墙规则、注册/注销计划任务都需要管理员权限。
-    副作用：双击 exe 会先弹出系统 UAC 确认框，这是预期行为。
+    3.0-c 起界面以**普通权限**运行（asInvoker）：
+      - 查看、审计、连接列表都不需要管理员；
+      - 修改规则 / 严格模式 / 记录设置时才通过提权助手弹一次 UAC；
+      - 开机自启任务以 HIGHEST 运行，登录时不会弹 UAC。
+    安装/卸载/修复仍然由 WinAppGuardSetup.exe（requireAdministrator）负责。
   -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

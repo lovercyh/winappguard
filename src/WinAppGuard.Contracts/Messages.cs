@@ -156,4 +156,10 @@ public sealed class ServiceStatus
 
     /// <summary>最近一次检测到规则被外部删除的时间（UTC）。</summary>
     public DateTime? LastTamperUtc { get; set; }
+
+    /// <summary>服务启动以来自动解除的到期规则总数。</summary>
+    public int ExpiredPurgedCount { get; set; }
+
+    /// <summary>最近一次自动解除的程序路径（最多 20 条）。</summary>
+    public List<string>? LastPurgedPrograms { get; set; }
 }

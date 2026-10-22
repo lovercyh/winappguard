@@ -52,6 +52,9 @@ internal sealed class ControlServer : IDisposable
             dueTime: TimeSpan.FromSeconds(15),
             period: TimeSpan.FromSeconds(10));
 
+        // 3.0-c：界面以普通权限运行，需要读取快照与审计记录。
+        ServiceDataPermissions.EnsureReadableByUsers();
+
         // 1.x → 2.0 的规则迁移（从 1.x 直接升到 3.0 的机器需要）。
         // 界面不再做这件事（它已经没有 WFP 访问能力）。
         try
@@ -341,6 +344,8 @@ internal sealed class ControlServer : IDisposable
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;
+        status.ExpiredPurgedCount = Rules.ExpiredPurgedCount;
+        status.LastPurgedPrograms = Rules.LastPurgedPrograms;
 
         return status;
     }

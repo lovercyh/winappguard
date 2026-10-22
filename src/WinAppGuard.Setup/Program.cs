@@ -115,6 +115,7 @@ internal static class Program
             return 4;
         }
 
+        TryMigrateUserDataToService();
         TryRecoverLegacyStrictMode();
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
@@ -158,6 +159,7 @@ internal static class Program
 
         if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
         {
+            TryMigrateUserDataToService();
             TryRecoverLegacyStrictMode();
             ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
         }
@@ -172,6 +174,99 @@ internal static class Program
     /// <summary>
     /// 只启动服务（界面在"离线"状态下调用；也用于把老版本的延迟启动修正掉）。
     /// </summary>
+    /// <summary>
+    /// 把 2.x 的用户级数据交给服务（3.0-c：界面以普通权限运行，启动时不再做迁移）：
+    ///   - 规则分组：导入后删除旧文件；
+    ///   - 审计设置：仅在服务的机器级设置文件不存在时迁移一次。
+    /// </summary>
+    private static void TryMigrateUserDataToService()
+    {
+        try
+        {
+            var ready = false;
+
+            for (var attempt = 0; attempt < 30; attempt++)
+            {
+                var status = ServiceClient.TryRequest(
+                    new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                    TimeSpan.FromSeconds(1),
+                    out _);
+
+                if (status is { Ok: true })
+                {
+                    ready = true;
+                    break;
+                }
+
+                Thread.Sleep(500);
+            }
+
+            if (!ready)
+            {
+                Console.Error.WriteLine("服务未就绪，跳过旧数据迁移（下次 --repair 会再试）。");
+                return;
+            }
+
+            var localGroups = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppConstants.AppDataFolderName,
+                "rule-groups.json");
+
+            if (File.Exists(localGroups))
+            {
+                var json = File.ReadAllText(localGroups, Encoding.UTF8);
+
+                var response = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.ImportGroups,
+                        Json = json,
+                    },
+                    TimeSpan.FromSeconds(5),
+                    out var error);
+
+                if (response is { Ok: true })
+                {
+                    File.Delete(localGroups);
+                    Console.WriteLine($"分组迁移：{response.Affected} 条。");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"分组迁移失败（旧文件保留）：{response?.Error ?? error}");
+                }
+            }
+
+            if (!File.Exists(ServicePaths.AuditSettingsFile))
+            {
+                var local = AppSettings.Load();
+
+                var response = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.AuditConfigure,
+                        AuditEnabled = local.AuditEnabled,
+                        AuditDomainLookup = local.AuditDomainLookupEnabled,
+                        AuditRetentionDays = local.AuditRetentionDays,
+                    },
+                    TimeSpan.FromSeconds(5),
+                    out var error);
+
+                if (response is { Ok: true })
+                {
+                    Console.WriteLine("记录设置：已迁移到服务。");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"记录设置迁移失败：{response?.Error ?? error}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"旧数据迁移失败（不影响安装）：{ex.Message}");
+        }
+    }
+
     /// <summary>
     /// 2.x 的审计记录迁移（方案 C：复制 → 校验 → 删源）。
     /// 必须在服务启动前做：服务运行时会打开这些文件。

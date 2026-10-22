@@ -7,6 +7,17 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        // 3.0-c：界面以普通权限运行时，通过这两个隐藏模式完成提权操作。
+        if (args.Any(a => a.Equals("--elevated-ipc", StringComparison.OrdinalIgnoreCase)))
+        {
+            return ElevatedIpc.Run(args);
+        }
+
+        if (args.Any(a => a.Equals("--elevated-autostart", StringComparison.OrdinalIgnoreCase)))
+        {
+            return ElevatedAutostart.Run(args);
+        }
+
         // 3.0-c：界面程序集不再包含 WFP 代码，命令行模式由服务 exe 代跑。
         // 用法：WinAppGuardSvc.exe --cli <原命令行参数…>
         if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase)))

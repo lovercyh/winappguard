@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    3.0-c：把 WFP（Windows 过滤平台）相关代码从 Core 拆到这里。
+    目的：**界面程序集不再引用任何 WFP 代码**（编译期隔离），
+    只有服务、安装器和自检工具引用本程序集。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <AssemblyName>WinAppGuard.Wfp</AssemblyName>
+    <RootNamespace>WinAppGuard</RootNamespace>
+
+    <Version>3.0</Version>
+    <Company>lovercyh</Company>
+    <Copyright>Copyright © 2026 lovercyh</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 服务：规则读写、审计、严格模式。 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuardSvc</_Parameter1>
+    </AssemblyAttribute>
+    <!-- 安装器：1.x 严格模式兜底。 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuardSetup</_Parameter1>
+    </AssemblyAttribute>
+    <!-- 开发期自检。 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuard.SelfCheck</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

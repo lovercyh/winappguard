@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+    <ProjectReference Include="..\WinAppGuard.Wfp\WinAppGuard.Wfp.csproj" />
     <ProjectReference Include="..\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
   </ItemGroup>
 

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
-using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Forms;
@@ -3316,7 +3315,7 @@ public partial class MainForm : Form
                 new KeyValuePair<string, string>("完整路径", path),
                 new KeyValuePair<string, string>("生效范围", scope.Describe()),
                 new KeyValuePair<string, string>("将创建规则",
-                    new WfpRule(path, FirewallAction.Block, RuleExpiry.Never, scope).DisplayName),
+                    RuleNaming.BuildBlockRuleName(path)),
             },
             warnings: new[]
             {

@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Core;
 
 namespace WinAppGuard.Service;
 
@@ -6,6 +7,17 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        // 3.0-c：界面程序集不再包含 WFP 代码，命令行模式由服务 exe 代跑。
+        // 用法：WinAppGuardSvc.exe --cli <原命令行参数…>
+        if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase)))
+        {
+            var cliArgs = args
+                .Where(a => !a.Equals("--cli", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            return CliRunner.Run(CommandLine.Parse(cliArgs));
+        }
+
         ServiceLog.Initialize();
 
         var console = args.Any(a => a.Equals("--console", StringComparison.OrdinalIgnoreCase));

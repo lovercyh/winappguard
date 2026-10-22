@@ -34,6 +34,10 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>WinAppGuard.SelfCheck</_Parameter1>
     </AssemblyAttribute>
+    <!-- 3.0-c：WFP 相关实现已拆到 WinAppGuard.Wfp；它需要 Core 的模型 / 命名 / 日志等 internal 类型。 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuard.Wfp</_Parameter1>
+    </AssemblyAttribute>
     <!-- 3.0 起的防护服务：需要读写 WFP 与规则（同一套 Core，不另写一份）。 -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>WinAppGuardSvc</_Parameter1>

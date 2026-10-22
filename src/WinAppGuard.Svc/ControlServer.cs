@@ -52,6 +52,29 @@ internal sealed class ControlServer : IDisposable
             dueTime: TimeSpan.FromSeconds(15),
             period: TimeSpan.FromSeconds(10));
 
+        // 1.x → 2.0 的规则迁移（从 1.x 直接升到 3.0 的机器需要）。
+        // 界面不再做这件事（它已经没有 WFP 访问能力）。
+        try
+        {
+            var migration = StartupMigration.RunIfNeeded(out var migrationError);
+
+            if (migrationError is not null)
+            {
+                ServiceLog.Warning($"启动迁移：{migrationError}");
+            }
+
+            if (migration is not null)
+            {
+                ServiceLog.Info(
+                    $"启动迁移：迁移 {migration.Migrated} 条、跳过 {migration.Skipped} 条、" +
+                    $"失败 {migration.Failed} 条、删除旧规则 {migration.FirewallRulesDeleted} 条。");
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning($"启动迁移失败（不影响服务启动）：{ex.Message}");
+        }
+
         // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
         ServiceLog.Info("启动：写入规则快照…");
         Rules.SaveSnapshotNow();

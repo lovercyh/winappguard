@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WinAppGuard\WinAppGuard.csproj" />
+    <ProjectReference Include="..\..\src\WinAppGuard.Wfp\WinAppGuard.Wfp.csproj" />
   </ItemGroup>
   <!--
     被引用的 WinAppGuard 是个可执行工程，它的 runtimeconfig.json 会被顺带复制到发布目录，

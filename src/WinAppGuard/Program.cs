@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using WinAppGuard.Core;
 using WinAppGuard.Forms;
 using WinAppGuard.Interop;
@@ -35,19 +36,15 @@ internal static class Program
 
         if (options.Kind != CommandKind.None)
         {
-            return CliRunner.Run(options);
+            // 3.0-c：界面程序集不再包含 WFP 代码，命令行模式交给服务 exe 代跑。
+            return ForwardCliToServiceExe(args);
         }
 
         // 图形界面模式：控制台子系统会带出一个黑框，这里立刻收掉它。
         // 命令行模式则要**留着**控制台 —— 那正是输出要走的地方。
         NativeMethods.FreeConsole();
 
-        // 2) 1.x → 2.0 规则迁移（没有旧规则时什么都不做；失败也不影响启动）。
-        //
-        //    ★ 刻意放在「单实例检查」**之前**：如果用户已经开着一个窗口，
-        //      再启动一次会静默退出 —— 那时代码根本走不到迁移，用户会以为升级失败。
-        //      迁移本身是幂等的（写入先删后加、删除容忍不存在），两个实例同时跑也没问题。
-        StartupMigration.RunIfNeeded(out _);
+        // 2) 1.x → 2.0 规则迁移已移到服务启动时执行（界面不再有 WFP 访问能力）。
 
         // 3) 单实例检查。
         //    没有这一层的话，用户第二次双击会多出一个托盘图标，
@@ -119,6 +116,52 @@ internal static class Program
     /// 记日志 + 给用户一个能看懂、能照着反馈的提示，然后**让程序继续运行** ——
     /// 只是某一次操作失败了，没必要把整个工具干掉（用户可能正靠它恢复被误拦的程序）。
     /// </summary>
+    /// <summary>
+    /// 把命令行参数转交给服务 exe（它包含 WFP 代码，界面不包含）。
+    /// 用法对用户保持不变：<c>WinAppGuard.exe --block ...</c>。
+    /// </summary>
+    private static int ForwardCliToServiceExe(string[] args)
+    {
+        var exe = Path.Combine(AppContext.BaseDirectory, "WinAppGuardSvc.exe");
+
+        if (!File.Exists(exe))
+        {
+            Console.Error.WriteLine(
+                $"找不到 {exe}，无法执行命令行模式。请先安装防护服务（WinAppGuardSetup.exe --install）。");
+            return 1;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(exe)
+            {
+                UseShellExecute = false,
+            };
+
+            startInfo.ArgumentList.Add("--cli");
+
+            foreach (var arg in args)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using var process = Process.Start(startInfo);
+
+            if (process is null)
+            {
+                return 1;
+            }
+
+            process.WaitForExit();
+            return process.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"执行命令行模式失败：{ex.Message}");
+            return 1;
+        }
+    }
+
     private static void OnUiThreadException(object sender, ThreadExceptionEventArgs e)
     {
         LocalLog.Error("界面线程发生未处理的异常", e.Exception);

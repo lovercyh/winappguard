@@ -1,4 +1,4 @@
-namespace WinAppGuard.Core.Wfp;
+namespace WinAppGuard.Core;
 
 /// <summary>
 /// 严格模式的**内置系统放行清单**。

@@ -8062,6 +8062,19 @@ internal static class Program
             targets.Add(coreSibling);
         }
 
+        // 3.0-c：WFP 实现已拆到独立程序集，也要一起审计；
+        // 同时验证 UI/Core **没有**引用它（编译期隔离）。
+        var wfpSibling = FindWfpAssembly(target);
+
+        if (wfpSibling is not null)
+        {
+            targets.Add(wfpSibling);
+        }
+        else
+        {
+            W("    提示：没找到 WinAppGuard.Wfp.dll，跳过 WFP 部分审计。");
+        }
+
         var results = new List<(string Title, bool Passed)>();
 
         foreach (var assembly in targets)
@@ -8086,6 +8099,18 @@ internal static class Program
             AuditNativeImports(metadata);
             AuditSensitiveApis(metadata);
             AuditNativeNetworkImports(metadata, results);
+
+            // 3.0-c 编译期隔离：界面与 Core 都不许引用 WFP 程序集。
+            var referenced = metadata.AssemblyReferences
+                .Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (!label.Equals("WinAppGuard.Wfp", StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add((
+                    "编译期隔离：不引用 WinAppGuard.Wfp",
+                    !referenced.Contains("WinAppGuard.Wfp")));
+            }
 
             for (var i = before; i < results.Count; i++)
             {
@@ -8141,6 +8166,60 @@ internal static class Program
 
                 var found = Directory
                     .EnumerateFiles(binPath, "WinAppGuard.dll", SearchOption.AllDirectories)
+                    .OrderByDescending(File.GetLastWriteTime)
+                    .FirstOrDefault();
+
+                if (found is not null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>找 WinAppGuard.Wfp.dll：先看 UI 输出目录，再从项目根找它的 bin。</summary>
+    private static string? FindWfpAssembly(string uiAssembly)
+    {
+        var directory = Path.GetDirectoryName(uiAssembly);
+
+        if (string.IsNullOrEmpty(directory))
+        {
+            return null;
+        }
+
+        var sameDirectory = Path.Combine(directory, "WinAppGuard.Wfp.dll");
+
+        if (File.Exists(sameDirectory))
+        {
+            return sameDirectory;
+        }
+
+        var current = new DirectoryInfo(directory);
+
+        for (var depth = 0; depth < 10 && current is not null; depth++, current = current.Parent)
+        {
+            var projectFile = Path.Combine(
+                current.FullName, "src", "WinAppGuard", "WinAppGuard.csproj");
+
+            if (!File.Exists(projectFile))
+            {
+                continue;
+            }
+
+            foreach (var configuration in new[] { "Release", "Debug" })
+            {
+                var binPath = Path.Combine(
+                    current.FullName, "src", "WinAppGuard.Wfp", "bin", configuration);
+
+                if (!Directory.Exists(binPath))
+                {
+                    continue;
+                }
+
+                var found = Directory
+                    .EnumerateFiles(binPath, "WinAppGuard.Wfp.dll", SearchOption.AllDirectories)
                     .OrderByDescending(File.GetLastWriteTime)
                     .FirstOrDefault();
 

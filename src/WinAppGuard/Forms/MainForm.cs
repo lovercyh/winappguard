@@ -857,7 +857,19 @@ public partial class MainForm : Form
             _appGuardRules = response.Rules.Select(ToRuleItem).ToList();
 
             // 3.0-b：把旧版本存在用户目录里的分组文件搬到服务（只做一次）。
-            MigrateGroupsOnce();
+            // 放在"列表已成功拿到"之后：服务不可用时不会再多等一次 3 秒超时。
+            if (MigrateGroupsOnce() > 0)
+            {
+                var refreshed = ServiceClient.TryRequest(
+                    new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
+                    TimeSpan.FromSeconds(3),
+                    out _);
+
+                if (refreshed is { Ok: true, Rules: not null })
+                {
+                    _appGuardRules = refreshed.Rules.Select(ToRuleItem).ToList();
+                }
+            }
 
             _blockedPaths.Clear();
 
@@ -983,16 +995,15 @@ public partial class MainForm : Form
     /// 3.0-b 数据迁移：旧版本把分组存在用户目录，服务读不到。
     /// 第一次成功连上服务时，把旧文件内容交给服务，成功后**删除旧文件**（移动语义）。
     ///
-    /// 失败时保留旧文件，下次启动再试（不会丢分组）。
+    /// 失败时保留旧文件、保留"未迁移"标记，下次刷新再试（不会丢分组）。
     /// </summary>
-    private void MigrateGroupsOnce()
+    /// <returns>实际迁入的分组条数；没有旧文件 / 失败返回 0。</returns>
+    private int MigrateGroupsOnce()
     {
         if (_groupsMigrated)
         {
-            return;
+            return 0;
         }
-
-        _groupsMigrated = true;
 
         try
         {
@@ -1003,7 +1014,8 @@ public partial class MainForm : Form
 
             if (!File.Exists(local))
             {
-                return;
+                _groupsMigrated = true;
+                return 0;
             }
 
             var json = File.ReadAllText(local, Encoding.UTF8);
@@ -1013,19 +1025,31 @@ public partial class MainForm : Form
                 TimeSpan.FromSeconds(3),
                 out var error);
 
-            if (response is { Ok: true })
+            if (response is not { Ok: true })
+            {
+                LocalLog.Warning($"分组迁移失败（旧文件保留，稍后重试）：{response?.Error ?? error}");
+                return 0;
+            }
+
+            _groupsMigrated = true;
+
+            try
             {
                 File.Delete(local);
-                LocalLog.Operation($"分组：已迁移 {response.Affected} 条到服务（旧文件已删除）");
             }
-            else
+            catch (Exception ex)
             {
-                LocalLog.Warning($"分组迁移失败（旧文件保留）：{response?.Error ?? error}");
+                // 内容已经导入成功；文件删不掉最多下次再合并一遍（服务端"现有优先"，不会覆盖）。
+                LocalLog.Warning($"旧分组文件删除失败（内容已导入）：{ex.Message}");
             }
+
+            LocalLog.Operation($"分组：已迁移 {response.Affected} 条到服务");
+            return response.Affected;
         }
         catch (Exception ex)
         {
-            LocalLog.Warning($"分组迁移失败（旧文件保留）：{ex.Message}");
+            LocalLog.Warning($"分组迁移失败（旧文件保留，稍后重试）：{ex.Message}");
+            return 0;
         }
     }
 

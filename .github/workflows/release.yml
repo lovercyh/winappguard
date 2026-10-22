@@ -45,9 +45,12 @@ jobs:
       - name: 生成发布说明
         shell: pwsh
         run: |
-          $exe  = '.\dist\WinAppGuard.exe'
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
-          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          $setup    = '.\dist\WinAppGuardSetup.exe'
+          $uninst   = '.\dist\WinAppGuardUninstall.exe'
+          $hash     = (Get-FileHash $setup  -Algorithm SHA256).Hash
+          $usize    = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          $uhash    = (Get-FileHash $uninst -Algorithm SHA256).Hash
+          $uninstMB = [math]::Round((Get-Item $uninst).Length / 1MB, 1)
           $tag  = '${{ github.ref_name }}'
           $version = $tag -replace '^v', ''
 
@@ -60,36 +63,49 @@ jobs:
           if ($m.Success) { $section = $m.Value.Trim() }
 
           $template = @'
-          ## 下载
+          ## 下载（只需要两个文件）
 
-          `WinAppGuard.exe` — 单文件自包含，约 __SIZE__ MB，目标机器无需安装 .NET。
+          | 文件 | 用途 |
+          |---|---|
+          | `WinAppGuardSetup.exe` | 安装 / 修复（**已内置界面与服务**） |
+          | `WinAppGuardUninstall.exe` | 完整卸载 |
+
+          > ⚠️ **不要**单独下载或运行 `WinAppGuard.exe` / `WinAppGuardSvc.exe`。
+          > 它们已经打包在 Setup 里：前者只是界面、后者只是服务；
+          > 没有安装器就不会注册服务、不会创建快捷方式，单独下载**不起作用**。
+
+          安装器约 __SIZE__ MB（内含界面 + 服务 + 卸载器）；卸载器约 __UNINST__ MB。
 
           ### 校验和
 
           下载后可以这样确认文件没被篡改：
 
           ```powershell
-          Get-FileHash .\WinAppGuard.exe -Algorithm SHA256
+          Get-FileHash .\WinAppGuardSetup.exe -Algorithm SHA256
+          Get-FileHash .\WinAppGuardUninstall.exe -Algorithm SHA256
           ```
 
           应当得到：
 
           ```
-          __HASH__
+          WinAppGuardSetup.exe      __HASH__
+          WinAppGuardUninstall.exe  __UHASH__
           ```
 
           ### 说明
 
           - exe **没有代码签名**，SmartScreen 首次运行会提示「未知发布者」，这是预期情况。
-          - 程序需要**管理员权限**（它要创建防火墙规则和计划任务）。
-          - 想核实这个二进制文件的能力，可以运行随附的自检工具：`WinAppGuard.SelfCheck.exe --audit`
+          - 安装器需要管理员权限；安装后的界面以普通权限运行，改规则时才弹一次 UAC。
+          - 源码公开；想核实能力可以自行构建并运行 `WinAppGuard.SelfCheck.exe --audit`。
 
           __CHANGELOG__
           '@
 
           $notes = $template.
-              Replace('__SIZE__', "$size").
+              Replace('__SIZE__', "$usize").
+              Replace('__UNINST__', "$uninstMB").
               Replace('__HASH__', $hash).
+              Replace('__UHASH__', $uhash).
               Replace('__CHANGELOG__', $section)
 
           # 显式写成不带 BOM 的 UTF-8，避免 BOM 跑到发布说明开头变成一个怪字符。
@@ -97,8 +113,10 @@ jobs:
               'release-notes.md', $notes, (New-Object System.Text.UTF8Encoding($false)))
 
           Write-Host "版本        = $version"
-          Write-Host "SHA256      = $hash"
-          Write-Host "大小        = $size MB"
+          Write-Host "Setup SHA256     = $hash"
+          Write-Host "Setup 大小       = $usize MB"
+          Write-Host "Uninstall SHA256 = $uhash"
+          Write-Host "Uninstall 大小   = $uninstMB MB"
           Write-Host "CHANGELOG 段落长度 = $($section.Length)"
           Write-Host '--- 发布说明预览（前 20 行）---'
           $notes -split "`n" | Select-Object -First 20 | ForEach-Object { Write-Host $_ }
@@ -106,7 +124,9 @@ jobs:
       - name: 创建 Release
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/WinAppGuard.exe
+          files: |
+            dist/WinAppGuardSetup.exe
+            dist/WinAppGuardUninstall.exe
           body_path: release-notes.md
           # 先发成草稿，让人工看一眼附件和说明再正式发布。
           draft: true

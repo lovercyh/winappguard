@@ -71,6 +71,42 @@ foreach ($pair in @(
 # 卸载器：与安装器同一份二进制，文件名决定双击行为（完整卸载）
 Copy-Item (Join-Path $distDir 'WinAppGuardSetup.exe') (Join-Path $distDir 'WinAppGuardUninstall.exe') -Force
 
+# ---- 3.0 发布版：把界面 / 服务 / 卸载器追加进 Setup 的内部载荷 ----
+# 用户从 Releases 只需要下载 Setup + Uninstall；单独下载界面或服务是没用的。
+$payloadDir = Join-Path $root 'build\_payload'
+$payloadZip = Join-Path $root 'build\_payload.zip'
+
+if (Test-Path $payloadDir) { Remove-Item $payloadDir -Recurse -Force }
+New-Item -ItemType Directory -Path $payloadDir | Out-Null
+Copy-Item (Join-Path $distDir 'WinAppGuard.exe')     $payloadDir
+Copy-Item (Join-Path $distDir 'WinAppGuardSvc.exe')  $payloadDir
+# 安装器本体（未追加载荷的 base）：安装到 Program Files 后既能修复也能充当卸载器。
+Copy-Item (Join-Path $distDir 'WinAppGuardSetup.exe') $payloadDir
+
+if (Test-Path $payloadZip) { Remove-Item $payloadZip -Force }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $payloadDir, $payloadZip,
+    [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+$zipBytes    = [System.IO.File]::ReadAllBytes($payloadZip)
+$magic       = [System.Text.Encoding]::ASCII.GetBytes('WAGPAY01')
+$lengthBytes = [BitConverter]::GetBytes([int64]$zipBytes.Length)
+$setupPath   = Join-Path $distDir 'WinAppGuardSetup.exe'
+
+$stream = [System.IO.File]::Open($setupPath, 'Append', 'Write')
+try {
+    $stream.Write($zipBytes, 0, $zipBytes.Length)
+    $stream.Write($magic, 0, $magic.Length)
+    $stream.Write($lengthBytes, 0, $lengthBytes.Length)
+} finally {
+    $stream.Dispose()
+}
+
+Remove-Item $payloadDir -Recurse -Force
+Remove-Item $payloadZip -Force
+Write-Host "    内置载荷：$([math]::Round($zipBytes.Length / 1MB, 1)) MB（界面 + 服务 + 卸载器）"
+
 $sizeMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuard.exe')).Length / 1MB, 1)
 $serviceMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSvc.exe')).Length / 1MB, 1)
 $setupMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSetup.exe')).Length / 1MB, 1)

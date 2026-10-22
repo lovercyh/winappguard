@@ -150,6 +150,22 @@ WinAppGuard.exe --help                     # 用法
   ```
 - **exe 没有代码签名**，SmartScreen 会提示「未知发布者」，这属于预期情况，见下方常见问题
 
+## 下载（Releases 只需要两个文件）
+
+从 [Releases](https://github.com/lovercyh/winappguard/releases) 下载：
+
+| 文件 | 用途 |
+|---|---|
+| **`WinAppGuardSetup.exe`** | 安装 / 修复（**界面与服务已经打包在里面**） |
+| **`WinAppGuardUninstall.exe`** | 完整卸载 |
+
+> ⚠️ **不要**单独下载或运行 `WinAppGuard.exe` / `WinAppGuardSvc.exe`。
+> 它们不是独立可用的程序：前者只是界面、后者只是服务；
+> 没有安装器就不会注册服务、不会创建快捷方式，**单独下载不起作用**。
+
+安装器双击后会请求一次管理员权限，然后自动完成：
+复制文件 → 创建服务（SYSTEM、自动启动）→ 创建桌面快捷方式。
+
 ## 安装 / 卸载
 
 - **双击 `WinAppGuardSetup.exe`**：未安装则安装，已安装则修复；会自动创建桌面快捷方式。

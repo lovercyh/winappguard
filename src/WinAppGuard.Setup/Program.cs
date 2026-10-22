@@ -49,6 +49,25 @@ internal static class Program
                 return StartServiceOnly();
             }
 
+            // 开发/发布验证用：把 Setup 末尾的内置载荷解出来（不安装、不改系统）。
+            if (args.Contains("--extract-payload", StringComparer.OrdinalIgnoreCase))
+            {
+                var index = Array.FindIndex(
+                    args, arg => arg.Equals("--extract-payload", StringComparison.OrdinalIgnoreCase));
+
+                var target = index + 1 < args.Length ? args[index + 1] : null;
+                var directory = EmbeddedPayload.TryExtract(target);
+
+                if (directory is null)
+                {
+                    Console.Error.WriteLine("这个 exe 没有内置载荷（开发期直接运行 bin 里的 Setup 属于正常）。");
+                    return 1;
+                }
+
+                Console.WriteLine(directory);
+                return 0;
+            }
+
             if (args.Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
             {
                 return Uninstall(
@@ -97,7 +116,7 @@ internal static class Program
 
     private static int Install()
     {
-        var (uiSource, serviceSource) = LocatePayload();
+        using var payload = LocatePayload();
 
         // 覆盖安装时界面可能正开着，占用 exe；先结束它，否则复制会失败。
         TryStopUiProcesses();
@@ -110,7 +129,7 @@ internal static class Program
             ServiceControl.Stop(ServiceProtocol.ServiceName);
         }
 
-        CopyPayload(uiSource, serviceSource);
+        CopyPayload(payload);
         Console.WriteLine($"已复制到：{InstallDirectory}");
 
         // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
@@ -156,7 +175,7 @@ internal static class Program
 
     private static int Repair()
     {
-        var (uiSource, serviceSource) = LocatePayload();
+        using var payload = LocatePayload();
 
         TryStopUiProcesses();
 
@@ -167,7 +186,7 @@ internal static class Program
         }
 
         Directory.CreateDirectory(InstallDirectory);
-        CopyPayload(uiSource, serviceSource);
+        CopyPayload(payload);
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
@@ -643,8 +662,21 @@ internal static class Program
         }
     }
 
-    private static (string Ui, string Service) LocatePayload()
+    /// <summary>
+    /// 解析安装载荷：
+    ///   1. 优先读 Setup 末尾追加的内置 ZIP（发布版：用户只需下载 Setup + Uninstall）；
+    ///   2. 没有内置载荷时回退到"读安装器同目录的文件"（开发期/手动解压场景）。
+    /// 返回的临时目录由 <see cref="Payload.Dispose"/> 清理。
+    /// </summary>
+    private static Payload LocatePayload()
     {
+        var extracted = EmbeddedPayload.TryExtract();
+
+        if (extracted is not null)
+        {
+            return new Payload(extracted, temporary: true);
+        }
+
         var source = AppContext.BaseDirectory;
         var ui = Path.Combine(source, UiExeName);
         var service = Path.Combine(source, ServiceExeName);
@@ -652,39 +684,78 @@ internal static class Program
         if (!File.Exists(ui) || !File.Exists(service))
         {
             throw new FileNotFoundException(
-                $"安装器旁边必须同时有 {UiExeName} 和 {ServiceExeName}（当前目录：{source}）。");
+                $"安装器没有内置载荷，同目录也缺少 {UiExeName} / {ServiceExeName}（当前目录：{source}）。");
         }
 
-        return (ui, service);
+        return new Payload(source, temporary: false);
     }
 
-    private static void CopyPayload(string uiSource, string serviceSource)
+    private static void CopyPayload(Payload payload)
     {
-        File.Copy(uiSource, Path.Combine(InstallDirectory, UiExeName), overwrite: true);
-        File.Copy(serviceSource, Path.Combine(InstallDirectory, ServiceExeName), overwrite: true);
+        File.Copy(payload.Ui, Path.Combine(InstallDirectory, UiExeName), overwrite: true);
+        File.Copy(payload.Service, Path.Combine(InstallDirectory, ServiceExeName), overwrite: true);
 
-        // 把安装器自己也放进安装目录：界面在"服务未运行"时要能一键启动/修复。
-        var setupSource = Path.Combine(AppContext.BaseDirectory, "WinAppGuardSetup.exe");
+        // 安装器本体（base）装进 Program Files：
+        //   - 作为 WinAppGuardSetup.exe → 界面「启动服务 / 修复」用；
+        //   - 作为 WinAppGuardUninstall.exe → 用户随时完整卸载（同一份二进制，文件名决定行为）。
         var setupTarget = Path.Combine(InstallDirectory, "WinAppGuardSetup.exe");
-
-        if (File.Exists(setupSource)
-            && !string.Equals(
-                Path.GetFullPath(setupSource), Path.GetFullPath(setupTarget),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            File.Copy(setupSource, setupTarget, overwrite: true);
-        }
-
-        // 卸载器（发布时由安装器副本改名而来）也装进去，用户随时可以完整卸载。
-        var uninstallSource = Path.Combine(AppContext.BaseDirectory, UninstallerExeName);
         var uninstallTarget = Path.Combine(InstallDirectory, UninstallerExeName);
 
-        if (File.Exists(uninstallSource)
-            && !string.Equals(
-                Path.GetFullPath(uninstallSource), Path.GetFullPath(uninstallTarget),
+        CopyIfDifferent(payload.SetupInstaller, setupTarget);
+        CopyIfDifferent(payload.SetupInstaller, uninstallTarget);
+    }
+
+    private static void CopyIfDifferent(string source, string target)
+    {
+        if (!File.Exists(source))
+        {
+            return;
+        }
+
+        if (string.Equals(
+                Path.GetFullPath(source), Path.GetFullPath(target),
                 StringComparison.OrdinalIgnoreCase))
         {
-            File.Copy(uninstallSource, uninstallTarget, overwrite: true);
+            return;
+        }
+
+        File.Copy(source, target, overwrite: true);
+    }
+
+    /// <summary>一次安装用到的载荷文件（可能来自临时解压目录）。</summary>
+    private sealed class Payload : IDisposable
+    {
+        internal Payload(string directory, bool temporary)
+        {
+            DirectoryPath = directory;
+            IsTemporary = temporary;
+        }
+
+        internal string DirectoryPath { get; }
+
+        private bool IsTemporary { get; }
+
+        internal string Ui => Path.Combine(DirectoryPath, UiExeName);
+
+        internal string Service => Path.Combine(DirectoryPath, ServiceExeName);
+
+        internal string SetupInstaller => Path.Combine(DirectoryPath, "WinAppGuardSetup.exe");
+
+        public void Dispose()
+        {
+            if (!IsTemporary)
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(DirectoryPath, recursive: true);
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响安装。
+            }
         }
     }
 }

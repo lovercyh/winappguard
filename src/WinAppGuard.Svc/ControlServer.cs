@@ -20,6 +20,8 @@ namespace WinAppGuard.Service;
 /// </summary>
 internal sealed class ControlServer : IDisposable
 {
+    private static readonly RuleHandlers Rules = new();
+
     private readonly CancellationTokenSource _cancellation = new();
     private Thread? _thread;
     private bool _loggedReady;
@@ -161,6 +163,12 @@ internal sealed class ControlServer : IDisposable
             };
         }
 
+        // 规则命令统一交给 RuleHandlers；写命令的提权检查在下面先做。
+        var isRuleCommand = request.Command == ServiceProtocol.Commands.ListRules
+            || request.Command == ServiceProtocol.Commands.FilterMap
+            || request.Command == ServiceProtocol.Commands.ImportGroups
+            || request.Command.StartsWith("write.rules.", StringComparison.OrdinalIgnoreCase);
+
         // 鉴权探针：不做任何事，只回答"当前客户端有没有提权"。
         if (string.Equals(request.Command, ServiceProtocol.Commands.AuthCheck, StringComparison.Ordinal))
         {
@@ -202,6 +210,8 @@ internal sealed class ControlServer : IDisposable
                 Ok = true,
                 Status = BuildStatus(),
             },
+
+            _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
             {

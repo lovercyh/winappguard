@@ -36,6 +36,27 @@ public static class ServiceProtocol
 
         /// <summary>鉴权探针：不做任何事，只回答"当前客户端是否已提权"。</summary>
         public const string AuthCheck = "auth.check";
+
+        // ---- 3.0-b：规则只读 ----
+
+        /// <summary>列出全部规则（程序 + IP + 白名单）。</summary>
+        public const string ListRules = "rules.list";
+
+        /// <summary>过滤器 id → 规则名（记录页用）。</summary>
+        public const string FilterMap = "rules.filterMap";
+
+        // ---- 3.0-b：规则写入（必须提权；服务端会再校验一遍）----
+
+        public const string AddProgramRule = "write.rules.addProgram";
+        public const string AddIpRule = "write.rules.addIp";
+        public const string DeleteRule = "write.rules.delete";
+        public const string ClearBlocklist = "write.rules.clearBlocklist";
+        public const string ClearWhitelist = "write.rules.clearWhitelist";
+        public const string SetGroup = "write.rules.setGroup";
+        public const string ImportRules = "write.rules.import";
+
+        /// <summary>把界面本地（旧版本）的分组文件内容交给服务保存。</summary>
+        public const string ImportGroups = "write.groups.import";
     }
 
     /// <summary>JSON 序列化选项（双方必须一致）。</summary>

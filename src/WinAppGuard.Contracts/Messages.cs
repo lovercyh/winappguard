@@ -11,6 +11,29 @@ public sealed class ServiceRequest
 
     /// <summary>客户端协议版本。</summary>
     public int ProtocolVersion { get; set; } = ServiceProtocol.Version;
+
+    // ---- 3.0-b：规则命令的参数 ----
+
+    /// <summary>程序完整路径，或 IP 地址。</summary>
+    public string? Value { get; set; }
+
+    /// <summary>block / allow。</summary>
+    public string? Action { get; set; }
+
+    /// <summary>到期标记（与规则说明里的格式一致；空 = 永久）。</summary>
+    public string? Expiry { get; set; }
+
+    /// <summary>作用范围标记（协议/端口；空 = 不限）。</summary>
+    public string? Scope { get; set; }
+
+    /// <summary>分组名（空 = 未分组）。</summary>
+    public string? Group { get; set; }
+
+    /// <summary>规则名（删除时用）。</summary>
+    public string? RuleName { get; set; }
+
+    /// <summary>导入文件内容 / 分组文件内容。</summary>
+    public string? Json { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -25,6 +48,40 @@ public sealed class ServiceResponse
 
     /// <summary>服务状态（status 命令返回）。</summary>
     public ServiceStatus? Status { get; set; }
+
+    /// <summary>规则列表（rules.list 返回）。</summary>
+    public List<RuleDto>? Rules { get; set; }
+
+    /// <summary>过滤器 id → 规则名（rules.filterMap 返回，键是十进制字符串）。</summary>
+    public Dictionary<string, string>? FilterMap { get; set; }
+
+    /// <summary>本次操作影响的条数（删除 / 导入等）。</summary>
+    public int Affected { get; set; }
+}
+
+/// <summary>一条规则的 IPC 表示（与界面表格字段对应）。</summary>
+public sealed class RuleDto
+{
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>program / ip。</summary>
+    public string Kind { get; set; } = "program";
+
+    /// <summary>程序路径，或 IP。</summary>
+    public string Value { get; set; } = string.Empty;
+
+    /// <summary>block / allow。</summary>
+    public string Action { get; set; } = "block";
+
+    /// <summary>到期标记（空 = 永久）。</summary>
+    public string Expiry { get; set; } = string.Empty;
+
+    /// <summary>作用范围标记（空 = 不限）。</summary>
+    public string Scope { get; set; } = string.Empty;
+
+    public string Group { get; set; } = string.Empty;
+
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>服务状态快照（v1）。</summary>

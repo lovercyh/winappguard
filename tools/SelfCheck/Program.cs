@@ -263,6 +263,10 @@ internal static class Program
             {
                 RunServicePingTest();
             }
+            else if (args.Contains("--service-rules-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceRulesTest();
+            }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunWfpScopeTest();
@@ -3637,6 +3641,137 @@ internal static class Program
 
         W("    提示：这个模式不会自动提权；请在两种账号下各跑一次。");
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 规则写入迁移自检（**需管理员 + 服务已安装运行**）。
+    /// 用临时目录里的 exe 副本做增/查/分组/删/导入，不碰用户已有规则。
+    /// </summary>
+    private static void RunServiceRulesTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempExe = Path.Combine(Path.GetTempPath(), $"wag-rule-test-{Guid.NewGuid():N}.exe");
+
+        W("################################################################");
+        W("#   服务端规则命令（需管理员 + 服务已运行；用临时 exe，不动用户规则）#");
+        W("################################################################");
+        W();
+
+        try
+        {
+            File.Copy(Path.Combine(Environment.SystemDirectory, "whoami.exe"), tempExe, overwrite: true);
+
+            var list = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out var listError);
+
+            W($"    初始规则数 = {list?.Rules?.Count ?? -1}");
+            CheckAssertion(results, "能通过服务列出规则", list is { Ok: true, Rules: not null });
+
+            if (listError is not null)
+            {
+                W($"    ！{listError}");
+            }
+
+            // 1) 添加
+            var add = Call(ServiceProtocol.Commands.AddProgramRule, new ServiceRequest
+            {
+                Value = tempExe,
+                Action = "block",
+                Expiry = string.Empty,
+                Scope = string.Empty,
+                Group = "自检分组",
+            }, out var addError);
+
+            W($"    添加：{(add is null ? addError : $"Ok={add.Ok}，错误={add.Error}")}");
+            CheckAssertion(results, "添加阻止规则成功", add is { Ok: true });
+
+            // 2) 列表 / 分组
+            var afterAdd = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var added = afterAdd?.Rules?.FirstOrDefault(rule =>
+                string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase));
+
+            W($"    列表里找到 = {added is not null}，分组 = {added?.Group}");
+            CheckAssertion(results, "列表里出现新规则", added is not null);
+            CheckAssertion(results, "分组随规则保存", added?.Group == "自检分组");
+
+            // 3) 过滤器映射
+            var map = Call(ServiceProtocol.Commands.FilterMap, new ServiceRequest(), out _);
+            CheckAssertion(results, "能取到过滤器 id → 规则名映射",
+                map is { Ok: true, FilterMap: not null });
+
+            // 4) 删除
+            if (added is not null)
+            {
+                var delete = Call(ServiceProtocol.Commands.DeleteRule, new ServiceRequest
+                {
+                    RuleName = added.Name,
+                }, out var deleteError);
+
+                W($"    删除：{(delete is null ? deleteError : $"Ok={delete.Ok}，错误={delete.Error}")}");
+                CheckAssertion(results, "删除规则成功", delete is { Ok: true });
+
+                var afterDelete = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+                CheckAssertion(results, "删除后列表里不再有它",
+                    afterDelete?.Rules?.All(rule =>
+                        !string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase)) == true);
+            }
+
+            // 5) 导入（含分组）
+            var document = new RuleExportDocument { Scope = "block" };
+            document.Rules.Add(new RuleExportEntry
+            {
+                Kind = "program",
+                Value = tempExe,
+                Action = "block",
+                Expiry = string.Empty,
+                Scope = string.Empty,
+                Group = "导入分组",
+            });
+
+            var import = Call(ServiceProtocol.Commands.ImportRules, new ServiceRequest
+            {
+                Action = "block",
+                Json = RuleExport.Serialize(document),
+            }, out var importError);
+
+            W($"    导入：{(import is null ? importError : $"Ok={import.Ok}，影响 {import.Affected} 条")}");
+            CheckAssertion(results, "导入成功且新建 1 条", import is { Ok: true, Affected: 1 });
+
+            var afterImport = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var imported = afterImport?.Rules?.FirstOrDefault(rule =>
+                string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase));
+
+            CheckAssertion(results, "导入的规则带上了分组", imported?.Group == "导入分组");
+
+            if (imported is not null)
+            {
+                _ = Call(ServiceProtocol.Commands.DeleteRule,
+                    new ServiceRequest { RuleName = imported.Name }, out _);
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempExe))
+                {
+                    File.Delete(tempExe);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: true);
+    }
+
+    /// <summary>发一条规则命令并取回响应（3 秒超时）。</summary>
+    private static ServiceResponse? Call(
+        string command, ServiceRequest request, out string? error)
+    {
+        request.Command = command;
+        return ServiceClient.TryRequest(request, TimeSpan.FromSeconds(3), out error);
     }
 
     /// <summary>

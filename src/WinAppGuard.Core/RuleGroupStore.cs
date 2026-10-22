@@ -144,6 +144,63 @@ internal sealed class RuleGroupStore
         }
     }
 
+    /// <summary>
+    /// 从旧版本的 groups 文件内容导入（3.0-b 数据迁移用）。
+    /// 现有记录优先：同名规则不覆盖。
+    /// </summary>
+    /// <returns>实际新增的条数。</returns>
+    internal int ImportJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return 0;
+        }
+
+        Document? document;
+
+        try
+        {
+            document = JsonSerializer.Deserialize<Document>(json);
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
+
+        if (document?.Groups is null)
+        {
+            return 0;
+        }
+
+        var added = 0;
+
+        lock (_gate)
+        {
+            foreach (var pair in document.Groups)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
+                {
+                    continue;
+                }
+
+                if (_groups.ContainsKey(pair.Key))
+                {
+                    continue;
+                }
+
+                _groups[pair.Key] = pair.Value.Trim();
+                added++;
+            }
+
+            if (added > 0)
+            {
+                _dirty = true;
+            }
+        }
+
+        return added;
+    }
+
     /// <summary>保存（原子写；失败不抛出，分组丢了不算故障）。</summary>
     internal void Save()
     {

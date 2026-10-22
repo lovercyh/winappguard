@@ -884,38 +884,63 @@ public partial class MainForm : Form
                 TimeSpan.FromSeconds(3),
                 out var error);
 
+            var fromSnapshot = false;
+            DateTime? snapshotTime = null;
+
             if (response is not { Ok: true, Rules: not null })
             {
                 // 服务不可用：规则页只读（3.0-b 起唯一写入路径是服务）。
                 _serviceAvailable = false;
-                _statusRulesLabel.Text = "防护服务未运行（规则只读）";
-                _rulesSummaryLabel.Text = "读取规则失败：服务不可用";
-                _whitelistSummaryLabel.Text = "读取规则失败：服务不可用";
-                MarkRulesReadOnly("防护服务未运行");
                 LocalLog.Warning($"读取规则失败（服务不可用）：{error ?? response?.Error}");
-                return;
-            }
 
-            _serviceAvailable = true;
-            _appGuardRules = response.Rules.Select(ToRuleItem).ToList();
+                // 3.0-c：服务每次写入后都会留一份权威副本（rules.json）。
+                // 离线时读它，让用户至少能看到"上次已知状态"，而不是一片空白。
+                var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
 
-            // 3.0-b：把旧版本存在用户目录里的分组文件搬到服务（只做一次）。
-            // 放在"列表已成功拿到"之后：服务不可用时不会再多等一次 3 秒超时。
-            if (MigrateGroupsOnce() > 0)
-            {
-                var refreshed = ServiceClient.TryRequest(
-                    new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
-                    TimeSpan.FromSeconds(3),
-                    out _);
-
-                if (refreshed is { Ok: true, Rules: not null })
+                if (snapshot is null || snapshot.Rules.Count == 0)
                 {
-                    _appGuardRules = refreshed.Rules.Select(ToRuleItem).ToList();
+                    _statusRulesLabel.Text = "防护服务未运行（规则只读）";
+                    _rulesSummaryLabel.Text = "读取规则失败：服务不可用";
+                    _whitelistSummaryLabel.Text = "读取规则失败：服务不可用";
+                    MarkRulesReadOnly("防护服务未运行");
+                    return;
                 }
-            }
 
-            // 1.x 遗留的严格模式标志（只处理一次；绝大多数机器上什么都不做）。
-            RecoverLegacyStrictModeOnce();
+                _appGuardRules = snapshot.Rules.Select(ToRuleItem).ToList();
+                snapshotTime = snapshot.SavedUtc.ToLocalTime();
+                fromSnapshot = true;
+
+                // 离线时"谁在白名单里"也要从快照补上，否则连接页会把已放行的程序标成"未放行"。
+                // 别的软件/系统的放行规则离线时不知道，保持为空（并明确是"上次已知状态"）。
+                _whitelistedPaths.Clear();
+                _whitelistedPaths.UnionWith(_appGuardRules
+                    .Where(rule => rule.Action == FirewallAction.Allow
+                                   && !string.IsNullOrEmpty(rule.ApplicationPath))
+                    .Select(rule => rule.ApplicationPath));
+            }
+            else
+            {
+                _serviceAvailable = true;
+                _appGuardRules = response.Rules.Select(ToRuleItem).ToList();
+
+                // 3.0-b：把旧版本存在用户目录里的分组文件搬到服务（只做一次）。
+                // 放在"列表已成功拿到"之后：服务不可用时不会再多等一次 3 秒超时。
+                if (MigrateGroupsOnce() > 0)
+                {
+                    var refreshed = ServiceClient.TryRequest(
+                        new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
+                        TimeSpan.FromSeconds(3),
+                        out _);
+
+                    if (refreshed is { Ok: true, Rules: not null })
+                    {
+                        _appGuardRules = refreshed.Rules.Select(ToRuleItem).ToList();
+                    }
+                }
+
+                // 1.x 遗留的严格模式标志（只处理一次；绝大多数机器上什么都不做）。
+                RecoverLegacyStrictModeOnce();
+            }
 
             _blockedPaths.Clear();
 
@@ -949,11 +974,24 @@ public partial class MainForm : Form
             _tabRules.Text = $"黑名单（{_rules.Count}）";
             _tabWhitelist.Text = $"严格模式下白名单（{_whitelistRules.Count}）";
 
-            _statusRulesLabel.Text = $"已阻止程序：{_blockedPaths.Count} 个";
+            _statusRulesLabel.Text = fromSnapshot
+                ? $"已阻止程序：{_blockedPaths.Count} 个（上次已知）"
+                : $"已阻止程序：{_blockedPaths.Count} 个";
 
-            // 状态栏的规则条数也要跟着走：以前只在启动时探一次，新建规则后一直显示旧数字。
-            _serviceStatusLabel.Text = $"服务：运行中 · {_appGuardRules.Count} 条规则";
-            _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
+            if (fromSnapshot)
+            {
+                // 离线快照：状态栏按离线处理，页首写明"这是什么时候的状态"。
+                UpdateServiceStatusLabel(null);
+                MarkRulesReadOnly(
+                    $"防护服务未运行（上次已知状态：{snapshotTime:MM-dd HH:mm}）");
+            }
+            else
+            {
+                // 状态栏的规则条数也要跟着走：以前只在启动时探一次，新建规则后一直显示旧数字。
+                _serviceStatusLabel.Text = $"服务：运行中 · {_appGuardRules.Count} 条规则";
+                _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
+                _serviceStatusLabel.IsLink = false;
+            }
 
             _rulesSummaryBase = $"黑名单共 {_rules.Count} 条";
             _whitelistSummaryBase = $"白名单共 {_whitelistRules.Count} 个程序";
@@ -970,7 +1008,11 @@ public partial class MainForm : Form
                     ? "当前：严格模式已开启 —— 白名单正在生效。"
                     : "当前：严格模式未开启 —— 白名单暂不生效。");
 
-            RestoreRulesPageWritable();
+            if (!fromSnapshot)
+            {
+                RestoreRulesPageWritable();
+            }
+
             UpdateRulesActionState();
             UpdateWhitelistActionState();
         }

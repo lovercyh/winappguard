@@ -44,6 +44,9 @@ internal sealed class ControlServer : IDisposable
             dueTime: TimeSpan.FromSeconds(3),
             period: TimeSpan.FromSeconds(30));
 
+        // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
+        Rules.SaveSnapshotNow();
+
         ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}");
     }
 

@@ -147,6 +147,7 @@ internal sealed class RuleHandlers
 
                 _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
                 _groups.Save();
+                SaveSnapshotNow();
 
                 ServiceLog.Info($"规则：服务定时清理到期规则 {removed.Count} 条");
             }
@@ -159,9 +160,17 @@ internal sealed class RuleHandlers
 
     private ServiceResponse List(ServiceRequest request)
     {
+        var list = BuildRuleDtos();
+
+        return new ServiceResponse { Id = request.Id, Ok = true, Rules = list };
+    }
+
+    /// <summary>把当前规则 + 分组映射成 IPC 用的 DTO（列表与快照共用）。</summary>
+    private List<RuleDto> BuildRuleDtos()
+    {
         var rules = RuleEngine.GetRules();
 
-        var list = rules.Select(rule => new RuleDto
+        return rules.Select(rule => new RuleDto
         {
             Name = rule.Name,
             Kind = string.IsNullOrEmpty(rule.IpAddress) ? "program" : "ip",
@@ -172,8 +181,27 @@ internal sealed class RuleHandlers
             Group = _groups.GetGroup(rule.Name),
             Enabled = rule.Enabled,
         }).ToList();
+    }
 
-        return new ServiceResponse { Id = request.Id, Ok = true, Rules = list };
+    /// <summary>
+    /// 更新权威副本（%ProgramData%\WinAppGuard\rules.json）。
+    /// 写失败只记日志：它是"离线时给用户看"的辅助数据，不能反过来让规则操作失败。
+    /// </summary>
+    internal void SaveSnapshotNow()
+    {
+        lock (Gate)
+        {
+            try
+            {
+                RuleSnapshotFile.Write(
+                    ServicePaths.RulesSnapshotFile,
+                    new RuleSnapshot { Rules = BuildRuleDtos() });
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning($"写入规则快照失败：{ex.Message}");
+            }
+        }
     }
 
     private ServiceResponse FilterMap(ServiceRequest request)
@@ -219,6 +247,7 @@ internal sealed class RuleHandlers
             StrictModeHost.RefreshIfEnabled();
         }
 
+        SaveSnapshotNow();
         ServiceLog.Info($"规则：{(action.Value == FirewallAction.Block ? "阻止" : "允许")} {path}（{name}）");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
@@ -236,6 +265,7 @@ internal sealed class RuleHandlers
         var name = RuleEngine.CreateIpBlockRule(address);
         ApplyGroup(name, request.Group);
 
+        SaveSnapshotNow();
         ServiceLog.Info($"规则：封禁 IP {address}（{name}）");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
@@ -259,6 +289,7 @@ internal sealed class RuleHandlers
         _groups.Save();
 
         StrictModeHost.RefreshIfEnabled();
+        SaveSnapshotNow();
 
         ServiceLog.Info($"规则：删除 {name}");
 
@@ -283,6 +314,7 @@ internal sealed class RuleHandlers
 
         _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
         _groups.Save();
+        SaveSnapshotNow();
 
         ServiceLog.Info($"规则：解除阻止 {path}（删除 {deleted} 条）");
 
@@ -302,6 +334,7 @@ internal sealed class RuleHandlers
             StrictModeHost.RefreshIfEnabled();
         }
 
+        SaveSnapshotNow();
         ServiceLog.Info($"规则：清空{(action == FirewallAction.Block ? "黑名单" : "白名单")} {deleted} 条");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
@@ -318,6 +351,7 @@ internal sealed class RuleHandlers
 
         _groups.SetGroup(name, request.Group);
         _groups.Save();
+        SaveSnapshotNow();
 
         ServiceLog.Info($"规则：分组 {name} → {(string.IsNullOrWhiteSpace(request.Group) ? "未分组" : request.Group)}");
 
@@ -333,6 +367,7 @@ internal sealed class RuleHandlers
         {
             _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
             _groups.Save();
+            SaveSnapshotNow();
 
             ServiceLog.Info($"规则：清理到期临时规则 {removed.Count} 条");
         }
@@ -444,6 +479,7 @@ internal sealed class RuleHandlers
             StrictModeHost.RefreshIfEnabled();
         }
 
+        SaveSnapshotNow();
         ServiceLog.Info($"规则：导入 {created} 条（跳过 {skipped}，失败 {failed}）");
 
         return new ServiceResponse
@@ -459,6 +495,7 @@ internal sealed class RuleHandlers
     {
         var imported = _groups.ImportJson(request.Json);
         _groups.Save();
+        SaveSnapshotNow();
 
         ServiceLog.Info($"规则：导入旧分组记录 {imported} 条");
 

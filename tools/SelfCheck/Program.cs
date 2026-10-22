@@ -136,6 +136,7 @@ internal static class Program
                          && !args.Contains("--ipc-codec-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
@@ -271,6 +272,10 @@ internal static class Program
             else if (args.Contains("--service-strict-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceStrictTest();
+            }
+            else if (args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunSnapshotTest();
             }
             else if (args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3875,6 +3880,94 @@ internal static class Program
     }
 
     /// <summary>
+    /// 规则快照（离线）：服务写的 rules.json 必须能被界面读回；
+    /// 坏文件/版本不认识要当成"没有"，绝不能让界面崩。
+    /// </summary>
+    private static void RunSnapshotTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var directory = Path.Combine(Path.GetTempPath(), $"wag-snapshot-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "rules.json");
+
+        W("################################################################");
+        W("#   规则快照（离线：原子写 / 往返 / 坏文件容错）                  #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var snapshot = new RuleSnapshot
+            {
+                Rules =
+                {
+                    new RuleDto
+                    {
+                        Name = "AppGuard_Block_test",
+                        Kind = "program",
+                        Value = @"C:\Tools\测试.exe",
+                        Action = "block",
+                        Expiry = "never",
+                        Scope = "",
+                        Group = "工作",
+                        Enabled = true,
+                    },
+                    new RuleDto
+                    {
+                        Name = "AppGuard_IP_1.2.3.4",
+                        Kind = "ip",
+                        Value = "1.2.3.4",
+                        Action = "block",
+                    },
+                },
+            };
+
+            RuleSnapshotFile.Write(path, snapshot);
+
+            W($"    写入：{path}");
+            CheckAssertion(results, "快照文件已创建", File.Exists(path));
+            CheckAssertion(results, "没有残留临时文件",
+                !File.Exists(path + ".tmp"));
+
+            var read = RuleSnapshotFile.TryRead(path);
+
+            W($"    读回：{read?.Rules.Count} 条，时间 {read?.SavedUtc:yyyy-MM-dd HH:mm:ss} UTC");
+            CheckAssertion(results, "能原样读回快照", read is { Rules.Count: 2 });
+            CheckAssertion(results, "程序规则字段完整",
+                read?.Rules[0] is { Kind: "program", Action: "block", Group: "工作" }
+                && read.Rules[0].Value == @"C:\Tools\测试.exe");
+            CheckAssertion(results, "IP 规则字段完整",
+                read?.Rules[1] is { Kind: "ip", Value: "1.2.3.4" });
+            CheckAssertion(results, "写入时间已记录",
+                read is not null && (DateTime.UtcNow - read.SavedUtc).TotalMinutes < 5);
+
+            File.WriteAllText(path, "{ 这不是 JSON", Encoding.UTF8);
+            CheckAssertion(results, "损坏的快照按「没有」处理",
+                RuleSnapshotFile.TryRead(path) is null);
+
+            File.WriteAllText(path,
+                """{"Version":2,"Rules":[]}""", Encoding.UTF8);
+            CheckAssertion(results, "未来版本按「没有」处理",
+                RuleSnapshotFile.TryRead(path) is null);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
     /// 规则写入迁移自检（**需管理员 + 服务已安装运行**）。
     /// 用临时目录里的 exe 副本做增/查/分组/删/导入，不碰用户已有规则。
     /// </summary>
@@ -3923,6 +4016,15 @@ internal static class Program
             W($"    列表里找到 = {added is not null}，分组 = {added?.Group}");
             CheckAssertion(results, "列表里出现新规则", added is not null);
             CheckAssertion(results, "分组随规则保存", added?.Group == "自检分组");
+
+            // 3.0-c：服务每次写入后都要更新权威副本（界面离线时靠它显示"上次已知状态"）。
+            var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
+            W($"    快照：{(snapshot is null ? "读不到" : $"{snapshot.Rules.Count} 条")}");
+
+            CheckAssertion(results, "服务已写入规则快照", snapshot is not null);
+            CheckAssertion(results, "快照里能找到刚加的规则",
+                snapshot?.Rules.Any(rule =>
+                    string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase)) == true);
 
             // 3) 过滤器映射
             var map = Call(ServiceProtocol.Commands.FilterMap, new ServiceRequest(), out _);

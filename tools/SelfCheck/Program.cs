@@ -3978,7 +3978,7 @@ internal static class Program
 
     /// <summary>
     /// 服务端审计（**需管理员 + 服务已运行**）：不开界面，记录也必须继续。
-    /// 用一条本机回环连接做确定性验证（不联网、不改规则）。
+    /// 用一条本机**非回环**地址的连接做确定性验证（不联网、不改规则）。
     /// </summary>
     private static void RunServiceAuditTest()
     {
@@ -3986,7 +3986,7 @@ internal static class Program
         var restore = new ServiceRequest();
 
         W("################################################################");
-        W("#   服务端审计（需管理员 + 服务已运行；本机回环连接，约 10 秒）  #");
+        W("#   服务端审计（需管理员 + 服务已运行；本机连接，约 10 秒）      #");
         W("################################################################");
         W();
 
@@ -4029,29 +4029,71 @@ internal static class Program
             var baseline = CountAuditEvents();
             W($"    测试前已有记录 = {baseline} 条");
 
-            // 本机回环连接：确定性高，不依赖外网。
-            using var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
+            // 用**非回环**的本机地址建连接：审计按设计会忽略回环（127.0.0.1），
+            // 用回环测的话记录数永远不会变（第一版就栽在这里）。
+            var lanAddress = GetNonLoopbackIPv4();
+            TcpListener? listener = null;
+            TcpClient? client = null;
+            TcpClient? accepted = null;
 
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            try
+            {
+                IPAddress probeAddress;
+                int port;
 
-            using var client = new TcpClient();
-            client.Connect(IPAddress.Loopback, port);
+                if (lanAddress is not null)
+                {
+                    listener = new TcpListener(IPAddress.Any, 0);
+                    listener.Start();
 
-            using var accepted = listener.AcceptTcpClient();
+                    port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                    probeAddress = lanAddress;
 
-            W($"    已建立本机连接 127.0.0.1:{port}，等待采集（约 8 秒）…");
-            Thread.Sleep(8000);
+                    client = new TcpClient();
+                    client.Connect(lanAddress, port);
+                    accepted = listener.AcceptTcpClient();
+                }
+                else
+                {
+                    // 没有非回环地址（极少数环境）：退回外网 whois（需要能联网）。
+                    probeAddress = Dns.GetHostAddresses("whois.cymru.com")
+                        .First(address => address.AddressFamily == AddressFamily.InterNetwork);
+                    port = 43;
 
-            var events = ReadAuditEvents(3000);
-            var found = events.Any(item =>
-                item.RemotePort == port
-                && (item.RemoteAddress == "127.0.0.1" || item.RemoteAddress == "::1")
-                && item.ProcessPath.Contains("WinAppGuard.SelfCheck", StringComparison.OrdinalIgnoreCase));
+                    client = new TcpClient();
+                    var connect = client.ConnectAsync(probeAddress, port);
 
-            W($"    记录总数 = {events.Count}（测试前 {baseline}）；找到测试连接 = {found}");
-            CheckAssertion(results, "服务在无人操作时仍在写记录", events.Count > baseline);
-            CheckAssertion(results, "记录里能找到刚才那条连接（含进程路径）", found);
+                    if (!connect.Wait(5000) || !client.Connected)
+                    {
+                        throw new InvalidOperationException("连不上外网测试目标。");
+                    }
+                }
+
+                W($"    已建立连接 {probeAddress}:{port}，等待采集（约 9 秒）…");
+                Thread.Sleep(9000);
+
+                var events = ReadAuditEvents(3000);
+                var found = events.Any(item =>
+                    item.RemotePort == port
+                    && item.RemoteAddress == probeAddress.ToString()
+                    && item.ProcessPath.Contains("WinAppGuard.SelfCheck", StringComparison.OrdinalIgnoreCase));
+
+                W($"    记录总数 = {events.Count}（测试前 {baseline}）；找到测试连接 = {found}");
+                CheckAssertion(results, "服务在无人操作时仍在写记录", events.Count > baseline);
+                CheckAssertion(results, "记录里能找到刚才那条连接（含进程路径）", found);
+            }
+            catch (Exception ex)
+            {
+                W($"    ！无法建立可记录的测试连接：{ex.Message}");
+                CheckAssertion(results, "服务在无人操作时仍在写记录", false);
+                CheckAssertion(results, "记录里能找到刚才那条连接（含进程路径）", false);
+            }
+            finally
+            {
+                client?.Dispose();
+                accepted?.Dispose();
+                listener?.Stop();
+            }
         }
         finally
         {
@@ -4070,6 +4112,22 @@ internal static class Program
     }
 
     private static int CountAuditEvents() => ReadAuditEvents(3000).Count;
+
+    /// <summary>本机的非回环 IPv4（审计按设计忽略 127.0.0.1，测试必须用真实地址）。</summary>
+    private static IPAddress? GetNonLoopbackIPv4()
+    {
+        try
+        {
+            return Dns.GetHostAddresses(Dns.GetHostName())
+                .FirstOrDefault(address =>
+                    address.AddressFamily == AddressFamily.InterNetwork
+                    && !IPAddress.IsLoopback(address));
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     private static IReadOnlyList<AuditEvent> ReadAuditEvents(int maxCount)
     {

@@ -40,6 +40,11 @@ internal static class Program
                 return Repair();
             }
 
+            if (args.Contains("--start-service", StringComparer.OrdinalIgnoreCase))
+            {
+                return StartServiceOnly();
+            }
+
             if (args.Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
             {
                 return Uninstall(keepData: args.Contains("--keep-data", StringComparer.OrdinalIgnoreCase));
@@ -61,6 +66,7 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("  WinAppGuardSetup.exe --install     安装（复制文件 + 创建服务 + 启动）");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留规则与数据）");
+        Console.WriteLine("  WinAppGuardSetup.exe --start-service 只启动服务（顺带修正为「自动（不延迟）」）");
         Console.WriteLine("  WinAppGuardSetup.exe --uninstall   卸载（停止/删除服务 + 删除本程序规则）");
         Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard");
         Console.WriteLine();
@@ -92,6 +98,9 @@ internal static class Program
 
             Console.WriteLine("已创建服务（自动启动、崩溃后自动重启）。");
         }
+
+        // 老版本装的是「自动（延迟启动）」：VM 实测经常起不来，这里统一修正。
+        ServiceControl.EnsureAutoStartNoDelay(ServiceProtocol.ServiceName);
 
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
@@ -133,6 +142,9 @@ internal static class Program
                 ServiceProtocol.ServiceDescription);
         }
 
+        // 覆盖安装不会重建服务：必须显式把「延迟启动」改掉。
+        ServiceControl.EnsureAutoStartNoDelay(ServiceProtocol.ServiceName);
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
@@ -146,6 +158,37 @@ internal static class Program
             : "修复后服务仍未运行，请查看日志。");
 
         return ServiceControl.IsRunning(ServiceProtocol.ServiceName) ? 0 : 4;
+    }
+
+    /// <summary>
+    /// 只启动服务（界面在"离线"状态下调用；也用于把老版本的延迟启动修正掉）。
+    /// </summary>
+    private static int StartServiceOnly()
+    {
+        if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
+        {
+            Console.Error.WriteLine("防护服务尚未安装。请先运行 --install 或 --repair。");
+            return 2;
+        }
+
+        ServiceControl.EnsureAutoStartNoDelay(ServiceProtocol.ServiceName);
+        ServiceControl.Start(ServiceProtocol.ServiceName);
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (DateTime.UtcNow < deadline && !ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+        {
+            Thread.Sleep(300);
+        }
+
+        if (!ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+        {
+            Console.Error.WriteLine("服务没有在 10 秒内进入运行状态。请查看 %ProgramData%\\WinAppGuard\\logs。");
+            return 4;
+        }
+
+        Console.WriteLine("服务已启动（自动启动、不延迟）。");
+        return 0;
     }
 
     private static int Uninstall(bool keepData)
@@ -258,5 +301,17 @@ internal static class Program
     {
         File.Copy(uiSource, Path.Combine(InstallDirectory, UiExeName), overwrite: true);
         File.Copy(serviceSource, Path.Combine(InstallDirectory, ServiceExeName), overwrite: true);
+
+        // 把安装器自己也放进安装目录：界面在"服务未运行"时要能一键启动/修复。
+        var setupSource = Path.Combine(AppContext.BaseDirectory, "WinAppGuardSetup.exe");
+        var setupTarget = Path.Combine(InstallDirectory, "WinAppGuardSetup.exe");
+
+        if (File.Exists(setupSource)
+            && !string.Equals(
+                Path.GetFullPath(setupSource), Path.GetFullPath(setupTarget),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            File.Copy(setupSource, setupTarget, overwrite: true);
+        }
     }
 }

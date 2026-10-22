@@ -17,6 +17,7 @@ internal static class ServiceControl
     private const uint ServiceWin32OwnProcess = 0x00000010;
     private const uint ServiceAutoStart = 0x00000002;
     private const uint ServiceErrorNormal = 0x00000001;
+    private const uint ServiceNoChange = 0xFFFFFFFF;
 
     private const uint ServiceQueryStatus = 0x0004;
     private const uint ServiceStart = 0x0010;
@@ -89,6 +90,13 @@ internal static class ServiceControl
 
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenServiceW(IntPtr scm, string serviceName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool ChangeServiceConfigW(
+        IntPtr service, uint serviceType, uint startType, uint errorControl,
+        string? binaryPathName, string? loadOrderGroup, IntPtr tagId,
+        string? dependencies, string? serviceStartName, string? password,
+        string? displayName);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool StartServiceW(IntPtr service, int argumentCount, IntPtr arguments);
@@ -177,7 +185,7 @@ internal static class ServiceControl
             {
                 SetDescription(service, description);
                 SetFailureActions(service);
-                SetDelayedAutoStart(service);
+                SetDelayedAutoStart(service, delayed: 0);
             }
             finally
             {
@@ -378,9 +386,51 @@ internal static class ServiceControl
         }
     }
 
-    private static void SetDelayedAutoStart(IntPtr service)
+    /// <summary>
+    /// 把服务改成「自动」且**不延迟**启动。
+    ///
+    /// 为什么不用延迟启动：VM 实测延迟启动的服务在登录后经常没被拉起，
+    /// 界面显示离线、严格模式/防护全部失效。WFP 服务本身不依赖登录用户，
+    /// 没有理由延迟。
+    /// </summary>
+    internal static void EnsureAutoStartNoDelay(string serviceName)
     {
-        var info = new ServiceDelayedAutoStartInfo { DelayedAutostart = 1 };
+        var scm = OpenScm();
+
+        try
+        {
+            var service = OpenServiceW(scm, serviceName, ServiceChangeConfig | ServiceQueryStatus);
+
+            if (service == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "打开服务失败");
+            }
+
+            try
+            {
+                if (!ChangeServiceConfigW(
+                        service, ServiceNoChange, ServiceAutoStart, ServiceNoChange,
+                        null, null, IntPtr.Zero, null, null, null, null))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "设置自动启动失败");
+                }
+
+                SetDelayedAutoStart(service, delayed: 0);
+            }
+            finally
+            {
+                _ = CloseServiceHandle(service);
+            }
+        }
+        finally
+        {
+            _ = CloseServiceHandle(scm);
+        }
+    }
+
+    private static void SetDelayedAutoStart(IntPtr service, int delayed)
+    {
+        var info = new ServiceDelayedAutoStartInfo { DelayedAutostart = delayed };
         var pointer = Marshal.AllocHGlobal(Marshal.SizeOf<ServiceDelayedAutoStartInfo>());
 
         try

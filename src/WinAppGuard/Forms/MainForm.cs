@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
@@ -148,6 +149,9 @@ public partial class MainForm : Form
 
     /// <summary>1.x 遗留严格模式标志是否已经让服务处理过。</summary>
     private bool _legacyStrictRecoveryDone;
+
+    /// <summary>本次运行是否已经尝试过"自动拉起服务"（只试一次，避免反复弹 UAC）。</summary>
+    private bool _triedAutoStartService;
 
     /// <summary>黑名单页的原始提示文案（离线时会被替换，恢复后还原）。</summary>
     private string _rulesNoticeDefault = string.Empty;
@@ -389,6 +393,9 @@ public partial class MainForm : Form
         KeyDown += OnMainFormKeyDown;
 
         ShowRuntimeStatus();
+
+        // 状态栏在"服务未运行"时是可点的：点一下启动服务（否则用户只能去装服务）。
+        _serviceStatusLabel.Click += OnServiceStatusLabelClick;
 
         _rulesNoticeDefault = _rulesNoticeLabel.Text;
 
@@ -4445,6 +4452,165 @@ public partial class MainForm : Form
         }
     }
 
+    /// <summary>状态栏「服务：未运行」被点击：启动服务（需要管理员）。</summary>
+    private void OnServiceStatusLabelClick(object? sender, EventArgs e)
+    {
+        if (_serviceAvailable)
+        {
+            return;
+        }
+
+        if (!ServiceIsInstalled())
+        {
+            MessageBox.Show(
+                this,
+                "防护服务还没有安装。\n\n请运行安装目录里的 WinAppGuardSetup.exe --install。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        if (FindSetupPath() is null)
+        {
+            MessageBox.Show(
+                this,
+                "找不到 WinAppGuardSetup.exe，无法启动服务。\n\n" +
+                "请重新运行安装器（--repair）。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (TryStartService(interactive: true))
+        {
+            ShowTrayBalloon("正在启动防护服务…", "启动成功后界面会自动恢复可编辑状态。");
+        }
+    }
+
+    /// <summary>
+    /// 服务没在运行时尝试自动拉起一次。
+    /// 只在界面**已经是管理员**时自动做 —— 否则会在启动时突然弹 UAC，
+    /// 那属于"用户没要求的提权"。非管理员场景由用户点状态栏链接触发。
+    /// </summary>
+    private void MaybeAutoStartService()
+    {
+        if (_triedAutoStartService)
+        {
+            return;
+        }
+
+        _triedAutoStartService = true;
+
+        if (!AdminHelper.IsRunningAsAdmin()
+            || !ServiceIsInstalled()
+            || FindSetupPath() is null)
+        {
+            return;
+        }
+
+        LocalLog.Info("服务未运行：界面以管理员运行，尝试自动启动。");
+        _ = Task.Run(() => TryStartService(interactive: false));
+    }
+
+    /// <summary>用安装器的 --start-service 启动服务（顺带修正「延迟启动」）。</summary>
+    private static bool TryStartService(bool interactive)
+    {
+        var setup = FindSetupPath();
+
+        if (setup is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(setup, "--start-service")
+            {
+                UseShellExecute = interactive,
+                CreateNoWindow = !interactive,
+            };
+
+            if (interactive)
+            {
+                if (!AdminHelper.IsRunningAsAdmin())
+                {
+                    startInfo.Verb = "runas";
+                }
+            }
+            else
+            {
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+            }
+
+            using var process = Process.Start(startInfo);
+
+            if (process is null)
+            {
+                return false;
+            }
+
+            if (interactive)
+            {
+                return true;
+            }
+
+            if (!process.WaitForExit(15000))
+            {
+                try
+                {
+                    process.Kill();
+                }
+                catch (Exception)
+                {
+                    // 杀不掉也不影响：下次探测会再看一次状态。
+                }
+
+                return false;
+            }
+
+            LocalLog.Info($"自动启动服务：退出码 {process.ExitCode}");
+            return process.ExitCode == 0;
+        }
+        catch (Exception ex)
+        {
+            // 用户在 UAC 里点"否"也走这里（Win32 1223）；不打扰，记日志即可。
+            LocalLog.Warning($"启动服务失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool ServiceIsInstalled()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Services\" + ServiceProtocol.ServiceName);
+
+            return key is not null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static string? FindSetupPath()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "WinAppGuardSetup.exe"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "WinAppGuard",
+                "WinAppGuardSetup.exe"),
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
     /// <summary>
     /// 异步探测防护服务状态，然后回到 UI 线程更新状态栏。
     /// 连不上是**正常状态**（离线模式），不弹窗、不报错。
@@ -4472,6 +4638,12 @@ public partial class MainForm : Form
                     {
                         RefreshRulesFromFirewall();
                     }
+                    else if (status is null)
+                    {
+                        // 服务没起来：如果界面已经是管理员、且服务已安装，顺手拉一次。
+                        // （非管理员时不主动弹 UAC —— 用户点状态栏的"点击启动"即可。）
+                        MaybeAutoStartService();
+                    }
                 }));
             }
             catch (Exception)
@@ -4486,11 +4658,18 @@ public partial class MainForm : Form
     {
         if (status is null)
         {
-            _serviceStatusLabel.Text = "服务：未运行（离线模式）";
+            var installed = ServiceIsInstalled();
+
+            _serviceStatusLabel.Text = installed
+                ? "服务：未运行（离线模式）—— 点击启动"
+                : "服务：未运行（离线模式）";
             _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
-            _serviceStatusLabel.ToolTipText =
-                "防护服务未安装或未运行：规则页面只读（3.0-b 起规则的唯一写入路径是服务）。\n" +
-                "查看连接和导出仍然可用。";
+            _serviceStatusLabel.IsLink = installed;
+            _serviceStatusLabel.ToolTipText = installed
+                ? "防护服务没有运行：点击这里启动（需要管理员权限）。\n" +
+                  "规则页面在服务恢复前只读；查看连接和导出仍然可用。"
+                : "防护服务未安装：规则页面只读。\n" +
+                  "请运行 WinAppGuardSetup.exe --install 安装服务。";
 
             // 服务停了要**立刻**反映到规则页，不能等用户去点刷新。
             _serviceAvailable = false;
@@ -4514,6 +4693,7 @@ public partial class MainForm : Form
         _serviceStatusLabel.Text =
             $"服务：运行中 · {status.BlockRuleCount + status.AllowRuleCount} 条规则";
         _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
+        _serviceStatusLabel.IsLink = false;
         _serviceStatusLabel.ToolTipText =
             $"服务版本 {status.ServiceVersion}，协议 v{status.ProtocolVersion}。\n" +
             $"子层{(status.SublayerPresent ? "存在" : "缺失")}；" +

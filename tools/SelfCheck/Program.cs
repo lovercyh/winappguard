@@ -3610,16 +3610,17 @@ internal static class Program
         if (!TryGetField<Button>(form, "_rulesAddButton", out var addButton)
             || !TryGetField<Button>(form, "_rulesImportButton", out var importButton)
             || !TryGetField<Button>(form, "_whitelistAddButton", out var whitelistAdd)
-            || !TryGetField<Label>(form, "_rulesNoticeLabel", out var notice))
+            || !TryGetField<Label>(form, "_rulesNoticeLabel", out var notice)
+            || !TryGetField<ToolStripStatusLabel>(form, "_serviceStatusLabel", out var serviceLabel)
+            || !TryGetField<ToolStripStatusLabel>(form, "_statusRulesLabel", out var rulesStatusLabel))
         {
             CheckAssertion(results, "找得到规则页的按钮与提示标签", false);
             PrintSummary(results, showFirewallResidue: false);
             return;
         }
 
-        // 模拟服务不可用
-        TrySetField(form, "_serviceAvailable", false);
-        InvokePrivate(form, "MarkRulesReadOnly", new object?[] { "测试：服务未运行" });
+        // 走真实的"服务探测失败"路径（bug：以前只改状态栏文字，规则页还留着可编辑）。
+        InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { null });
         InvokePrivate(form, "UpdateRulesActionState", Array.Empty<object?>());
         InvokePrivate(form, "UpdateWhitelistActionState", Array.Empty<object?>());
         form.Refresh();
@@ -3627,12 +3628,17 @@ internal static class Program
         W($"    离线：加入={addButton.Enabled}，导入={importButton.Enabled}，" +
           $"白名单加入={whitelistAdd.Enabled}");
         W($"    提示：{(notice.Text ?? string.Empty).Replace("\r\n", " / ")}");
+        W($"    状态栏：{(serviceLabel.Text ?? string.Empty)} / {(rulesStatusLabel.Text ?? string.Empty)}");
 
+        CheckAssertion(results, "服务不可用时状态栏显示「离线模式」",
+            (serviceLabel.Text ?? string.Empty).Contains("离线模式", StringComparison.Ordinal));
         CheckAssertion(results, "离线时黑名单「加入」禁用", !addButton.Enabled);
         CheckAssertion(results, "离线时「导入」禁用", !importButton.Enabled);
         CheckAssertion(results, "离线时白名单「加入」禁用", !whitelistAdd.Enabled);
         CheckAssertion(results, "离线提示写明只读",
             (notice.Text ?? string.Empty).Contains("只读", StringComparison.Ordinal));
+        CheckAssertion(results, "离线时左下角不再显示旧的已阻止数量",
+            (rulesStatusLabel.Text ?? string.Empty).Contains("只读", StringComparison.Ordinal));
 
         // 模拟服务恢复
         TrySetField(form, "_serviceAvailable", true);

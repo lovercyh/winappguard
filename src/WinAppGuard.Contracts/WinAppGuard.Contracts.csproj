@@ -10,7 +10,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WinAppGuard.Contracts</AssemblyName>
     <RootNamespace>WinAppGuard.Contracts</RootNamespace>
-    <Version>2.5</Version>
+    <Version>3.0</Version>
   </PropertyGroup>
 
 </Project>

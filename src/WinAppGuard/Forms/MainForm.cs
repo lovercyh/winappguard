@@ -134,6 +134,9 @@ public partial class MainForm : Form
     /// <summary>服务是否可用（可用 = 规则页可读写；不可用 = 只读）。</summary>
     private bool _serviceAvailable;
 
+    /// <summary>每 5 秒探测一次服务状态（独立于"自动刷新连接"，关掉那个也要能发现服务停了）。</summary>
+    private System.Windows.Forms.Timer? _serviceProbeTimer;
+
     /// <summary>旧分组文件是否已经迁移过（只做一次）。</summary>
     private bool _groupsMigrated;
 
@@ -382,6 +385,19 @@ public partial class MainForm : Form
 
         // 探测防护服务（异步：服务没装/没起时不能拖慢启动）。
         ProbeServiceStatus();
+
+        // 服务状态要持续更新：只探一次的话，服务停了界面会永远停在"运行中"。
+        // 用独立定时器，不跟「每 3 秒自动刷新连接」绑在一起（那个可以被用户关掉）。
+        if (!SuppressBackgroundServices)
+        {
+            _serviceProbeTimer = new System.Windows.Forms.Timer(components!)
+            {
+                Interval = 5000,
+            };
+
+            _serviceProbeTimer.Tick += (_, _) => ProbeServiceStatus();
+            _serviceProbeTimer.Start();
+        }
 
         // 把日志目录直接摆在界面上，用户不用去猜日志藏在哪。
         _logPathLabel.Text = LocalLog.LogDirectory;
@@ -904,6 +920,10 @@ public partial class MainForm : Form
             _tabWhitelist.Text = $"严格模式下白名单（{_whitelistRules.Count}）";
 
             _statusRulesLabel.Text = $"已阻止程序：{_blockedPaths.Count} 个";
+
+            // 状态栏的规则条数也要跟着走：以前只在启动时探一次，新建规则后一直显示旧数字。
+            _serviceStatusLabel.Text = $"服务：运行中 · {_appGuardRules.Count} 条规则";
+            _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
 
             _rulesSummaryBase = $"黑名单共 {_rules.Count} 条";
             _whitelistSummaryBase = $"白名单共 {_whitelistRules.Count} 个程序";
@@ -4438,6 +4458,14 @@ public partial class MainForm : Form
             _serviceStatusLabel.ToolTipText =
                 "防护服务未安装或未运行：规则页面只读（3.0-b 起规则的唯一写入路径是服务）。\n" +
                 "查看连接和导出仍然可用。";
+
+            // 服务停了要**立刻**反映到规则页，不能等用户去点刷新。
+            _serviceAvailable = false;
+            _statusRulesLabel.Text = "防护服务未运行（规则只读）";
+            MarkRulesReadOnly("防护服务未运行");
+            UpdateRulesActionState();
+            UpdateWhitelistActionState();
+            UpdateActionState();
             return;
         }
 

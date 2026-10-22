@@ -59,22 +59,49 @@ jobs:
       - name: 验证发布脚本
         run: powershell -ExecutionPolicy Bypass -File .\build\publish.ps1
 
-      - name: 确认确实是单文件
+      - name: 确认发布产物
         shell: pwsh
         run: |
-          $exe = '.\dist\WinAppGuard.exe'
-          if (-not (Test-Path $exe)) { throw "发布失败：找不到 $exe" }
+          # 3.0 起 dist 固定是 4 个文件：界面 / 服务 / 安装器 / 卸载器。
+          $expected = @(
+            'WinAppGuard.exe',
+            'WinAppGuardSvc.exe',
+            'WinAppGuardSetup.exe',
+            'WinAppGuardUninstall.exe'
+          )
 
-          # 出了 exe 和 pdb，不应该有别的文件。
-          # 注意：构建根目录下的文件不算，只看 dist。
-          $extra = Get-ChildItem .\dist -File |
-            Where-Object { $_.Name -ne 'WinAppGuard.exe' }
-          if ($extra) {
-            throw "dist 里出现了单文件之外的文件：$($extra.Name -join ', ')"
+          $names = (Get-ChildItem .\dist -File).Name
+
+          foreach ($name in $expected) {
+            if ($names -notcontains $name) { throw "缺少发布文件：$name" }
           }
 
-          $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
-          Write-Host "OK：dist\WinAppGuard.exe  $size MB"
+          $extra = $names | Where-Object { $expected -notcontains $_ }
+          if ($extra) {
+            throw "dist 里出现了预期之外的文件：$($extra -join ', ')"
+          }
+
+          # UI 仍然必须是单文件：publish 目录里除 exe/pdb 不应有别的文件。
+          $uiExtra = Get-ChildItem .\build\_publish -File |
+            Where-Object { $_.Name -ne 'WinAppGuard.exe' -and $_.Extension -ne '.pdb' }
+          if ($uiExtra) {
+            throw "UI 单文件打包未生效：$($uiExtra.Name -join ', ')"
+          }
+
+          # 安装器必须带内置载荷（末尾 magic WAGPAY01）。
+          $stream = [System.IO.File]::OpenRead((Resolve-Path .\dist\WinAppGuardSetup.exe))
+          try {
+            $stream.Seek($stream.Length - 16, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $footer = New-Object byte[] 16
+            $stream.Read($footer, 0, 16) | Out-Null
+            $magic = [System.Text.Encoding]::ASCII.GetString($footer, 0, 8)
+            if ($magic -ne 'WAGPAY01') { throw "安装器缺少内置载荷" }
+          } finally {
+            $stream.Dispose()
+          }
+
+          $setupMB = [math]::Round((Get-Item .\dist\WinAppGuardSetup.exe).Length / 1MB, 1)
+          Write-Host "OK：4 个发布文件；Setup 内置载荷正常（$setupMB MB）"
 
       # 把产物传上去，方便手动下载来试
       - name: 上传构建产物

@@ -286,6 +286,10 @@ internal static class Program
             {
                 RunServiceAuditTest();
             }
+            else if (args.Contains("--service-tamper-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceTamperTest();
+            }
             else if (args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunUiOfflineRulesTest();
@@ -4213,6 +4217,156 @@ internal static class Program
         }
 
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 篡改防护（**需管理员 + 服务已运行**）：
+    /// 直接删掉一条规则的 WFP 过滤器 → 服务 10 秒内自动重建 → 分组也恢复；
+    /// 随后由服务自己删除该规则，确认**不会误报**。
+    /// </summary>
+    private static void RunServiceTamperTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempExe = Path.Combine(Path.GetTempPath(), $"wag-tamper-test-{Guid.NewGuid():N}.exe");
+
+        W("################################################################");
+        W("#   篡改防护（需管理员 + 服务已运行；删过滤器 → 自动重建，约 40 秒）#");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+
+            if (status is null)
+            {
+                CheckAssertion(results, "服务已安装并正在运行", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            File.Copy(Path.Combine(Environment.SystemDirectory, "whoami.exe"), tempExe, overwrite: true);
+
+            var add = Call(ServiceProtocol.Commands.AddProgramRule, new ServiceRequest
+            {
+                Value = tempExe,
+                Action = "block",
+                Expiry = string.Empty,
+                Scope = string.Empty,
+                Group = "篡改测试组",
+            }, out var addError);
+
+            if (add is not { Ok: true })
+            {
+                W($"    ！添加测试规则失败：{addError ?? add?.Error}");
+                CheckAssertion(results, "能创建测试规则", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            var before = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var rule = before?.Rules?.FirstOrDefault(item =>
+                string.Equals(item.Value, tempExe, StringComparison.OrdinalIgnoreCase));
+
+            CheckAssertion(results, "测试规则已创建并带分组",
+                rule is not null && rule.Group == "篡改测试组");
+
+            if (rule is null)
+            {
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            // ---- 模拟外部删除：直接删掉这条规则的所有过滤器 ----
+            var deleted = 0;
+
+            using (var engine = WfpEngine.Open())
+            {
+                var keys = engine.ListOurFilters()
+                    .Where(filter =>
+                        WfpRule.TryParse(filter.Description, out var parsed)
+                        && string.Equals(parsed.ApplicationPath, tempExe, StringComparison.OrdinalIgnoreCase))
+                    .Select(filter => filter.Key)
+                    .ToList();
+
+                foreach (var key in keys)
+                {
+                    engine.DeleteFilter(key);
+                    deleted++;
+                }
+            }
+
+            W($"    已直接删除 {deleted} 个过滤器（绕过服务）");
+            CheckAssertion(results, "确实删掉了过滤器", deleted > 0);
+
+            var afterDelete = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var stillThere = afterDelete?.Rules?.Any(item =>
+                string.Equals(item.Name, rule.Name, StringComparison.OrdinalIgnoreCase)) == true;
+
+            W($"    服务列表里仍在 = {stillThere}（预期 False）");
+            CheckAssertion(results, "外部删除后规则确实消失", !stillThere);
+
+            // ---- 等服务自动重建（检测周期 10 秒，给 25 秒余量）----
+            var rebuilt = WaitUntil(() =>
+            {
+                var list = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+                return list?.Rules?.Any(item =>
+                    string.Equals(item.Name, rule.Name, StringComparison.OrdinalIgnoreCase)) == true;
+            }, 25000);
+
+            W($"    25 秒内自动重建 = {rebuilt}");
+            CheckAssertion(results, "服务自动重建了被删的规则", rebuilt);
+
+            var afterRebuild = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var restored = afterRebuild?.Rules?.FirstOrDefault(item =>
+                string.Equals(item.Name, rule.Name, StringComparison.OrdinalIgnoreCase));
+
+            CheckAssertion(results, "重建后分组也恢复", restored?.Group == "篡改测试组");
+
+            var statusAfter = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+            W($"    服务累计重建 = {statusAfter?.TamperRebuiltCount} 条");
+            CheckAssertion(results, "服务状态记录了重建次数",
+                statusAfter is not null && statusAfter.TamperRebuiltCount > status.TamperRebuiltCount);
+
+            // ---- 服务自己删除：不应误报 ----
+            var countBeforeSelfDelete = statusAfter?.TamperRebuiltCount ?? 0;
+
+            _ = Call(ServiceProtocol.Commands.DeleteRule,
+                new ServiceRequest { RuleName = rule.Name }, out _);
+
+            Thread.Sleep(12000);
+
+            var statusFinal = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+            W($"    服务自己删除后累计重建 = {statusFinal?.TamperRebuiltCount}（应保持不变）");
+            CheckAssertion(results, "服务自己删除不触发误报",
+                statusFinal?.TamperRebuiltCount == countBeforeSelfDelete);
+        }
+        finally
+        {
+            try
+            {
+                var list = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+                var leftover = list?.Rules?.FirstOrDefault(item =>
+                    string.Equals(item.Value, tempExe, StringComparison.OrdinalIgnoreCase));
+
+                if (leftover is not null)
+                {
+                    _ = Call(ServiceProtocol.Commands.DeleteRule,
+                        new ServiceRequest { RuleName = leftover.Name }, out _);
+                }
+
+                if (File.Exists(tempExe))
+                {
+                    File.Delete(tempExe);
+                }
+            }
+            catch (Exception)
+            {
+                // 清理失败不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: true);
     }
 
     /// <summary>

@@ -54,6 +54,11 @@ internal sealed class WfpEngine : IDisposable
     /// </summary>
     internal bool SublayerPersistent { get; private set; }
 
+    /// <summary>子层是否已经加过保护性 DACL（每次打开引擎只需设一次）。</summary>
+    private bool _sublayerProtected;
+
+    private const uint DaclSecurityInformation = 0x00000004;
+
     /// <summary>本程序的子层 GUID。发布后不可更改。</summary>
     internal static Guid SubLayerKey => WfpNativeMethods.OurSubLayerKey;
 
@@ -112,6 +117,7 @@ internal sealed class WfpEngine : IDisposable
             if (rc == WfpNativeMethods.ERROR_SUCCESS)
             {
                 SublayerPersistent = persistent;
+                TryProtectSublayer();
                 return;
             }
 
@@ -121,6 +127,7 @@ internal sealed class WfpEngine : IDisposable
                 // （比如上一次创建的是非持久化子层，这次想建持久化的 —— 加不进去，
                 //   但后续过滤器必须按"非持久化"来处理，否则会 0x80320016。）
                 SublayerPersistent = ReadSublayer().Persistent;
+                TryProtectSublayer();
                 return;
             }
 
@@ -358,6 +365,8 @@ internal sealed class WfpEngine : IDisposable
             {
                 throw new WfpException($"添加 IP 过滤器（{address}）", rc);
             }
+
+            TryProtectFilter(filterKey);
 
             return id;
         }
@@ -660,6 +669,8 @@ internal sealed class WfpEngine : IDisposable
                 throw new WfpException($"添加过滤器（{displayName}）", rc);
             }
 
+            TryProtectFilter(filterKey);
+
             return id;
         }
         finally
@@ -707,6 +718,138 @@ internal sealed class WfpEngine : IDisposable
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(seed.ToLowerInvariant()));
         return new Guid(hash.AsSpan(0, 16));
     }
+
+    /// <summary>
+    /// 给子层与全部过滤器加保护性 DACL（3.0-c 篡改防护）。
+    ///
+    /// 只允许 <c>SYSTEM</c> 与 <c>Administrators</c> 完全控制；普通用户连读/删都会被拒。
+    /// 管理员仍然可以删（这是明确保留的能力，文档里写清）。
+    ///
+    /// 失败只记录、不抛出：不同 Windows 版本 / BFE 策略可能不允许设置安全描述符，
+    /// 不能因为"加固失败"就让规则功能整个不可用。服务本身以 SYSTEM 运行，
+    /// 即使 DACL 设置失败，也不会影响正常增删改。
+    /// </summary>
+    internal void ProtectOurObjects()
+    {
+        ThrowIfDisposed();
+
+        TryProtectSublayer();
+
+        try
+        {
+            foreach (var filter in ListOurFilters())
+            {
+                TryProtectFilter(filter.Key);
+            }
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"篡改防护：枚举过滤器以加固失败：{ex.Message}");
+        }
+    }
+
+    private void TryProtectSublayer()
+    {
+        if (_sublayerProtected)
+        {
+            return;
+        }
+
+        var key = WfpNativeMethods.OurSubLayerKey;
+        var descriptor = IntPtr.Zero;
+
+        try
+        {
+            descriptor = BuildProtectiveSd();
+
+            var rc = WfpNativeMethods.FwpmSubLayerSetSecurityInfoByKey0(
+                _handle, ref key, DaclSecurityInformation, descriptor);
+
+            if (rc == WfpNativeMethods.ERROR_SUCCESS)
+            {
+                _sublayerProtected = true;
+            }
+            else
+            {
+                LocalLog.Warning($"篡改防护：设置子层 DACL 失败：{WfpNativeMethods.DescribeError(rc)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"篡改防护：设置子层 DACL 异常：{ex.Message}");
+        }
+        finally
+        {
+            if (descriptor != IntPtr.Zero)
+            {
+                LocalFree(descriptor);
+            }
+        }
+    }
+
+    private void TryProtectFilter(Guid key)
+    {
+        var descriptor = IntPtr.Zero;
+
+        try
+        {
+            descriptor = BuildProtectiveSd();
+
+            var rc = WfpNativeMethods.FwpmFilterSetSecurityInfoByKey0(
+                _handle, ref key, DaclSecurityInformation, descriptor);
+
+            if (rc != WfpNativeMethods.ERROR_SUCCESS)
+            {
+                LocalLog.Warning($"篡改防护：设置过滤器 DACL 失败：{WfpNativeMethods.DescribeError(rc)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"篡改防护：设置过滤器 DACL 异常：{ex.Message}");
+        }
+        finally
+        {
+            if (descriptor != IntPtr.Zero)
+            {
+                LocalFree(descriptor);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 构造保护性安全描述符：DACL 里只有 SYSTEM 与 Administrators（完全控制）。
+    ///
+    /// 用 SDDL 让 Windows 自己生成合法的**自相对**安全描述符，
+    /// 比手工拼 ACE 更不容易在结构上出错。
+    /// </summary>
+    private static IntPtr BuildProtectiveSd()
+    {
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                "D:(A;;0xF01FF;;;SY)(A;;0xF01FF;;;BA)",
+                SddlRevision1,
+                out var descriptor,
+                out _))
+        {
+            throw new InvalidOperationException(
+                $"构造安全描述符失败：Win32 {Marshal.GetLastWin32Error()}");
+        }
+
+        return descriptor;
+    }
+
+    private const uint SddlRevision1 = 1;
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        string stringSecurityDescriptor,
+        uint stringSdRevision,
+        out IntPtr securityDescriptor,
+        out int securityDescriptorSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern IntPtr LocalFree(IntPtr memory);
 
     public void Dispose()
     {

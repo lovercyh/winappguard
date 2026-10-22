@@ -148,4 +148,12 @@ public sealed class ServiceStatus
 
     /// <summary>本次服务运行以来写入的记录条数。</summary>
     public int AuditEventsWritten { get; set; }
+
+    // ---- 3.0-c：篡改防护 ----
+
+    /// <summary>本次服务运行以来自动重建的规则条数（外部删除导致）。</summary>
+    public int TamperRebuiltCount { get; set; }
+
+    /// <summary>最近一次检测到规则被外部删除的时间（UTC）。</summary>
+    public DateTime? LastTamperUtc { get; set; }
 }

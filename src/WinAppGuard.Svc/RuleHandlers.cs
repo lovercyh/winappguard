@@ -1,6 +1,7 @@
 using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Service;
@@ -14,6 +15,22 @@ namespace WinAppGuard.Service;
 internal sealed class RuleHandlers
 {
     private readonly RuleGroupStore _groups = new(ServicePaths.RuleGroupsFile);
+
+    /// <summary>本次服务运行以来自动重建的规则条数。</summary>
+    private int _tamperRebuilt;
+
+    /// <summary>最近一次检测到外部删除的时间（UTC）。</summary>
+    private DateTime? _lastTamperUtc;
+
+    internal int TamperRebuiltCount
+    {
+        get { lock (Gate) { return _tamperRebuilt; } }
+    }
+
+    internal DateTime? LastTamperUtc
+    {
+        get { lock (Gate) { return _lastTamperUtc; } }
+    }
 
     /// <summary>
     /// WFP / 规则文件都不是线程安全的：管道每个连接一个线程，必须串行化。
@@ -175,6 +192,139 @@ internal sealed class RuleHandlers
             Affected = deleted,
             Status = ControlServer.BuildStatus(),
         };
+    }
+
+    /// <summary>
+    /// 篡改防护（3.0-c）：拿权威副本（rules.json）和实际过滤器比对。
+    ///
+    /// 规则被外部删除（刮掉过滤器、重建子层、第三方工具清理等）时：
+    ///   - 子层缺失 → 先重建子层；
+    ///   - 快照里有、实际没有的规则 → 按快照重建（跳过已到期的）；
+    ///   - 记录次数与时间，界面探测到后弹托盘提示。
+    ///
+    /// 服务自己的删除会先更新快照（在同一个锁里），不会误报。
+    /// </summary>
+    internal void CheckTamper()
+    {
+        lock (Gate)
+        {
+            try
+            {
+                var sublayerRecreated = false;
+
+                try
+                {
+                    using var probe = WfpEngine.Open();
+                    probe.ReadSublayer();
+                }
+                catch (Exception)
+                {
+                    using var probe = WfpEngine.Open();
+                    probe.EnsureSublayer(persistent: true);
+                    sublayerRecreated = true;
+                    ServiceLog.Warning("篡改防护：子层缺失，已重建。");
+                }
+
+                var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
+
+                if (snapshot is null || snapshot.Rules.Count == 0)
+                {
+                    return;
+                }
+
+                List<FirewallRuleItem> actual;
+
+                try
+                {
+                    actual = RuleEngine.GetRules();
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Warning($"篡改防护：读取实际规则失败：{ex.Message}");
+                    return;
+                }
+
+                var names = new HashSet<string>(
+                    actual.Select(rule => rule.Name), StringComparer.OrdinalIgnoreCase);
+
+                var missing = snapshot.Rules
+                    .Where(rule => !names.Contains(rule.Name))
+                    .ToList();
+
+                if (missing.Count == 0)
+                {
+                    if (sublayerRecreated)
+                    {
+                        _lastTamperUtc = DateTime.UtcNow;
+                    }
+
+                    return;
+                }
+
+                var rebuilt = 0;
+
+                foreach (var item in missing)
+                {
+                    try
+                    {
+                        var expiry = RuleExpiry.Parse(item.Expiry);
+
+                        if (expiry.IsExpired(
+                                DateTime.UtcNow, SystemUptime.BootTimeUtc, freshLogonSession: false))
+                        {
+                            // 本来就该到期了：不重建，让正常清理逻辑处理。
+                            continue;
+                        }
+
+                        string name;
+
+                        if (string.Equals(item.Kind, "ip", StringComparison.OrdinalIgnoreCase))
+                        {
+                            name = RuleEngine.CreateIpBlockRule(item.Value);
+                        }
+                        else
+                        {
+                            var scope = RuleScope.TryParse(item.Scope, out var parsed)
+                                ? parsed
+                                : RuleScope.Any;
+
+                            name = string.Equals(item.Action, "allow", StringComparison.OrdinalIgnoreCase)
+                                ? RuleEngine.CreateAllowRule(item.Value, expiry, scope)
+                                : RuleEngine.CreateBlockRule(item.Value, expiry, scope);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(item.Group))
+                        {
+                            _groups.SetGroup(name, item.Group);
+                        }
+
+                        rebuilt++;
+                    }
+                    catch (Exception ex)
+                    {
+                        ServiceLog.Warning($"篡改防护：重建 {item.Name} 失败：{ex.Message}");
+                    }
+                }
+
+                if (rebuilt > 0)
+                {
+                    _groups.Save();
+                    _tamperRebuilt += rebuilt;
+                    _lastTamperUtc = DateTime.UtcNow;
+
+                    // 白名单可能被重建过：严格模式会话要跟着更新。
+                    StrictModeHost.RefreshIfEnabled();
+
+                    SaveSnapshotNow();
+                    ServiceLog.Warning(
+                        $"篡改防护：检测到 {missing.Count} 条规则被外部删除，已自动重建 {rebuilt} 条。");
+                }
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning($"篡改防护检查失败：{ex.Message}");
+            }
+        }
     }
 
     /// <summary>

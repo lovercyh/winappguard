@@ -299,6 +299,22 @@ internal static class WfpNativeMethods
 
     [DllImport("fwpuclnt.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmSubLayerSetSecurityInfoByKey0(
+        IntPtr engineHandle,
+        ref Guid key,
+        uint securityInfo,
+        IntPtr securityDescriptor);
+
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmFilterSetSecurityInfoByKey0(
+        IntPtr engineHandle,
+        ref Guid key,
+        uint securityInfo,
+        IntPtr securityDescriptor);
+
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static extern uint FwpmSubLayerGetByKey0(
         IntPtr engineHandle,
         ref Guid key,

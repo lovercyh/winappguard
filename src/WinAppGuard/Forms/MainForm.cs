@@ -153,6 +153,9 @@ public partial class MainForm : Form
     /// <summary>旧版本的用户级审计设置是否已经迁移到服务（只做一次）。</summary>
     private bool _auditSettingsMigrated;
 
+    /// <summary>上次看到的"自动重建规则"计数（用于弹一次托盘提示）。-1 = 还没同步过。</summary>
+    private int _lastTamperRebuilt = -1;
+
     /// <summary>本次运行是否已经尝试过"自动拉起服务"（只试一次，避免反复弹 UAC）。</summary>
     private bool _triedAutoStartService;
 
@@ -4420,8 +4423,11 @@ public partial class MainForm : Form
 
     /// <summary>弹一个托盘气泡。系统通知被关掉时它不显示，但不影响功能，所以不用管返回值。</summary>
     private void ShowTrayBalloon(string title, string text)
+        => ShowTrayBalloon(title, text, ToolTipIcon.Info);
+
+    private void ShowTrayBalloon(string title, string text, ToolTipIcon icon)
     {
-        _trayIcon.ShowBalloonTip(5000, title, text, ToolTipIcon.Info);
+        _trayIcon.ShowBalloonTip(5000, title, text, icon);
     }
 
     private void OnTrayShowClick(object? sender, EventArgs e)
@@ -4803,7 +4809,26 @@ public partial class MainForm : Form
         _serviceStatusLabel.ToolTipText =
             $"服务版本 {status.ServiceVersion}，协议 v{status.ProtocolVersion}。\n" +
             $"子层{(status.SublayerPresent ? "存在" : "缺失")}；" +
-            $"阻止 {status.BlockRuleCount} / 允许 {status.AllowRuleCount} / IP {status.IpRuleCount}。";
+            $"阻止 {status.BlockRuleCount} / 允许 {status.AllowRuleCount} / IP {status.IpRuleCount}。" +
+            (status.TamperRebuiltCount > 0
+                ? $"\n已自动重建 {status.TamperRebuiltCount} 条被外部删除的规则" +
+                  (status.LastTamperUtc is { } last ? $"（最近 {last.ToLocalTime():MM-dd HH:mm}）" : string.Empty)
+                : string.Empty);
+
+        // 篡改提示：计数增加说明服务刚刚重建了规则（第一次同步不弹，避免启动即打扰）。
+        if (_lastTamperRebuilt >= 0 && status.TamperRebuiltCount > _lastTamperRebuilt)
+        {
+            var rebuilt = status.TamperRebuiltCount - _lastTamperRebuilt;
+
+            LocalLog.Warning($"检测到规则被外部删除：服务已自动重建 {rebuilt} 条。");
+            ShowTrayBalloon(
+                "规则被外部删除，已自动重建",
+                $"检测到 {rebuilt} 条规则被人从系统里删掉，已按权威副本恢复。\n" +
+                "如果这不是你做的，建议检查是谁在改动防火墙。",
+                ToolTipIcon.Warning);
+        }
+
+        _lastTamperRebuilt = status.TamperRebuiltCount;
     }
 
     private void LayoutSettingsSections()

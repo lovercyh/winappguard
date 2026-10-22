@@ -26,6 +26,7 @@ internal sealed class ControlServer : IDisposable
     private Thread? _thread;
     private bool _loggedReady;
     private System.Threading.Timer? _expiryTimer;
+    private System.Threading.Timer? _tamperTimer;
 
     internal void Start()
     {
@@ -44,8 +45,27 @@ internal sealed class ControlServer : IDisposable
             dueTime: TimeSpan.FromSeconds(3),
             period: TimeSpan.FromSeconds(30));
 
+        // 篡改检测：每 10 秒拿权威副本和实际过滤器比对（删了立即重建）。
+        _tamperTimer = new System.Threading.Timer(
+            _ => Rules.CheckTamper(),
+            state: null,
+            dueTime: TimeSpan.FromSeconds(15),
+            period: TimeSpan.FromSeconds(10));
+
         // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
         Rules.SaveSnapshotNow();
+
+        // 篡改防护：给子层 + 现有过滤器加保护性 DACL（普通用户不可删）。
+        try
+        {
+            using var engine = WfpEngine.Open();
+            engine.ProtectOurObjects();
+            ServiceLog.Info("篡改防护：已为子层与现有过滤器应用保护性 DACL。");
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning($"篡改防护：应用 DACL 失败（不影响规则功能）：{ex.Message}");
+        }
 
         // 审计采集随服务启动（设置里关着就不开）。
         AuditHost.StartIfEnabled();
@@ -66,6 +86,8 @@ internal sealed class ControlServer : IDisposable
 
         _expiryTimer?.Dispose();
         _expiryTimer = null;
+        _tamperTimer?.Dispose();
+        _tamperTimer = null;
 
         // 严格模式会话随服务一起撤销：停服务 = 立即恢复联网。
         StrictModeHost.Shutdown();
@@ -299,6 +321,9 @@ internal sealed class ControlServer : IDisposable
         status.AuditRetentionDays = audit.RetentionDays;
         status.AuditCollecting = AuditHost.Collecting;
         status.AuditEventsWritten = AuditHost.EventsWritten;
+
+        status.TamperRebuiltCount = Rules.TamperRebuiltCount;
+        status.LastTamperUtc = Rules.LastTamperUtc;
 
         return status;
     }

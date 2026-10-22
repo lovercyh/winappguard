@@ -147,6 +147,12 @@ WinAppGuard.exe --help                     # 用法
   ```
 - **exe 没有代码签名**，SmartScreen 会提示「未知发布者」，这属于预期情况，见下方常见问题
 
+## 安装 / 卸载
+
+- **双击 `WinAppGuardSetup.exe`**：未安装则安装，已安装则修复；会自动创建桌面快捷方式。
+- **双击 `WinAppGuardUninstall.exe`**：完整卸载（服务、规则、快捷方式、记录与设置、安装目录）。
+- 命令行：`WinAppGuardSetup.exe --install|--repair|--start-service|--uninstall`。
+
 ## 环境要求
 
 - Windows 10 / 11 x64

@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
+using WinAppGuard.Core.Wfp;
 
 namespace WinAppGuard.Setup;
 
@@ -18,6 +20,7 @@ internal static class Program
 {
     private const string UiExeName = "WinAppGuard.exe";
     private const string ServiceExeName = "WinAppGuardSvc.exe";
+    private const string UninstallerExeName = "WinAppGuardUninstall.exe";
 
     private static string InstallDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WinAppGuard");
@@ -48,10 +51,25 @@ internal static class Program
 
             if (args.Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
             {
-                return Uninstall(keepData: args.Contains("--keep-data", StringComparer.OrdinalIgnoreCase));
+                return Uninstall(
+                    keepData: args.Contains("--keep-data", StringComparer.OrdinalIgnoreCase));
+            }
+
+            if (args.Length == 0)
+            {
+                // 双击模式：
+                //   - 名字里带 Uninstall（WinAppGuardUninstall.exe）→ 交互式完整卸载；
+                //   - 否则 → 未安装就安装、已安装就修复（并确保桌面快捷方式存在）。
+                if (IsUninstallerInvocation())
+                {
+                    return RunUninstallerInteractive();
+                }
+
+                return RunSetupDefault();
             }
 
             PrintUsage();
+            PauseIfInteractive();
             return 0;
         }
         catch (Exception ex)
@@ -65,10 +83,13 @@ internal static class Program
     {
         Console.WriteLine("WinAppGuard 安装工具");
         Console.WriteLine();
+        Console.WriteLine("  双击 WinAppGuardSetup.exe            安装（未装）或修复（已装），并创建桌面快捷方式");
+        Console.WriteLine("  双击 WinAppGuardUninstall.exe        完整卸载（服务 / 规则 / 快捷方式 / 记录 / 设置 / 目录）");
+        Console.WriteLine();
         Console.WriteLine("  WinAppGuardSetup.exe --install     安装（复制文件 + 创建服务 + 启动）");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留规则与数据）");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service 只启动服务（顺带修正为「自动（不延迟）」）");
-        Console.WriteLine("  WinAppGuardSetup.exe --uninstall   卸载（停止/删除服务 + 删除本程序规则）");
+        Console.WriteLine("  WinAppGuardSetup.exe --uninstall   完整卸载（停止/删除服务 + 删除全部规则与数据）");
         Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard");
         Console.WriteLine();
         Console.WriteLine("安装器旁边必须同时有 WinAppGuard.exe 和 WinAppGuardSvc.exe。");
@@ -77,6 +98,9 @@ internal static class Program
     private static int Install()
     {
         var (uiSource, serviceSource) = LocatePayload();
+
+        // 覆盖安装时界面可能正开着，占用 exe；先结束它，否则复制会失败。
+        TryStopUiProcesses();
 
         Directory.CreateDirectory(InstallDirectory);
 
@@ -88,6 +112,9 @@ internal static class Program
 
         CopyPayload(uiSource, serviceSource);
         Console.WriteLine($"已复制到：{InstallDirectory}");
+
+        // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
+        ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -117,12 +144,12 @@ internal static class Program
 
         TryMigrateUserDataToService();
         TryRecoverLegacyStrictMode();
-        ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         Console.WriteLine("服务已启动。");
         Console.WriteLine();
         Console.WriteLine($"完成。界面程序：{Path.Combine(InstallDirectory, UiExeName)}");
         Console.WriteLine($"桌面快捷方式：{ShellShortcut.DesktopShortcutPath}");
+        Console.WriteLine($"卸载程序：{Path.Combine(InstallDirectory, UninstallerExeName)}");
         Console.WriteLine("卸载：WinAppGuardSetup.exe --uninstall");
         return 0;
     }
@@ -130,6 +157,8 @@ internal static class Program
     private static int Repair()
     {
         var (uiSource, serviceSource) = LocatePayload();
+
+        TryStopUiProcesses();
 
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -139,6 +168,7 @@ internal static class Program
 
         Directory.CreateDirectory(InstallDirectory);
         CopyPayload(uiSource, serviceSource);
+        ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -161,7 +191,6 @@ internal static class Program
         {
             TryMigrateUserDataToService();
             TryRecoverLegacyStrictMode();
-            ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
         }
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
@@ -323,63 +352,263 @@ internal static class Program
 
     private static int Uninstall(bool keepData)
     {
+        Console.WriteLine("停止界面进程…");
+        TryStopUiProcesses();
+
+        Console.WriteLine("删除开机自启任务…");
+        try
+        {
+            _ = AutoStartManager.Disable();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"删除开机自启任务失败（可手动在 taskschd.msc 删除）：{ex.Message}");
+        }
+
         ShellShortcut.DeleteDesktopShortcut();
 
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
             Console.WriteLine("停止服务…");
-            ServiceControl.Stop(ServiceProtocol.ServiceName);
+
+            try
+            {
+                ServiceControl.Stop(ServiceProtocol.ServiceName);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"停止服务失败（继续删除）：{ex.Message}");
+            }
 
             Console.WriteLine("删除服务…");
             ServiceControl.Uninstall(ServiceProtocol.ServiceName);
         }
 
-        // 默认删除规则：卸载后规则仍在 BFE 里生效是最容易被误解的状态。
-        var deleted = 0;
-        var rulesDeleted = false;
+        // 完整删除本程序在 WFP 里留下的对象（过滤器 + 子层）。
+        // 放在删服务之后：服务停止后文件句柄释放，子层也能删干净。
+        var rulesRecovered = false;
 
         try
         {
-            deleted = RuleEngine.DeleteAllRules();
-            rulesDeleted = true;
-            Console.WriteLine($"已删除 {deleted} 条由 WinAppGuard 创建的规则。");
+            var report = WfpRecovery.Recover();
+            rulesRecovered = true;
+            Console.WriteLine($"WFP 清理：{report.Describe()}");
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"删除规则失败：{ex.Message}");
-            Console.Error.WriteLine("服务已卸载，但规则可能仍存在。请稍后重试本工具，或运行 --recover。");
+            Console.Error.WriteLine($"删除 WFP 对象失败：{ex.Message}");
+            Console.Error.WriteLine("规则可能仍存在。请稍后重新运行卸载程序。");
         }
 
-        if (!keepData && Directory.Exists(DataDirectory))
+        if (!keepData)
         {
-            try
-            {
-                Directory.Delete(DataDirectory, recursive: true);
-                Console.WriteLine($"已删除数据目录：{DataDirectory}");
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"删除数据目录失败：{ex.Message}");
-            }
+            DeleteDirectoryIfExists(DataDirectory, "数据目录（记录 / 快照 / 设置）");
+
+            var localData = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppConstants.AppDataFolderName);
+
+            DeleteDirectoryIfExists(localData, "用户目录（界面设置 / 日志）");
         }
 
-        if (Directory.Exists(InstallDirectory))
+        var installDeleted = DeleteInstallDirectory();
+
+        Console.WriteLine();
+        Console.WriteLine(rulesRecovered && installDeleted
+            ? "卸载完成。"
+            : "卸载完成，但有部分内容未能删除（见上）。");
+
+        if (keepData)
         {
-            try
-            {
-                Directory.Delete(InstallDirectory, recursive: true);
-                Console.WriteLine($"已删除安装目录：{InstallDirectory}");
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"删除安装目录失败（可能有文件仍被占用）：{ex.Message}");
-                Console.Error.WriteLine("关闭界面程序后重试，或手动删除该目录。");
-            }
+            Console.WriteLine($"已保留数据目录：{DataDirectory}");
+        }
+
+        return rulesRecovered && installDeleted ? 0 : 3;
+    }
+
+    /// <summary>双击安装器（无参数）：未安装就装，已安装就修复。</summary>
+    private static int RunSetupDefault()
+    {
+        Console.WriteLine("WinAppGuard 安装工具（双击模式）");
+        Console.WriteLine();
+
+        var code = ServiceControl.IsInstalled(ServiceProtocol.ServiceName)
+            ? RepairWithBanner()
+            : InstallWithBanner();
+
+        PauseIfInteractive();
+        return code;
+    }
+
+    private static int InstallWithBanner()
+    {
+        Console.WriteLine("执行安装…");
+        Console.WriteLine();
+        return Install();
+    }
+
+    private static int RepairWithBanner()
+    {
+        Console.WriteLine("检测到已安装：执行修复（保留规则与数据）…");
+        Console.WriteLine();
+        return Repair();
+    }
+
+    /// <summary>双击卸载器（WinAppGuardUninstall.exe）：确认后完整卸载。</summary>
+    private static int RunUninstallerInteractive()
+    {
+        Console.WriteLine("WinAppGuard 卸载程序");
+        Console.WriteLine();
+        Console.WriteLine("将删除：");
+        Console.WriteLine("  - 防护服务 WinAppGuardSvc");
+        Console.WriteLine("  - 本程序创建的全部 WFP 规则与子层");
+        Console.WriteLine("  - 桌面快捷方式、开机自启任务");
+        Console.WriteLine("  - 记录 / 规则快照 / 设置（%ProgramData%\\WinAppGuard）");
+        Console.WriteLine("  - 界面设置与日志（%LOCALAPPDATA%\\WinAppGuard）");
+        Console.WriteLine("  - 安装目录（C:\\Program Files\\WinAppGuard）");
+        Console.WriteLine();
+        Console.Write("确定要完全卸载吗？[y/N] ");
+
+        if (Console.IsInputRedirected)
+        {
+            Console.WriteLine();
+            Console.Error.WriteLine("非交互模式请使用：WinAppGuardUninstall.exe --uninstall");
+            return 1;
+        }
+
+        var answer = Console.ReadLine()?.Trim();
+
+        if (!string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("已取消，未做任何修改。");
+            PauseIfInteractive();
+            return 0;
         }
 
         Console.WriteLine();
-        Console.WriteLine(rulesDeleted ? "卸载完成。" : "卸载完成，但规则未能全部删除（见上）。");
-        return rulesDeleted ? 0 : 3;
+        var code = Uninstall(keepData: false);
+        PauseIfInteractive();
+        return code;
+    }
+
+    private static bool IsUninstallerInvocation()
+    {
+        var name = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? string.Empty;
+        return name.Contains("Uninstall", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void TryStopUiProcesses()
+    {
+        foreach (var process in Process.GetProcessesByName("WinAppGuard"))
+        {
+            try
+            {
+                process.Kill();
+                process.WaitForExit(5000);
+                Console.WriteLine($"已结束界面进程（PID {process.Id}）。");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"结束界面进程失败（PID {process.Id}）：{ex.Message}");
+            }
+        }
+    }
+
+    private static void DeleteDirectoryIfExists(string path, string description)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+            Console.WriteLine($"已删除{description}：{path}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"删除{description}失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 删除安装目录。若当前 exe 就在目录里（安装器/卸载器本身），
+    /// 先删其它文件，再让 cmd 在本进程退出后删除剩下的目录。
+    /// </summary>
+    private static bool DeleteInstallDirectory()
+    {
+        if (!Directory.Exists(InstallDirectory))
+        {
+            return true;
+        }
+
+        var current = Environment.ProcessPath;
+        var inside = current is not null
+                     && current.StartsWith(
+                         InstallDirectory + Path.DirectorySeparatorChar,
+                         StringComparison.OrdinalIgnoreCase);
+
+        try
+        {
+            if (!inside)
+            {
+                Directory.Delete(InstallDirectory, recursive: true);
+                Console.WriteLine($"已删除安装目录：{InstallDirectory}");
+                return true;
+            }
+
+            foreach (var file in Directory.GetFiles(InstallDirectory))
+            {
+                if (!string.Equals(file, current, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Delete(file);
+                }
+            }
+
+            foreach (var directory in Directory.GetDirectories(InstallDirectory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+
+            var command = $"/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{InstallDirectory}\"";
+            Process.Start(new ProcessStartInfo("cmd.exe", command)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            });
+
+            Console.WriteLine("安装目录将在程序退出后删除。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"删除安装目录失败（可能有文件仍被占用）：{ex.Message}");
+            Console.Error.WriteLine("请关闭相关程序后重试，或手动删除该目录。");
+            return false;
+        }
+    }
+
+    private static void PauseIfInteractive()
+    {
+        if (Console.IsInputRedirected)
+        {
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("按任意键退出…");
+
+        try
+        {
+            Console.ReadKey(intercept: true);
+        }
+        catch (Exception)
+        {
+            // 没有控制台时忽略。
+        }
     }
 
     /// <summary>
@@ -444,6 +673,18 @@ internal static class Program
                 StringComparison.OrdinalIgnoreCase))
         {
             File.Copy(setupSource, setupTarget, overwrite: true);
+        }
+
+        // 卸载器（发布时由安装器副本改名而来）也装进去，用户随时可以完整卸载。
+        var uninstallSource = Path.Combine(AppContext.BaseDirectory, UninstallerExeName);
+        var uninstallTarget = Path.Combine(InstallDirectory, UninstallerExeName);
+
+        if (File.Exists(uninstallSource)
+            && !string.Equals(
+                Path.GetFullPath(uninstallSource), Path.GetFullPath(uninstallTarget),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            File.Copy(uninstallSource, uninstallTarget, overwrite: true);
         }
     }
 }

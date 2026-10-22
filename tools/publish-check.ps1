@@ -54,7 +54,7 @@ Copy-Item $exePath $distDir -Force
 
 # 3.0：把服务与安装器也放进 dist-tools，方便在虚拟机里跑 --service-install-test
 $distRoot = Join-Path $root 'dist'
-foreach ($name in @('WinAppGuardSvc.exe', 'WinAppGuardSetup.exe')) {
+foreach ($name in @('WinAppGuardSvc.exe', 'WinAppGuardSetup.exe', 'WinAppGuardUninstall.exe')) {
     $source = Join-Path $distRoot $name
     if (Test-Path $source) {
         Copy-Item $source $distDir -Force

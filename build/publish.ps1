@@ -1,4 +1,4 @@
-<#
+﻿<#
     WinAppGuard 单文件发布脚本
 
     用法（在项目根目录执行）：
@@ -68,6 +68,9 @@ foreach ($pair in @(
     Copy-Item $path $distDir -Force
 }
 
+# 卸载器：与安装器同一份二进制，文件名决定双击行为（完整卸载）
+Copy-Item (Join-Path $distDir 'WinAppGuardSetup.exe') (Join-Path $distDir 'WinAppGuardUninstall.exe') -Force
+
 $sizeMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuard.exe')).Length / 1MB, 1)
 $serviceMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSvc.exe')).Length / 1MB, 1)
 $setupMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSetup.exe')).Length / 1MB, 1)
@@ -75,5 +78,6 @@ Write-Host ''
 Write-Host "==> 完成：dist\WinAppGuard.exe  （$sizeMB MB）"
 Write-Host "           dist\WinAppGuardSvc.exe  （$serviceMB MB）"
 Write-Host "           dist\WinAppGuardSetup.exe  （$setupMB MB）"
+Write-Host "           dist\WinAppGuardUninstall.exe  （卸载器，双击完整卸载）"
 Write-Host '    安装：管理员运行 dist\WinAppGuardSetup.exe --install'
 Write-Host '    界面以普通权限运行；修改规则时才弹一次 UAC。'

@@ -17,7 +17,14 @@ public static class ServiceProtocol
     public const int Version = 1;
 
     /// <summary>单条消息上限（64 KB）。正常请求只有几百字节。</summary>
-    public const int MaxMessageBytes = 64 * 1024;
+    /// <summary>
+    /// 单条消息上限（4 MB）。
+    ///
+    /// 3.0-b 起 <c>write.rules.import</c> 会把整份规则文件交给服务，而规则文件本身
+    /// 允许到 2 MB（见 <c>RuleExport.MaxBytes</c>），64 KB 会直接把正常导入挡掉。
+    /// 读取方向的规则列表（几千条）同样可能超过 64 KB。
+    /// </summary>
+    public const int MaxMessageBytes = 4 * 1024 * 1024;
 
     /// <summary>服务显示名（安装/卸载、SCM 里看到的名字）。</summary>
     public const string ServiceName = "WinAppGuardSvc";
@@ -50,10 +57,14 @@ public static class ServiceProtocol
         public const string AddProgramRule = "write.rules.addProgram";
         public const string AddIpRule = "write.rules.addIp";
         public const string DeleteRule = "write.rules.delete";
+        public const string DeleteRulesForProgram = "write.rules.deleteForProgram";
         public const string ClearBlocklist = "write.rules.clearBlocklist";
         public const string ClearWhitelist = "write.rules.clearWhitelist";
         public const string SetGroup = "write.rules.setGroup";
         public const string ImportRules = "write.rules.import";
+
+        /// <summary>清理已到期的临时规则（服务端定时/界面启动时调用）。</summary>
+        public const string PurgeExpiredRules = "write.rules.purgeExpired";
 
         /// <summary>把界面本地（旧版本）的分组文件内容交给服务保存。</summary>
         public const string ImportGroups = "write.groups.import";

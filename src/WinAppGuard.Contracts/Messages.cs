@@ -34,6 +34,9 @@ public sealed class ServiceRequest
 
     /// <summary>导入文件内容 / 分组文件内容。</summary>
     public string? Json { get; set; }
+
+    /// <summary>清理到期规则时：本次是否是"刚登录"（决定「直到下次重启」类规则是否到期）。</summary>
+    public bool FreshLogonSession { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>

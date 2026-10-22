@@ -135,6 +135,7 @@ internal static class Program
                          && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ipc-codec-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
@@ -266,6 +267,10 @@ internal static class Program
             else if (args.Contains("--service-rules-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceRulesTest();
+            }
+            else if (args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunUiOfflineRulesTest();
             }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3583,6 +3588,67 @@ internal static class Program
     }
 
     /// <summary>
+    /// 服务不可用时的规则页只读状态（离线自检，不需要管理员、不需要服务）。
+    ///
+    /// 只测**界面状态机**：离线 → 写按钮全禁用 + 页首提示；恢复 → 按钮回来。
+    /// 真实的"服务被停掉"路径由 VM 手工验收覆盖。
+    /// </summary>
+    private static void RunUiOfflineRulesTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   规则页离线只读（离线自检；不需要管理员 / 服务）              #");
+        W("################################################################");
+        W();
+
+        MainForm.SuppressBackgroundServices = true;
+
+        using var form = new MainForm(isAutostart: false);
+        TrySetField(form, "_runtimeInitialized", true);
+
+        if (!TryGetField<Button>(form, "_rulesAddButton", out var addButton)
+            || !TryGetField<Button>(form, "_rulesImportButton", out var importButton)
+            || !TryGetField<Button>(form, "_whitelistAddButton", out var whitelistAdd)
+            || !TryGetField<Label>(form, "_rulesNoticeLabel", out var notice))
+        {
+            CheckAssertion(results, "找得到规则页的按钮与提示标签", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        // 模拟服务不可用
+        TrySetField(form, "_serviceAvailable", false);
+        InvokePrivate(form, "MarkRulesReadOnly", new object?[] { "测试：服务未运行" });
+        InvokePrivate(form, "UpdateRulesActionState", Array.Empty<object?>());
+        InvokePrivate(form, "UpdateWhitelistActionState", Array.Empty<object?>());
+        form.Refresh();
+
+        W($"    离线：加入={addButton.Enabled}，导入={importButton.Enabled}，" +
+          $"白名单加入={whitelistAdd.Enabled}");
+        W($"    提示：{(notice.Text ?? string.Empty).Replace("\r\n", " / ")}");
+
+        CheckAssertion(results, "离线时黑名单「加入」禁用", !addButton.Enabled);
+        CheckAssertion(results, "离线时「导入」禁用", !importButton.Enabled);
+        CheckAssertion(results, "离线时白名单「加入」禁用", !whitelistAdd.Enabled);
+        CheckAssertion(results, "离线提示写明只读",
+            (notice.Text ?? string.Empty).Contains("只读", StringComparison.Ordinal));
+
+        // 模拟服务恢复
+        TrySetField(form, "_serviceAvailable", true);
+        InvokePrivate(form, "RestoreRulesPageWritable", Array.Empty<object?>());
+        InvokePrivate(form, "UpdateRulesActionState", Array.Empty<object?>());
+        InvokePrivate(form, "UpdateWhitelistActionState", Array.Empty<object?>());
+        form.Refresh();
+
+        W($"    恢复：加入={addButton.Enabled}，导入={importButton.Enabled}");
+        CheckAssertion(results, "恢复后「加入」重新可用", addButton.Enabled);
+        CheckAssertion(results, "恢复后「导入」重新可用", importButton.Enabled);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
     /// IPC 身份边界（M1.5）：管理员能连上，普通用户连不上。
     ///
     /// 这个模式**刻意不自动提权** —— 否则普通用户一跑就被 UAC 提权，
@@ -4651,6 +4717,9 @@ internal static class Program
         results.Add(("单元格：拿不到路径的程序显示「—」（不谎称未放行）", CellTextOf(9004) == "—"));
 
         // ---------- 5. 按钮文字 / 菜单启用状态跟着选中行变 ----------
+        // 3.0-b 起写操作需要服务在线（离线时按钮一律禁用），这里按"服务可用"验证状态机。
+        _ = SetPrivateField(form, "_serviceAvailable", true);
+
         // 模拟「用户确实选中了一行」：置上确认标志，再选中目标行，然后跑真实的 UpdateActionState。
         if (!SetPrivateField(form, "_connectionSelectionConfirmed", true))
         {

@@ -129,10 +129,16 @@ public partial class MainForm : Form
     private string _whitelistKeyword = string.Empty;
     private string _whitelistSummaryBase = "白名单共 0 个程序";
 
-    // ---------- 2.4：规则分组 ----------
+    // ---------- 2.4：规则分组（3.0-b 起由服务持有，界面不再直接读写文件）----------
 
-    /// <summary>规则名 → 分组名（存在 rule-groups.json）。</summary>
-    private readonly RuleGroupStore _ruleGroups = new();
+    /// <summary>服务是否可用（可用 = 规则页可读写；不可用 = 只读）。</summary>
+    private bool _serviceAvailable;
+
+    /// <summary>旧分组文件是否已经迁移过（只做一次）。</summary>
+    private bool _groupsMigrated;
+
+    /// <summary>黑名单页的原始提示文案（离线时会被替换，恢复后还原）。</summary>
+    private string _rulesNoticeDefault = string.Empty;
 
     /// <summary>黑名单分组筛选：null = 全部；"" = 未分组；其它 = 具体分组。</summary>
     private string? _blockGroupFilter;
@@ -371,6 +377,8 @@ public partial class MainForm : Form
         KeyDown += OnMainFormKeyDown;
 
         ShowRuntimeStatus();
+
+        _rulesNoticeDefault = _rulesNoticeLabel.Text;
 
         // 探测防护服务（异步：服务没装/没起时不能拖慢启动）。
         ProbeServiceStatus();
@@ -828,7 +836,28 @@ public partial class MainForm : Form
     {
         try
         {
-            _appGuardRules = RuleEngine.GetRules();
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
+                TimeSpan.FromSeconds(3),
+                out var error);
+
+            if (response is not { Ok: true, Rules: not null })
+            {
+                // 服务不可用：规则页只读（3.0-b 起唯一写入路径是服务）。
+                _serviceAvailable = false;
+                _statusRulesLabel.Text = "防护服务未运行（规则只读）";
+                _rulesSummaryLabel.Text = "读取规则失败：服务不可用";
+                _whitelistSummaryLabel.Text = "读取规则失败：服务不可用";
+                MarkRulesReadOnly("防护服务未运行");
+                LocalLog.Warning($"读取规则失败（服务不可用）：{error ?? response?.Error}");
+                return;
+            }
+
+            _serviceAvailable = true;
+            _appGuardRules = response.Rules.Select(ToRuleItem).ToList();
+
+            // 3.0-b：把旧版本存在用户目录里的分组文件搬到服务（只做一次）。
+            MigrateGroupsOnce();
 
             _blockedPaths.Clear();
 
@@ -850,23 +879,6 @@ public partial class MainForm : Form
 
             _whitelistRules.Clear();
             _whitelistRules.AddRange(_appGuardRules.Where(rule => rule.Action == FirewallAction.Allow));
-
-            // 分组信息不在 WFP 规则里，存在本机 rule-groups.json：刷新时贴上去。
-            foreach (var rule in _rules)
-            {
-                rule.Group = _ruleGroups.GetGroup(rule.Name);
-            }
-
-            foreach (var rule in _whitelistRules)
-            {
-                rule.Group = _ruleGroups.GetGroup(rule.Name);
-            }
-
-            // 顺手清掉"规则已经被删、分组记录还留着"的孤儿条目。
-            if (_ruleGroups.Prune(_appGuardRules.Select(rule => rule.Name)) > 0)
-            {
-                _ruleGroups.Save();
-            }
 
             RefreshGroupFilters();
 
@@ -896,17 +908,158 @@ public partial class MainForm : Form
                     ? "当前：严格模式已开启 —— 白名单正在生效。"
                     : "当前：严格模式未开启 —— 白名单暂不生效。");
 
+            RestoreRulesPageWritable();
             UpdateRulesActionState();
             UpdateWhitelistActionState();
         }
         catch (Exception ex)
         {
-            _statusRulesLabel.Text = "读取防火墙规则失败";
-            _rulesSummaryLabel.Text = "读取防火墙规则失败";
-            _whitelistSummaryLabel.Text = "读取防火墙规则失败";
+            _statusRulesLabel.Text = "读取规则失败";
+            _rulesSummaryLabel.Text = "读取规则失败";
+            _whitelistSummaryLabel.Text = "读取规则失败";
 
-            ShowError("读取 Windows 防火墙规则失败", ex);
+            ShowError("读取规则失败", ex);
         }
+    }
+
+    /// <summary>把服务返回的 DTO 映射成界面用的规则项。</summary>
+    private static FirewallRuleItem ToRuleItem(RuleDto dto)
+    {
+        var isIp = string.Equals(dto.Kind, "ip", StringComparison.OrdinalIgnoreCase);
+
+        return new FirewallRuleItem
+        {
+            Name = dto.Name,
+            ApplicationPath = dto.Value,
+            IpAddress = isIp ? dto.Value : null,
+            Description = string.Empty,
+            Grouping = AppConstants.RuleGroupingName,
+            Enabled = dto.Enabled,
+            Action = string.Equals(dto.Action, "block", StringComparison.OrdinalIgnoreCase)
+                ? FirewallAction.Block
+                : FirewallAction.Allow,
+            Direction = FirewallDirection.Outbound,
+            Protocol = 256,
+            Expiry = RuleExpiry.Parse(dto.Expiry),
+            Scope = RuleScope.TryParse(dto.Scope, out var scope) ? scope : RuleScope.Any,
+            Group = dto.Group,
+        };
+    }
+
+    /// <summary>
+    /// 服务不可用：规则页只读。按钮全部禁用，并把原因写在页首。
+    /// 注意：**不做本地回退写入** —— 3.0 起规则的唯一写入路径是服务。
+    /// </summary>
+    private void MarkRulesReadOnly(string reason)
+    {
+        _rulesNoticeLabel.Text =
+            $"⚠ {reason}\r\n规则页面只读；启动或修复防护服务后即可恢复编辑，导出仍可使用。";
+
+        _rulesAddButton.Enabled = false;
+        _rulesGroupButton.Enabled = false;
+        _rulesImportButton.Enabled = false;
+        _rulesDeleteButton.Enabled = false;
+        _rulesDeleteAllButton.Enabled = false;
+
+        _whitelistAddButton.Enabled = false;
+        _whitelistGroupButton.Enabled = false;
+        _whitelistRemoveButton.Enabled = false;
+        _whitelistClearButton.Enabled = false;
+
+        _rulesHintLabel.Text = "服务未运行：规则只读";
+        _whitelistHintLabel.Text = "服务未运行：规则只读";
+    }
+
+    /// <summary>服务恢复后，把规则页的提示与按钮恢复（选中相关的状态由 Update*ActionState 负责）。</summary>
+    private void RestoreRulesPageWritable()
+    {
+        _rulesNoticeLabel.Text = _rulesNoticeDefault;
+        _rulesAddButton.Enabled = true;
+        _rulesImportButton.Enabled = true;
+        _whitelistAddButton.Enabled = true;
+    }
+
+    /// <summary>
+    /// 3.0-b 数据迁移：旧版本把分组存在用户目录，服务读不到。
+    /// 第一次成功连上服务时，把旧文件内容交给服务，成功后**删除旧文件**（移动语义）。
+    ///
+    /// 失败时保留旧文件，下次启动再试（不会丢分组）。
+    /// </summary>
+    private void MigrateGroupsOnce()
+    {
+        if (_groupsMigrated)
+        {
+            return;
+        }
+
+        _groupsMigrated = true;
+
+        try
+        {
+            var local = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppConstants.AppDataFolderName,
+                "rule-groups.json");
+
+            if (!File.Exists(local))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(local, Encoding.UTF8);
+
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ImportGroups, Json = json },
+                TimeSpan.FromSeconds(3),
+                out var error);
+
+            if (response is { Ok: true })
+            {
+                File.Delete(local);
+                LocalLog.Operation($"分组：已迁移 {response.Affected} 条到服务（旧文件已删除）");
+            }
+            else
+            {
+                LocalLog.Warning($"分组迁移失败（旧文件保留）：{response?.Error ?? error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"分组迁移失败（旧文件保留）：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 发一条写命令；失败时弹出原因并返回 null。
+    /// 统一在这里处理"服务没起 / 未提权 / 服务拒绝"，避免每个调用点各写一遍。
+    /// </summary>
+    private ServiceResponse? CallService(string command, ServiceRequest request, string actionName)
+    {
+        request.Command = command;
+
+        var response = ServiceClient.TryRequest(
+            request, TimeSpan.FromSeconds(3), out var error);
+
+        if (response is { Ok: true })
+        {
+            return response;
+        }
+
+        var reason = response?.Error ?? error ?? "防护服务没有响应。";
+        LocalLog.Warning($"{actionName}失败：{reason}");
+
+        MessageBox.Show(
+            this,
+            $"{actionName}失败：\n\n{reason}\n\n" +
+            (response is null
+                ? "连接不上防护服务：请确认它已安装并正在运行" +
+                  "（安装目录里的 WinAppGuardSetup.exe --repair）。"
+                : "服务拒绝了这次操作。如果是权限问题，请以管理员身份运行本程序。"),
+            AppConstants.AppName,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
+
+        return null;
     }
 
     /// <summary>
@@ -966,10 +1119,25 @@ public partial class MainForm : Form
             // freshLogonSession 传 _isAutostart：登录触发说明刚刚发生过一次登录，
             // 「直到下次重启」那类规则就该在这一刻解除（快速启动会让开机时长不归零，
             // 光靠开机时刻判断会漏掉，详见 RuleExpiry.IsExpired 的说明）。
-            var removed = RuleEngine.PurgeExpiredRules(
-                DateTime.UtcNow, SystemUptime.BootTimeUtc, freshLogonSession: _isAutostart);
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.PurgeExpiredRules,
+                    FreshLogonSession = _isAutostart,
+                },
+                TimeSpan.FromSeconds(5),
+                out var error);
 
-            NotifyExpiredBlocks(removed);
+            if (response is not { Ok: true })
+            {
+                // 启动阶段服务可能还没起来；这里不打扰用户，稍后的定时清理会再做。
+                LocalLog.Info($"启动清理跳过：{response?.Error ?? error}");
+                return;
+            }
+
+            NotifyExpiredBlocks(response.Rules?
+                .Select(item => (item.Name, item.Value))
+                .ToList() ?? new List<(string, string)>());
         }
         catch (Exception ex)
         {
@@ -1033,8 +1201,21 @@ public partial class MainForm : Form
 
         try
         {
-            var removed = await Task.Run(() =>
-                RuleEngine.PurgeExpiredRules(DateTime.UtcNow, SystemUptime.BootTimeUtc));
+            // 3.0-b：到期清理也是写操作，必须走服务。
+            // 后台定时调用，失败不弹窗（服务暂时不可用时每 3 秒弹一次会毁掉体验）。
+            var response = await Task.Run(() => ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.PurgeExpiredRules },
+                TimeSpan.FromSeconds(5),
+                out _));
+
+            if (response is not { Ok: true })
+            {
+                return;
+            }
+
+            var removed = response.Rules?
+                .Select(item => (item.Name, item.Value))
+                .ToList() ?? new List<(string, string)>();
 
             // await 期间窗口可能已经被关了。
             if (IsDisposed || Disposing)
@@ -1459,7 +1640,13 @@ public partial class MainForm : Form
     /// <summary>重建两个分组下拉框（保留用户当前的选择）。</summary>
     private void RefreshGroupFilters()
     {
-        var groups = _ruleGroups.AllGroups();
+        // 3.0-b：分组随规则一起从服务来 —— 去重后即为当前可用的分组清单。
+        var groups = _appGuardRules
+            .Select(rule => rule.Group)
+            .Where(group => !string.IsNullOrWhiteSpace(group))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         RebuildGroupCombo(_rulesGroupCombo, ref _blockGroupFilter, groups);
         RebuildGroupCombo(_whitelistGroupCombo, ref _allowGroupFilter, groups);
@@ -1695,6 +1882,15 @@ public partial class MainForm : Form
 
     private void UpdateWhitelistActionState()
     {
+        if (!_serviceAvailable)
+        {
+            _whitelistRemoveButton.Enabled = false;
+            _whitelistGroupButton.Enabled = false;
+            _whitelistClearButton.Enabled = false;
+            _whitelistHintLabel.Text = "服务未运行：规则只读";
+            return;
+        }
+
         var rule = GetConfirmedWhitelistRule();
 
         _whitelistRemoveButton.Enabled = rule is not null;
@@ -1802,8 +1998,23 @@ public partial class MainForm : Form
 
         try
         {
-            var ruleName = RuleEngine.CreateAllowRule(path, RuleExpiry.Never, scope);
-            LocalLog.Operation($"加入白名单：{path}（范围 {scope.Describe()}，规则 {ruleName}）");
+            var response = CallService(
+                ServiceProtocol.Commands.AddProgramRule,
+                new ServiceRequest
+                {
+                    Value = path,
+                    Action = "allow",
+                    Expiry = RuleExpiry.Never.Encode(),
+                    Scope = scope.Encode(),
+                },
+                "加入白名单");
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation($"加入白名单：{path}（范围 {scope.Describe()}）");
             AfterRulesChanged();
         }
         catch (Exception ex)
@@ -1854,7 +2065,16 @@ public partial class MainForm : Form
 
         try
         {
-            RuleEngine.DeleteRule(rule.Name);
+            var response = CallService(
+                ServiceProtocol.Commands.DeleteRule,
+                new ServiceRequest { RuleName = rule.Name },
+                "移出白名单");
+
+            if (response is null)
+            {
+                return;
+            }
+
             LocalLog.Operation($"移出白名单：{rule.ApplicationPath}（规则 {rule.Name}）");
             AfterRulesChanged();
         }
@@ -1913,8 +2133,17 @@ public partial class MainForm : Form
 
         try
         {
-            var deleted = RuleEngine.DeleteRulesByAction(FirewallAction.Allow);
-            LocalLog.Operation($"清空白名单：实际删除 {deleted} 条允许规则");
+            var response = CallService(
+                ServiceProtocol.Commands.ClearWhitelist,
+                new ServiceRequest(),
+                "清空白名单");
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation($"清空白名单：实际删除 {response.Affected} 条允许规则");
             AfterRulesChanged();
         }
         catch (Exception ex)
@@ -1941,22 +2170,33 @@ public partial class MainForm : Form
             return;
         }
 
-        var group = RuleGroupPrompt.Ask(DialogOwner, _ruleGroups.AllGroups(), rule.Group);
+        var existingGroups = _appGuardRules
+            .Select(item => item.Group)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var group = RuleGroupPrompt.Ask(DialogOwner, existingGroups, rule.Group);
 
         if (group is null)
         {
             return;
         }
 
-        _ruleGroups.SetGroup(rule.Name, group);
-        _ruleGroups.Save();
+        var response = CallService(
+            ServiceProtocol.Commands.SetGroup,
+            new ServiceRequest { RuleName = rule.Name, Group = group },
+            "修改分组");
+
+        if (response is null)
+        {
+            return;
+        }
 
         LocalLog.Operation($"规则分组：{rule.Name} → {(group.Length == 0 ? "未分组" : group)}");
 
-        rule.Group = group;
-        RefreshGroupFilters();
-        ApplyRulesFilter(CaptureRuleSelection());
-        ApplyWhitelistFilter(CaptureWhitelistSelection());
+        RefreshRulesFromFirewall();
     }
 
     /// <summary>导出全部规则（黑名单 + 白名单 + 封禁 IP），含分组。</summary>
@@ -1999,7 +2239,7 @@ public partial class MainForm : Form
 
         try
         {
-            var document = RuleExport.Build(_appGuardRules, _ruleGroups, scope);
+            var document = RuleExport.Build(_appGuardRules, scope);
             var json = RuleExport.Serialize(document);
 
             File.WriteAllText(dialog.FileName, json, new UTF8Encoding(false));
@@ -2121,7 +2361,7 @@ public partial class MainForm : Form
             return;
         }
 
-        ApplyImportedRules(document);
+        ApplyImportedRules(scope, json);
     }
 
     private static string DescribeImportEntry(RuleExportEntry entry)
@@ -2137,114 +2377,45 @@ public partial class MainForm : Form
     }
 
     /// <summary>
-    /// 真正创建导入的规则：全部走 <see cref="RuleEngine"/>，不绕过任何安全闸。
+    /// 真正创建导入的规则：**交给服务端**整份校验并落盘（3.0-b）。
+    /// 界面只负责预览与确认，不再自己创建规则 —— 受保护程序、路径校验都在服务里。
     /// </summary>
-    private void ApplyImportedRules(RuleExportDocument document)
+    private void ApplyImportedRules(FirewallAction scope, string json)
     {
-        var names = new HashSet<string>(
-            _appGuardRules.Select(rule => rule.Name),
-            StringComparer.OrdinalIgnoreCase);
+        var response = CallService(
+            ServiceProtocol.Commands.ImportRules,
+            new ServiceRequest
+            {
+                Action = scope == FirewallAction.Block ? "block" : "allow",
+                Json = json,
+            },
+            "导入规则");
 
-        var created = 0;
-        var existed = 0;
-        var protectedSkipped = 0;
-        var failed = 0;
-
-        foreach (var entry in document.Rules)
+        if (response is null)
         {
-            try
-            {
-                string ruleName;
-
-                if (entry.Kind == "ip")
-                {
-                    var ipRule = new WfpIpRule(entry.Value);
-                    ruleName = ipRule.DisplayName;
-
-                    if (names.Contains(ruleName))
-                    {
-                        existed++;
-                    }
-                    else
-                    {
-                        RuleEngine.CreateIpBlockRule(entry.Value);
-                        created++;
-                        names.Add(ruleName);
-                    }
-                }
-                else
-                {
-                    if (ProtectedProcesses.IsProtected(entry.Value, out _))
-                    {
-                        protectedSkipped++;
-                        continue;
-                    }
-
-                    var expiry = RuleExpiry.Parse(entry.Expiry);
-
-                    ruleName = entry.Action == "block"
-                        ? RuleNaming.BuildBlockRuleName(entry.Value)
-                        : RuleNaming.BuildAllowRuleName(entry.Value);
-
-                    if (names.Contains(ruleName))
-                    {
-                        existed++;
-                    }
-                    else
-                    {
-                        if (entry.Action == "block")
-                        {
-                            RuleEngine.CreateBlockRule(entry.Value, expiry);
-                        }
-                        else
-                        {
-                            RuleEngine.CreateAllowRule(entry.Value, expiry);
-                        }
-
-                        created++;
-                        names.Add(ruleName);
-                    }
-                }
-
-                if (entry.Group.Length > 0)
-                {
-                    _ruleGroups.SetGroup(ruleName, entry.Group);
-                }
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                LocalLog.Warning($"导入规则失败：{entry.Value} — {ex.Message}");
-            }
+            return;
         }
 
-        _ruleGroups.Save();
         AfterRulesChanged();
 
-        var lines = new List<string>
-        {
-            $"新建 {created} 条",
-            $"已存在跳过 {existed} 条",
-        };
+        var lines = new List<string> { $"新建 {response.Affected} 条" };
 
-        if (protectedSkipped > 0)
+        if (!string.IsNullOrWhiteSpace(response.Error))
         {
-            lines.Add($"受保护程序跳过 {protectedSkipped} 条");
-        }
-
-        if (failed > 0)
-        {
-            lines.Add($"失败 {failed} 条（详见日志）");
+            lines.Add(response.Error);
         }
 
         LocalLog.Operation($"导入规则：{string.Join("，", lines)}");
 
         MessageBox.Show(
             this,
-            "导入完成：\n\n" + string.Join(Environment.NewLine, lines.Select(line => "· " + line)),
+            "导入完成：\n\n" + string.Join(Environment.NewLine, lines.Select(line => "· " + line)) +
+            "\n\n已存在的同名规则会自动跳过；受保护程序也会跳过。",
             AppConstants.AppName,
             MessageBoxButtons.OK,
-            failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            string.IsNullOrWhiteSpace(response.Error)
+                ? MessageBoxIcon.Information
+                : MessageBoxIcon.Warning);
     }
 
     /// <summary>
@@ -2333,10 +2504,11 @@ public partial class MainForm : Form
         var isProtected = hasPath && ProtectedProcesses.IsProtected(item!.ProcessPath, out _);
 
         // 只有「有路径、当前没被阻止、且不是系统关键进程」才允许阻止。
-        var canBlock = hasPath && !isBlocked && !isProtected;
+        // 服务不可用时也不能改规则（3.0-b 起唯一写入路径是服务）。
+        var canBlock = _serviceAvailable && hasPath && !isBlocked && !isProtected;
 
         // 只有已经处于阻止状态，才有东西可以「允许」。
-        var canAllow = hasPath && isBlocked;
+        var canAllow = _serviceAvailable && hasPath && isBlocked;
 
         // 白名单状态：只认**本工具建的**允许规则。
         // 「已放行（系统/其它软件）」那种不是我们建的，我们也不会去删别人的规则，
@@ -2350,10 +2522,11 @@ public partial class MainForm : Form
         _menuCopyPath.Enabled = hasPath;
 
         // 白名单按钮/菜单项：文字跟着选中行走，两个菜单项按状态各自启用。
-        _whitelistButton.Enabled = hasPath;
+        // 服务不可用时白名单也是只读（写操作全部走服务）。
+        _whitelistButton.Enabled = _serviceAvailable && hasPath;
         _whitelistButton.Text = isWhitelistedByUs ? "移出白名单" : "加入白名单";
-        _menuWhitelistAdd.Enabled = hasPath && !isWhitelistedByUs;
-        _menuWhitelistRemove.Enabled = isWhitelistedByUs;
+        _menuWhitelistAdd.Enabled = _serviceAvailable && hasPath && !isWhitelistedByUs;
+        _menuWhitelistRemove.Enabled = _serviceAvailable && isWhitelistedByUs;
 
         _selectionHintLabel.Text = BuildSelectionHint(item, hasPath, isBlocked);
     }
@@ -2361,6 +2534,15 @@ public partial class MainForm : Form
     /// <summary>根据当前选中的规则，决定规则页哪些操作可用。</summary>
     private void UpdateRulesActionState()
     {
+        if (!_serviceAvailable)
+        {
+            _rulesDeleteButton.Enabled = false;
+            _rulesGroupButton.Enabled = false;
+            _rulesDeleteAllButton.Enabled = false;
+            _rulesHintLabel.Text = "服务未运行：规则只读";
+            return;
+        }
+
         var rule = GetConfirmedRule();
 
         _rulesDeleteButton.Enabled = rule is not null;
@@ -2857,10 +3039,24 @@ public partial class MainForm : Form
 
         try
         {
-            var createdRuleName = RuleEngine.CreateBlockRule(item.ProcessPath, chosenExpiry);
+            var response = CallService(
+                ServiceProtocol.Commands.AddProgramRule,
+                new ServiceRequest
+                {
+                    Value = item.ProcessPath,
+                    Action = "block",
+                    Expiry = chosenExpiry.Encode(),
+                    Scope = RuleScope.Any.Encode(),
+                },
+                "阻止联网");
+
+            if (response is null)
+            {
+                return;
+            }
 
             LocalLog.Operation(
-                $"阻止联网：{item.ProcessPath}（规则 {createdRuleName}，时长：{chosenExpiry.DescribeSchedule()}）");
+                $"阻止联网：{item.ProcessPath}（时长：{chosenExpiry.DescribeSchedule()}）");
 
             AfterRulesChanged();
         }
@@ -2953,8 +3149,23 @@ public partial class MainForm : Form
 
         try
         {
-            var ruleName = RuleEngine.CreateBlockRule(path, RuleExpiry.Never, scope);
-            LocalLog.Operation($"加入黑名单：{path}（范围 {scope.Describe()}，规则 {ruleName}）");
+            var response = CallService(
+                ServiceProtocol.Commands.AddProgramRule,
+                new ServiceRequest
+                {
+                    Value = path,
+                    Action = "block",
+                    Expiry = RuleExpiry.Never.Encode(),
+                    Scope = scope.Encode(),
+                },
+                "加入黑名单");
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation($"加入黑名单：{path}（范围 {scope.Describe()}）");
             AfterRulesChanged();
         }
         catch (Exception ex)
@@ -3022,8 +3233,17 @@ public partial class MainForm : Form
 
         try
         {
-            var deletedCount = RuleEngine.DeleteRulesForProgram(programPath);
-            LocalLog.Operation($"允许联网：{programPath}（删除 {deletedCount} 条规则）");
+            var response = CallService(
+                ServiceProtocol.Commands.DeleteRulesForProgram,
+                new ServiceRequest { Value = programPath },
+                "允许联网");
+
+            if (response is null)
+            {
+                return false;
+            }
+
+            LocalLog.Operation($"允许联网：{programPath}（删除 {response.Affected} 条规则）");
             AfterRulesChanged();
             return true;
         }
@@ -3127,8 +3347,23 @@ public partial class MainForm : Form
 
         try
         {
-            var created = RuleEngine.CreateAllowRule(programPath);
-            LocalLog.Operation($"加入白名单：{programPath}（规则 {created}）");
+            var response = CallService(
+                ServiceProtocol.Commands.AddProgramRule,
+                new ServiceRequest
+                {
+                    Value = programPath,
+                    Action = "allow",
+                    Expiry = RuleExpiry.Never.Encode(),
+                    Scope = RuleScope.Any.Encode(),
+                },
+                "加入白名单");
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation($"加入白名单：{programPath}");
             AfterRulesChanged();
         }
         catch (Exception ex)
@@ -3184,18 +3419,15 @@ public partial class MainForm : Form
 
         try
         {
-            var deleted = RuleEngine.DeleteRule(ruleName);
+            var response = CallService(
+                ServiceProtocol.Commands.DeleteRule,
+                new ServiceRequest { RuleName = ruleName },
+                "移出白名单");
 
-            if (!deleted)
+            if (response is null)
             {
-                // 规则已经不在了（可能在别处删过），缓存过期。同步一次再说。
+                // 规则可能已经在别处被删掉：同步一次，让界面回到真实状态。
                 AfterRulesChanged();
-                MessageBox.Show(
-                    this,
-                    $"「{programName}」的白名单规则已经不在了（可能已在别处删掉）。\n\n已重新同步防火墙规则状态。",
-                    AppConstants.AppName,
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
                 return;
             }
 
@@ -3249,7 +3481,16 @@ public partial class MainForm : Form
 
         try
         {
-            RuleEngine.DeleteRule(rule.Name);
+            var response = CallService(
+                ServiceProtocol.Commands.DeleteRule,
+                new ServiceRequest { RuleName = rule.Name },
+                "删除规则");
+
+            if (response is null)
+            {
+                return;
+            }
+
             LocalLog.Operation($"删除规则：{rule.Name}（程序 {rule.ApplicationPath}）");
             AfterRulesChanged();
         }
@@ -3335,13 +3576,22 @@ public partial class MainForm : Form
 
         try
         {
-            var deleted = RuleEngine.DeleteRulesByAction(FirewallAction.Block);
-            LocalLog.Operation($"清空黑名单：实际删除 {deleted} 条阻止规则");
+            var response = CallService(
+                ServiceProtocol.Commands.ClearBlocklist,
+                new ServiceRequest(),
+                "清空黑名单");
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation($"清空黑名单：实际删除 {response.Affected} 条阻止规则");
             AfterRulesChanged();
 
             MessageBox.Show(
                 this,
-                $"已清空黑名单，删除 {deleted} 条阻止规则。\n\n" +
+                $"已清空黑名单，删除 {response.Affected} 条阻止规则。\n\n" +
                 "这些程序现在可以重新联网；白名单和其它软件的规则没有受到影响。",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
@@ -4135,7 +4385,17 @@ public partial class MainForm : Form
                     return;
                 }
 
-                BeginInvoke(new Action(() => UpdateServiceStatusLabel(status)));
+                BeginInvoke(new Action(() =>
+                {
+                    UpdateServiceStatusLabel(status);
+
+                    // 服务从"不通"变成"通"：自动把规则页从只读恢复成可编辑，
+                    // 不需要用户手动点刷新（服务延迟启动时很常见）。
+                    if (status is not null && !_serviceAvailable && !IsDisposed)
+                    {
+                        RefreshRulesFromFirewall();
+                    }
+                }));
             }
             catch (Exception)
             {
@@ -4152,8 +4412,8 @@ public partial class MainForm : Form
             _serviceStatusLabel.Text = "服务：未运行（离线模式）";
             _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
             _serviceStatusLabel.ToolTipText =
-                "防护服务未安装或未运行：规则仍由本程序直接管理。\n" +
-                "3.0-b 起服务不可用时规则页只读。";
+                "防护服务未安装或未运行：规则页面只读（3.0-b 起规则的唯一写入路径是服务）。\n" +
+                "查看连接和导出仍然可用。";
             return;
         }
 

@@ -15,7 +15,21 @@ internal sealed class RuleHandlers
 {
     private readonly RuleGroupStore _groups = new(ServicePaths.RuleGroupsFile);
 
+    /// <summary>
+    /// WFP / 规则文件都不是线程安全的：管道每个连接一个线程，必须串行化。
+    /// 规则操作本身只有几毫秒，串行不会影响体验。
+    /// </summary>
+    private static readonly object Gate = new();
+
     internal ServiceResponse Handle(ServiceRequest request)
+    {
+        lock (Gate)
+        {
+            return HandleCore(request);
+        }
+    }
+
+    private ServiceResponse HandleCore(ServiceRequest request)
     {
         try
         {
@@ -27,10 +41,12 @@ internal sealed class RuleHandlers
                 ServiceProtocol.Commands.AddProgramRule => AddProgram(request),
                 ServiceProtocol.Commands.AddIpRule => AddIp(request),
                 ServiceProtocol.Commands.DeleteRule => Delete(request),
+                ServiceProtocol.Commands.DeleteRulesForProgram => DeleteForProgram(request),
                 ServiceProtocol.Commands.ClearBlocklist => Clear(request, FirewallAction.Block),
                 ServiceProtocol.Commands.ClearWhitelist => Clear(request, FirewallAction.Allow),
                 ServiceProtocol.Commands.SetGroup => SetGroup(request),
                 ServiceProtocol.Commands.ImportRules => Import(request),
+                ServiceProtocol.Commands.PurgeExpiredRules => PurgeExpired(request),
                 ServiceProtocol.Commands.ImportGroups => ImportGroups(request),
 
                 _ => Fail(request, $"不支持的命令：{request.Command}"),
@@ -143,6 +159,30 @@ internal sealed class RuleHandlers
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
     }
 
+    private ServiceResponse DeleteForProgram(ServiceRequest request)
+    {
+        var path = request.Value?.Trim() ?? string.Empty;
+
+        if (path.Length == 0)
+        {
+            return Fail(request, "没有提供程序路径。");
+        }
+
+        var deleted = RuleEngine.DeleteRulesForProgram(path);
+
+        if (deleted == 0)
+        {
+            return Fail(request, "该程序当前没有被本工具阻止。");
+        }
+
+        _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
+        _groups.Save();
+
+        ServiceLog.Info($"规则：解除阻止 {path}（删除 {deleted} 条）");
+
+        return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
+    }
+
     private ServiceResponse Clear(ServiceRequest request, FirewallAction action)
     {
         var deleted = RuleEngine.DeleteRulesByAction(action);
@@ -171,6 +211,30 @@ internal sealed class RuleHandlers
         ServiceLog.Info($"规则：分组 {name} → {(string.IsNullOrWhiteSpace(request.Group) ? "未分组" : request.Group)}");
 
         return new ServiceResponse { Id = request.Id, Ok = true };
+    }
+
+    private ServiceResponse PurgeExpired(ServiceRequest request)
+    {
+        var removed = RuleEngine.PurgeExpiredRules(
+            DateTime.UtcNow, SystemUptime.BootTimeUtc, request.FreshLogonSession);
+
+        if (removed.Count > 0)
+        {
+            _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
+            _groups.Save();
+
+            ServiceLog.Info($"规则：清理到期临时规则 {removed.Count} 条");
+        }
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Affected = removed.Count,
+            Rules = removed
+                .Select(item => new RuleDto { Name = item.RuleName, Value = item.ProgramPath })
+                .ToList(),
+        };
     }
 
     private ServiceResponse Import(ServiceRequest request)

@@ -1,3 +1,4 @@
+using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 
@@ -809,8 +810,17 @@ public sealed partial class MainForm
 
         try
         {
-            var created = RuleEngine.CreateIpBlockRule(normalized);
-            LocalLog.Operation($"封禁 IP：{normalized}（规则 {created}）");
+            var response = CallService(
+                ServiceProtocol.Commands.AddIpRule,
+                new ServiceRequest { Value = normalized },
+                "封禁 IP");
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation($"封禁 IP：{normalized}");
 
             AfterRulesChanged();
             RefreshAudit();
@@ -823,12 +833,35 @@ public sealed partial class MainForm
 
     private static bool Contains(string? text, string keyword)
         => !string.IsNullOrEmpty(text) && text.Contains(keyword, StringComparison.OrdinalIgnoreCase);
-    /// <summary>过滤器 ID → 规则名。取不到（例如没有管理员权限）时返回空表，不影响列表显示。</summary>
+    /// <summary>
+    /// 过滤器 ID → 规则名。3.0-b 起由服务提供（服务持有 WFP 访问权）；
+    /// 服务不可用时返回空表，记录页照常显示，只是不显示规则名。
+    /// </summary>
     private static Dictionary<ulong, string> TryGetFilterIdMap()
     {
         try
         {
-            return RuleEngine.GetFilterIdToRuleName();
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.FilterMap },
+                TimeSpan.FromSeconds(2),
+                out _);
+
+            if (response is not { Ok: true, FilterMap: not null })
+            {
+                return new Dictionary<ulong, string>();
+            }
+
+            var map = new Dictionary<ulong, string>();
+
+            foreach (var pair in response.FilterMap)
+            {
+                if (ulong.TryParse(pair.Key, out var id))
+                {
+                    map[id] = pair.Value;
+                }
+            }
+
+            return map;
         }
         catch (Exception)
         {

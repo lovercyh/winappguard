@@ -102,6 +102,36 @@ internal static class RuleExport
         return document;
     }
 
+    /// <summary>
+    /// 同上，但分组直接取规则项里的 <see cref="FirewallRuleItem.Group"/>。
+    /// 3.0-b 起界面通过服务拿到规则（分组随 DTO 一起来），不再持有分组存储。
+    /// </summary>
+    internal static RuleExportDocument Build(
+        IEnumerable<FirewallRuleItem> rules, FirewallAction scope)
+    {
+        var document = new RuleExportDocument
+        {
+            Scope = scope == FirewallAction.Block ? "block" : "allow",
+        };
+
+        foreach (var rule in rules.Where(rule => rule.Action == scope))
+        {
+            var isIp = !string.IsNullOrEmpty(rule.IpAddress);
+
+            document.Rules.Add(new RuleExportEntry
+            {
+                Kind = isIp ? "ip" : "program",
+                Value = isIp ? rule.IpAddress! : rule.ApplicationPath,
+                Action = rule.Action == FirewallAction.Block ? "block" : "allow",
+                Expiry = rule.Expiry.Encode(),
+                Group = rule.Group,
+                Scope = rule.Scope.Encode(),
+            });
+        }
+
+        return document;
+    }
+
     internal static string Serialize(RuleExportDocument document)
         => JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true });
 

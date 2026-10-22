@@ -94,6 +94,7 @@ Write-Host "    .\dist-tools\$exeName --service-ui-test    服务：状态显示
 Write-Host "    .\dist-tools\$exeName --service-install-test 服务：安装/查询/卸载（需管理员；会删除全部规则）"
 Write-Host "    .\dist-tools\$exeName --service-ping-test  服务：IPC 身份边界（查看免管理员 / 改动需提权）"
 Write-Host "    .\dist-tools\$exeName --service-rules-test 服务：规则增删/分组/导入（需管理员 + 服务已运行）"
+Write-Host "    .\dist-tools\$exeName --ui-offline-rules-test 界面：服务不可用时规则页只读（离线）"
 Write-Host "    .\dist-tools\$exeName --wfp-scope-test    规则：真实过滤器的端口条件（需管理员，只拦 43）"
 Write-Host "    .\dist-tools\$exeName --wfp-status        WFP：只读，打印当前规则与子层状态"
 Write-Host "    .\dist-tools\$exeName --wfp-test          WFP：地基（结构体 / 子层 / 过滤器 / 动态会话，需管理员）"

@@ -33,6 +33,9 @@ public static class ServiceProtocol
     {
         public const string Status = "status";
         public const string Ping = "ping";
+
+        /// <summary>鉴权探针：不做任何事，只回答"当前客户端是否已提权"。</summary>
+        public const string AuthCheck = "auth.check";
     }
 
     /// <summary>JSON 序列化选项（双方必须一致）。</summary>

@@ -3590,24 +3590,50 @@ internal static class Program
     {
         var results = new List<(string Title, bool Passed)>();
         var elevated = AdminHelper.IsRunningAsAdmin();
-        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1.5));
+
+        var statusResponse = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+            TimeSpan.FromSeconds(1.5),
+            out var statusError);
+        var status = statusResponse is { Ok: true } ? statusResponse.Status : null;
+
+        var authResponse = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.AuthCheck },
+            TimeSpan.FromSeconds(1.5),
+            out var authError);
 
         W("################################################################");
-        W("#   IPC 身份边界（管理员可连 / 普通用户不可连）                   #");
+        W("#   IPC 身份边界（查看免管理员 / 改动需提权）                     #");
         W("################################################################");
         W();
         W($"    当前身份 = {(elevated ? "管理员（已提权）" : "标准用户（未提权）")}");
-        W($"    连接结果 = {(status is null ? "连不上" : $"连上了（服务 v{status.ServiceVersion}）")}");
+        W($"    状态查询 = {(status is null ? "失败" : $"成功（服务 v{status.ServiceVersion}）")}");
+        W($"    鉴权探针 = {(authResponse is null ? "无响应" : authResponse.Ok ? "允许" : "拒绝")}");
+
+        if (statusError is not null)
+        {
+            W($"    状态错误 = {statusError}");
+        }
+        else if (statusResponse is { Ok: false })
+        {
+            W($"    状态被拒 = {statusResponse.Error}");
+        }
+
+        if (authError is not null)
+        {
+            W($"    探针错误 = {authError}");
+        }
+        else if (authResponse is { Ok: false })
+        {
+            W($"    探针被拒 = {authResponse.Error}");
+        }
+
         W();
 
-        if (elevated)
-        {
-            CheckAssertion(results, "管理员能查到服务状态（前提：服务已安装并运行）", status is not null);
-        }
-        else
-        {
-            CheckAssertion(results, "标准用户被拒绝（这是 M1.5 的预期边界）", status is null);
-        }
+        CheckAssertion(results, "查看状态不需要管理员（M1.5）", status is not null);
+        CheckAssertion(results,
+            elevated ? "管理员提权被识别" : "标准用户被识别为未提权",
+            authResponse is not null && authResponse.Ok == elevated);
 
         W("    提示：这个模式不会自动提权；请在两种账号下各跑一次。");
         PrintSummary(results, showFirewallResidue: false);

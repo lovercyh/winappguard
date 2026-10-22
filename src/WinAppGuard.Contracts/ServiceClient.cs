@@ -25,7 +25,18 @@ public static class ServiceClient
 
     /// <summary>发一条请求并等响应；失败返回 null。</summary>
     public static ServiceResponse? TryRequest(ServiceRequest request, TimeSpan timeout)
+        => TryRequest(request, timeout, out _);
+
+    /// <summary>
+    /// 发一条请求并等响应；失败返回 null，并通过 <paramref name="error"/>
+    /// 给出**真实原因**（连接被拒 / 找不到管道 / 超时 / 协议错误）。
+    /// 诊断用：界面不需要它，但自检要能说清"为什么连不上"。
+    /// </summary>
+    public static ServiceResponse? TryRequest(
+        ServiceRequest request, TimeSpan timeout, out string? error)
     {
+        error = null;
+
         try
         {
             using var cancellation = new CancellationTokenSource(timeout);
@@ -37,8 +48,9 @@ public static class ServiceClient
             return PipeCodec.ReadAsync<ServiceResponse>(pipe, cancellation.Token)
                 .GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            error = $"{ex.GetType().Name}: {ex.Message}";
             return null;
         }
     }

@@ -39,7 +39,24 @@ internal static class Program
 
         server.Start();
         Console.WriteLine("WinAppGuard 防护服务（控制台模式）。按 Enter 停止。");
-        Console.ReadLine();
+
+        if (Console.IsInputRedirected)
+        {
+            // 后台/自检场景没有 stdin：一直运行，直到 Ctrl+C。
+            using var stop = new ManualResetEventSlim(false);
+            Console.CancelKeyPress += (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                stop.Set();
+            };
+
+            stop.Wait();
+        }
+        else
+        {
+            Console.ReadLine();
+        }
+
         server.Stop();
     }
 }

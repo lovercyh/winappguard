@@ -137,6 +137,7 @@ internal static class Program
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
@@ -276,6 +277,14 @@ internal static class Program
             else if (args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunSnapshotTest();
+            }
+            else if (args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuditMigrateTest();
+            }
+            else if (args.Contains("--service-audit-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceAuditTest();
             }
             else if (args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3956,6 +3965,187 @@ internal static class Program
                 if (Directory.Exists(directory))
                 {
                     Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 服务端审计（**需管理员 + 服务已运行**）：不开界面，记录也必须继续。
+    /// 用一条本机回环连接做确定性验证（不联网、不改规则）。
+    /// </summary>
+    private static void RunServiceAuditTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var restore = new ServiceRequest();
+
+        W("################################################################");
+        W("#   服务端审计（需管理员 + 服务已运行；本机回环连接，约 10 秒）  #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var statusResponse = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                TimeSpan.FromSeconds(2),
+                out var statusError);
+
+            var status = statusResponse is { Ok: true } ? statusResponse.Status : null;
+
+            if (status is null)
+            {
+                W($"    ！服务不可用：{statusError}");
+                CheckAssertion(results, "服务已安装并正在运行", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            // 记住原设置，结束时恢复（机器级设置，不能测完就改掉）。
+            restore = new ServiceRequest
+            {
+                AuditEnabled = status.AuditEnabled,
+                AuditDomainLookup = status.AuditDomainLookup,
+                AuditRetentionDays = status.AuditRetentionDays,
+            };
+
+            var enable = Call(ServiceProtocol.Commands.AuditConfigure, new ServiceRequest
+            {
+                AuditEnabled = true,
+                AuditDomainLookup = false,
+            }, out var enableError);
+
+            W($"    开启采集：{(enable is null ? enableError : $"Ok={enable.Ok}")}");
+            CheckAssertion(results, "能通过 IPC 开启采集", enable is { Ok: true });
+            CheckAssertion(results, "服务状态显示正在采集",
+                enable?.Status?.AuditCollecting == true);
+
+            var baseline = CountAuditEvents();
+            W($"    测试前已有记录 = {baseline} 条");
+
+            // 本机回环连接：确定性高，不依赖外网。
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+            using var client = new TcpClient();
+            client.Connect(IPAddress.Loopback, port);
+
+            using var accepted = listener.AcceptTcpClient();
+
+            W($"    已建立本机连接 127.0.0.1:{port}，等待采集（约 8 秒）…");
+            Thread.Sleep(8000);
+
+            var events = ReadAuditEvents(3000);
+            var found = events.Any(item =>
+                item.RemotePort == port
+                && (item.RemoteAddress == "127.0.0.1" || item.RemoteAddress == "::1")
+                && item.ProcessPath.Contains("WinAppGuard.SelfCheck", StringComparison.OrdinalIgnoreCase));
+
+            W($"    记录总数 = {events.Count}（测试前 {baseline}）；找到测试连接 = {found}");
+            CheckAssertion(results, "服务在无人操作时仍在写记录", events.Count > baseline);
+            CheckAssertion(results, "记录里能找到刚才那条连接（含进程路径）", found);
+        }
+        finally
+        {
+            // 恢复原设置（失败也要尝试）。
+            try
+            {
+                _ = Call(ServiceProtocol.Commands.AuditConfigure, restore, out _);
+            }
+            catch (Exception)
+            {
+                // 恢复失败不影响结论，但会写进报告。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static int CountAuditEvents() => ReadAuditEvents(3000).Count;
+
+    private static IReadOnlyList<AuditEvent> ReadAuditEvents(int maxCount)
+    {
+        try
+        {
+            using var store = new AuditStore(ServicePaths.AuditDirectory);
+            return store.ReadRecent(maxCount);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！读取审计记录失败：{ex.Message}");
+            return Array.Empty<AuditEvent>();
+        }
+    }
+
+    /// <summary>
+    /// 审计记录迁移（离线）：复制 → 校验 → 删源；同名冲突不覆盖。
+    /// </summary>
+    private static void RunAuditMigrateTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var root = Path.Combine(Path.GetTempPath(), $"wag-migrate-{Guid.NewGuid():N}");
+        var source = Path.Combine(root, "local");
+        var target = Path.Combine(root, "programdata");
+
+        W("################################################################");
+        W("#   审计记录迁移（离线：复制 / 校验 / 删源 / 冲突保留）          #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Directory.CreateDirectory(source);
+            Directory.CreateDirectory(target);
+
+            File.WriteAllText(Path.Combine(source, "audit-2026-10-01-00.jsonl"), "{\"a\":1}\n");
+            File.WriteAllText(Path.Combine(source, "audit-2026-10-02-00.jsonl"), "{\"a\":2}\n");
+
+            var first = AuditMigration.Migrate(source, target);
+
+            W($"    第一次迁移：{first.Migrated} 成功 / {first.Failed} 失败");
+            CheckAssertion(results, "两个记录文件都迁移成功",
+                first is { Migrated: 2, Failed: 0 });
+            CheckAssertion(results, "目标文件内容一致",
+                File.ReadAllText(Path.Combine(target, "audit-2026-10-01-00.jsonl")).Contains("\"a\":1"));
+            CheckAssertion(results, "源文件已删除（方案 C 的删源步骤）",
+                Directory.GetFiles(source, "audit-*.jsonl").Length == 0);
+
+            // 同名同内容：去重删源，不报失败。
+            File.WriteAllText(Path.Combine(source, "audit-2026-10-01-00.jsonl"), "{\"a\":1}\n");
+            var duplicate = AuditMigration.Migrate(source, target);
+            CheckAssertion(results, "同名同内容视为已迁移（去重删源）",
+                duplicate is { Migrated: 1, Failed: 0 }
+                && !File.Exists(Path.Combine(source, "audit-2026-10-01-00.jsonl")));
+
+            // 同名不同内容：保留双方，报失败，绝不覆盖已有记录。
+            File.WriteAllText(Path.Combine(source, "audit-2026-10-02-00.jsonl"), "{\"a\":999}\n");
+            var conflict = AuditMigration.Migrate(source, target);
+
+            W($"    冲突迁移：{conflict.Migrated} 成功 / {conflict.Failed} 失败");
+            CheckAssertion(results, "同名不同内容保留双方并报失败",
+                conflict.Failed == 1
+                && File.Exists(Path.Combine(source, "audit-2026-10-02-00.jsonl"))
+                && File.ReadAllText(Path.Combine(target, "audit-2026-10-02-00.jsonl")).Contains("\"a\":2"));
+
+            var missing = AuditMigration.Migrate(Path.Combine(root, "不存在"), target);
+            CheckAssertion(results, "源目录不存在时安全返回",
+                missing is { Migrated: 0, Failed: 0 });
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
                 }
             }
             catch (Exception)

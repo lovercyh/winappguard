@@ -47,6 +47,9 @@ internal sealed class ControlServer : IDisposable
         // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
         Rules.SaveSnapshotNow();
 
+        // 审计采集随服务启动（设置里关着就不开）。
+        AuditHost.StartIfEnabled();
+
         ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}");
     }
 
@@ -66,6 +69,9 @@ internal sealed class ControlServer : IDisposable
 
         // 严格模式会话随服务一起撤销：停服务 = 立即恢复联网。
         StrictModeHost.Shutdown();
+
+        // 审计采集也停掉（记录文件先刷盘再关闭）。
+        AuditHost.Stop();
 
         _thread?.Join(3000);
         _thread = null;
@@ -187,7 +193,8 @@ internal sealed class ControlServer : IDisposable
             || request.Command == ServiceProtocol.Commands.AllowTargets
             || request.Command == ServiceProtocol.Commands.ImportGroups
             || request.Command.StartsWith("write.rules.", StringComparison.OrdinalIgnoreCase)
-            || request.Command.StartsWith("write.strict.", StringComparison.OrdinalIgnoreCase);
+            || request.Command.StartsWith("write.strict.", StringComparison.OrdinalIgnoreCase)
+            || request.Command.StartsWith("write.audit.", StringComparison.OrdinalIgnoreCase);
 
         // 鉴权探针：不做任何事，只回答"当前客户端有没有提权"。
         if (string.Equals(request.Command, ServiceProtocol.Commands.AuthCheck, StringComparison.Ordinal))
@@ -285,6 +292,13 @@ internal sealed class ControlServer : IDisposable
 
         status.StrictModeActive = StrictModeHost.IsEnabled;
         status.StrictModePermittedCount = StrictModeHost.PermittedCount;
+
+        var audit = AuditHost.Snapshot();
+        status.AuditEnabled = audit.Enabled;
+        status.AuditDomainLookup = audit.DomainLookup;
+        status.AuditRetentionDays = audit.RetentionDays;
+        status.AuditCollecting = AuditHost.Collecting;
+        status.AuditEventsWritten = AuditHost.EventsWritten;
 
         return status;
     }

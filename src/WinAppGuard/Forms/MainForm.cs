@@ -150,6 +150,9 @@ public partial class MainForm : Form
     /// <summary>1.x 遗留严格模式标志是否已经让服务处理过。</summary>
     private bool _legacyStrictRecoveryDone;
 
+    /// <summary>旧版本的用户级审计设置是否已经迁移到服务（只做一次）。</summary>
+    private bool _auditSettingsMigrated;
+
     /// <summary>本次运行是否已经尝试过"自动拉起服务"（只试一次，避免反复弹 UAC）。</summary>
     private bool _triedAutoStartService;
 
@@ -323,7 +326,6 @@ public partial class MainForm : Form
         SetupRulesGrid();
         SetupWhitelistGrid();
         InitializeAuditPage();
-        StartAuditIfEnabled();
 
         // 列宽用「预览线」拖动（自带的实时拖动在慢机器上会卡，见 GridColumnResizer）。
         _columnResizer = new GridColumnResizer(_connectionGrid);
@@ -445,6 +447,9 @@ public partial class MainForm : Form
             {
                 _strictModeEnabled = strictStatus.StrictModeActive;
                 _strictModePermittedCount = strictStatus.StrictModePermittedCount;
+
+                // 顺带把审计设置/采集状态同步到记录页（服务是唯一来源）。
+                ApplyAuditStatus(strictStatus);
             }
         }
 
@@ -495,8 +500,7 @@ public partial class MainForm : Form
             return;
         }
 
-        // 真正退出：停掉审计后台线程（它会刷盘并关闭文件）。
-        StopAuditService();
+        // 真正退出：停掉审计刷新定时器（采集在服务里，不随界面退出停止）。
         _auditTimer?.Stop();
         _auditTimer?.Dispose();
         _auditStore.Dispose();
@@ -940,6 +944,9 @@ public partial class MainForm : Form
 
                 // 1.x 遗留的严格模式标志（只处理一次；绝大多数机器上什么都不做）。
                 RecoverLegacyStrictModeOnce();
+
+                // 3.0-c：2.x 的审计设置存在用户目录，服务看不到；首次连上时搬过去。
+                MigrateAuditSettingsOnce();
             }
 
             _blockedPaths.Clear();
@@ -1142,6 +1149,56 @@ public partial class MainForm : Form
         {
             LocalLog.Warning($"分组迁移失败（旧文件保留，稍后重试）：{ex.Message}");
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// 3.0-c 设置迁移：2.x 的审计开关存在**用户**设置里，服务看不到。
+    ///
+    /// 只在服务的机器级设置文件还不存在时做一次：
+    /// 把当前用户的 AuditEnabled / 域名推测 / 保留期交给服务。
+    /// 之后一切以服务为准，用户设置不再写审计字段。
+    /// </summary>
+    private void MigrateAuditSettingsOnce()
+    {
+        if (_auditSettingsMigrated)
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(ServicePaths.AuditSettingsFile))
+            {
+                _auditSettingsMigrated = true;
+                return;
+            }
+
+            var local = AppSettings.Load();
+
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.AuditConfigure,
+                    AuditEnabled = local.AuditEnabled,
+                    AuditDomainLookup = local.AuditDomainLookupEnabled,
+                    AuditRetentionDays = local.AuditRetentionDays,
+                },
+                TimeSpan.FromSeconds(3),
+                out var error);
+
+            if (response is not { Ok: true })
+            {
+                LocalLog.Warning($"审计设置迁移失败（稍后重试）：{response?.Error ?? error}");
+                return;
+            }
+
+            _auditSettingsMigrated = true;
+            LocalLog.Operation("记录：已把旧版本的用户级设置迁移到服务。");
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning($"审计设置迁移失败（稍后重试）：{ex.Message}");
         }
     }
 
@@ -4725,12 +4782,19 @@ public partial class MainForm : Form
             _strictModeEnabled = false;
             _strictModePermittedCount = 0;
             RefreshStrictModeStatus();
+
+            // 审计采集也随服务停止；已有记录仍可读。
+            _auditCollecting = false;
+            UpdateAuditControlsEnabled();
             return;
         }
 
         _strictModeEnabled = status.StrictModeActive;
         _strictModePermittedCount = status.StrictModePermittedCount;
         RefreshStrictModeStatus();
+
+        // 审计设置 / 采集状态由服务给，界面只做显示与只读。
+        ApplyAuditStatus(status);
 
         _serviceStatusLabel.Text =
             $"服务：运行中 · {status.BlockRuleCount + status.AllowRuleCount} 条规则";

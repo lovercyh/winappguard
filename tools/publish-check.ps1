@@ -97,6 +97,8 @@ Write-Host "    .\dist-tools\$exeName --service-rules-test 服务：规则增删
 Write-Host "    .\dist-tools\$exeName --service-strict-test 服务：严格模式开启/停服务即撤销（需管理员 + 服务已运行）"
 Write-Host "    .\dist-tools\$exeName --ui-offline-rules-test 界面：服务不可用时规则页只读（离线）"
 Write-Host "    .\dist-tools\$exeName --snapshot-test      规则快照：原子写 / 往返 / 坏文件容错（离线）"
+Write-Host "    .\dist-tools\$exeName --audit-migrate-test 记录迁移：复制/校验/删源（离线）"
+Write-Host "    .\dist-tools\$exeName --service-audit-test 服务：无界面时仍在记录（需管理员 + 服务已运行）"
 Write-Host "    .\dist-tools\$exeName --wfp-scope-test    规则：真实过滤器的端口条件（需管理员，只拦 43）"
 Write-Host "    .\dist-tools\$exeName --wfp-status        WFP：只读，打印当前规则与子层状态"
 Write-Host "    .\dist-tools\$exeName --wfp-test          WFP：地基（结构体 / 子层 / 过滤器 / 动态会话，需管理员）"

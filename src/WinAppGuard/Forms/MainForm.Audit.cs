@@ -15,7 +15,7 @@ public sealed partial class MainForm
     private const int AuditRefreshIntervalMs = 3000;
     private const int AuditMaxDisplayedRows = 500;
 
-    private readonly AuditStore _auditStore = new();
+    private readonly AuditStore _auditStore = new(ServicePaths.AuditDirectory);
 
     private TextBox _auditSearchBox = null!;
     private CheckBox _auditBlockedOnlyCheck = null!;
@@ -25,10 +25,11 @@ public sealed partial class MainForm
     private CheckBox _auditDomainCheck = null!;
     private Label _auditStatusLabel = null!;
     private Label _auditDetailLabel = null!;
+    private Button _auditClearButton = null!;
     private DataGridViewBuffered _auditGrid = null!;
     private ContextMenuStrip? _auditMenu;
     private System.Windows.Forms.Timer? _auditTimer;
-    private AuditService? _auditService;
+    private bool _auditCollecting;
     private bool _loadingAuditSettings;
 
     /// <summary>上一次重建表格时的"数据签名"。相同就不再重建（避免每 3 秒打断用户选中/滚动）。</summary>
@@ -73,13 +74,13 @@ public sealed partial class MainForm
         };
         refreshButton.Click += (_, _) => RefreshAudit();
 
-        var clearButton = new Button
+        _auditClearButton = new Button
         {
             Location = new Point(440, 6),
             Width = 76,
             Text = "清空…",
         };
-        clearButton.Click += OnAuditClearClick;
+        _auditClearButton.Click += OnAuditClearClick;
 
         var openFolderButton = new Button
         {
@@ -154,7 +155,7 @@ public sealed partial class MainForm
             _auditSearchBox,
             _auditBlockedOnlyCheck,
             refreshButton,
-            clearButton,
+            _auditClearButton,
             openFolderButton,
             blockIpButton,
             addIpButton,
@@ -268,6 +269,7 @@ public sealed partial class MainForm
 
         _auditTimer.Start();
         RefreshAudit();
+        UpdateAuditControlsEnabled();
     }
 
     private static DataGridViewTextBoxColumn NewAuditColumn(string title, int width, int fillWeight)
@@ -282,42 +284,45 @@ public sealed partial class MainForm
     // 服务与设置
     // ==================================================================
 
-    private void StartAuditIfEnabled()
+    /// <summary>
+    /// 把服务返回的审计状态同步到界面控件。
+    ///
+    /// 只改内存里的 <c>_settings</c>（作为离线时的显示镜像），**不回写文件**：
+    /// 3.0-c 起机器级设置存在 ProgramData，由服务负责持久化。
+    /// </summary>
+    private void ApplyAuditStatus(ServiceStatus status)
     {
-        if (SuppressBackgroundServices || !_settings.AuditEnabled)
-        {
-            return;
-        }
+        _auditCollecting = status.AuditCollecting;
+
+        _settings.AuditEnabled = status.AuditEnabled;
+        _settings.AuditDomainLookupEnabled = status.AuditDomainLookup;
+        _settings.AuditRetentionDays = status.AuditRetentionDays;
+
+        _loadingAuditSettings = true;
 
         try
         {
-            _auditService = new AuditService(
-                pollSeconds: 3,
-                retentionDays: _settings.AuditRetentionDays,
-                allowDomainLookup: _settings.AuditDomainLookupEnabled);
-
-            _auditService.Start();
+            _auditEnabledCheck.Checked = status.AuditEnabled;
+            _auditDomainCheck.Checked = status.AuditDomainLookup;
+            _auditRetentionCombo.SelectedIndex = RetentionDaysToIndex(status.AuditRetentionDays);
         }
-        catch (Exception ex)
+        finally
         {
-            _auditService?.Dispose();
-            _auditService = null;
-            LocalLog.Error("启动审计服务失败", ex);
+            _loadingAuditSettings = false;
         }
+
+        UpdateAuditControlsEnabled();
+        RefreshAudit();
     }
 
-    private void StopAuditService()
+    /// <summary>服务不可用 / 记录关闭时，把不能用的控件灰掉（别让用户点了才发现失败）。</summary>
+    private void UpdateAuditControlsEnabled()
     {
-        try
-        {
-            _auditService?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            LocalLog.Warning($"停止审计服务时出错：{ex.Message}");
-        }
-
-        _auditService = null;
+        _auditEnabledCheck.Enabled = _serviceAvailable;
+        _auditDomainCheck.Enabled = _serviceAvailable && _settings.AuditEnabled;
+        _auditRetentionCombo.Enabled = _serviceAvailable && _settings.AuditEnabled;
+        _auditRetentionLabel.Enabled = _serviceAvailable;
+        _auditClearButton.Enabled = _serviceAvailable;
     }
 
     private void OnAuditEnabledChanged(object? sender, EventArgs e)
@@ -327,19 +332,64 @@ public sealed partial class MainForm
             return;
         }
 
-        _settings.AuditEnabled = _auditEnabledCheck.Checked;
-        _settings.Save();
+        var desired = _auditEnabledCheck.Checked;
 
-        _auditDomainCheck.Enabled = _settings.AuditEnabled;
-        _auditRetentionCombo.Enabled = _settings.AuditEnabled;
-
-        StopAuditService();
-
-        if (_settings.AuditEnabled)
+        if (SuppressBackgroundServices)
         {
-            StartAuditIfEnabled();
+            // 自检只验证控件状态，不碰服务（否则没有服务时会弹窗卡住）。
+            _settings.AuditEnabled = desired;
+            UpdateAuditControlsEnabled();
+            return;
         }
 
+        if (!_serviceAvailable)
+        {
+            RevertAuditControls();
+            return;
+        }
+
+        var response = CallService(
+            ServiceProtocol.Commands.AuditConfigure,
+            new ServiceRequest { AuditEnabled = desired },
+            "修改记录设置");
+
+        if (response is null)
+        {
+            RevertAuditControls();
+            return;
+        }
+
+        _settings.AuditEnabled = desired;
+        _settings.Save();
+
+        if (response.Status is not null)
+        {
+            ApplyAuditStatus(response.Status);
+        }
+        else
+        {
+            UpdateAuditControlsEnabled();
+            RefreshAudit();
+        }
+    }
+
+    /// <summary>操作失败：把控件退回服务/内存里的真实值，不留一个"看起来改了"的假开关。</summary>
+    private void RevertAuditControls()
+    {
+        _loadingAuditSettings = true;
+
+        try
+        {
+            _auditEnabledCheck.Checked = _settings.AuditEnabled;
+            _auditDomainCheck.Checked = _settings.AuditDomainLookupEnabled;
+            _auditRetentionCombo.SelectedIndex = RetentionDaysToIndex(_settings.AuditRetentionDays);
+        }
+        finally
+        {
+            _loadingAuditSettings = false;
+        }
+
+        UpdateAuditControlsEnabled();
         RefreshAudit();
     }
 
@@ -366,12 +416,10 @@ public sealed partial class MainForm
     };
 
     /// <summary>
-    /// 保留期改了：存盘 + 重建审计服务。
+    /// 保留期改了：交给服务重建采集。
     ///
-    /// 为什么必须重建：保留期是 <see cref="AuditStore"/> 的构造参数；
-    /// 不重建的话，界面显示"保留 1 天"、实际仍在按 7 天清理 —— 那就是**假开关**。
-    /// 重建时 <see cref="AuditService.Start"/> 会立刻按新保留期清一次，
-    /// 不需要等到下一个零点。
+    /// 为什么必须让服务重建：保留期是 <c>AuditService</c> 的构造参数；
+    /// 不重建的话，界面显示"保留 1 天"、实际仍按 7 天清理 —— 那就是**假开关**。
     /// </summary>
     private void OnAuditRetentionChanged(object? sender, EventArgs e)
     {
@@ -382,23 +430,47 @@ public sealed partial class MainForm
 
         var days = SelectedAuditRetentionDays();
 
+        if (SuppressBackgroundServices)
+        {
+            _settings.AuditRetentionDays = days;
+            return;
+        }
+
         if (_settings.AuditRetentionDays == days)
         {
             return;
         }
 
-        _settings.AuditRetentionDays = days;
-        _settings.Save();
-
-        LocalLog.Operation($"记录保留期：改为 {days} 天");
-
-        if (_settings.AuditEnabled)
+        if (!_serviceAvailable)
         {
-            StopAuditService();
-            StartAuditIfEnabled();
+            RevertAuditControls();
+            return;
         }
 
-        RefreshAudit();
+        var response = CallService(
+            ServiceProtocol.Commands.AuditConfigure,
+            new ServiceRequest { AuditRetentionDays = days },
+            "修改记录保留期");
+
+        if (response is null)
+        {
+            RevertAuditControls();
+            return;
+        }
+
+        _settings.AuditRetentionDays = days;
+        _settings.Save();
+        LocalLog.Operation($"记录保留期：改为 {days} 天");
+
+        if (response.Status is not null)
+        {
+            ApplyAuditStatus(response.Status);
+        }
+        else
+        {
+            UpdateAuditControlsEnabled();
+            RefreshAudit();
+        }
     }
 
     private void OnAuditDomainChanged(object? sender, EventArgs e)
@@ -408,14 +480,41 @@ public sealed partial class MainForm
             return;
         }
 
-        _settings.AuditDomainLookupEnabled = _auditDomainCheck.Checked;
+        var desired = _auditDomainCheck.Checked;
+
+        if (SuppressBackgroundServices)
+        {
+            _settings.AuditDomainLookupEnabled = desired;
+            return;
+        }
+
+        if (!_serviceAvailable)
+        {
+            RevertAuditControls();
+            return;
+        }
+
+        var response = CallService(
+            ServiceProtocol.Commands.AuditConfigure,
+            new ServiceRequest { AuditDomainLookup = desired },
+            "修改域名推测设置");
+
+        if (response is null)
+        {
+            RevertAuditControls();
+            return;
+        }
+
+        _settings.AuditDomainLookupEnabled = desired;
         _settings.Save();
 
-        // 域名开关是服务构造参数：必须重建服务才能生效。
-        if (_settings.AuditEnabled)
+        if (response.Status is not null)
         {
-            StopAuditService();
-            StartAuditIfEnabled();
+            ApplyAuditStatus(response.Status);
+        }
+        else
+        {
+            UpdateAuditControlsEnabled();
         }
     }
 
@@ -446,7 +545,7 @@ public sealed partial class MainForm
 
             // 数据没变就不重建：每 3 秒重建一次会把用户的选中和滚动位置打断。
             var lastTicks = events.Count > 0 ? events[^1].TimeUtc.Ticks : 0;
-            var signature = $"{events.Count}|{lastTicks}|{keyword}|{blockedOnly}|{_auditService is null}";
+            var signature = $"{events.Count}|{lastTicks}|{keyword}|{blockedOnly}|{_auditCollecting}|{_serviceAvailable}";
 
             if (string.Equals(signature, _auditLastSignature, StringComparison.Ordinal))
             {
@@ -550,8 +649,14 @@ public sealed partial class MainForm
 
             _auditStatusLabel.Text =
                 $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
-                $" · 保留 {_settings.AuditRetentionDays} 天" +
-                (_auditService is null ? " · 记录未开启" : " · 记录中");
+                $" · 保留 {_settings.AuditRetentionDays} 天 · " +
+                (!_serviceAvailable
+                    ? "服务未运行，记录已停止"
+                    : _auditCollecting
+                        ? "记录中"
+                        : _settings.AuditEnabled
+                            ? "记录未启动（详见日志）"
+                            : "记录未开启");
 
             _auditLastSignature = signature;
             UpdateAuditDetail();
@@ -660,32 +765,20 @@ public sealed partial class MainForm
             return;
         }
 
-        // ⚠️ 必须先停掉审计服务：它开着写入端时，Windows 不允许删除这些文件。
-        var wasRunning = _auditService is not null;
+        // 3.0-c：采集在服务里，删除也必须由服务做 ——
+        // 它开着写入端时 Windows 不允许删除这些文件。
+        var response = CallService(
+            ServiceProtocol.Commands.AuditClear,
+            new ServiceRequest(),
+            "清空记录");
 
-        if (wasRunning)
+        if (response is null)
         {
-            StopAuditService();
+            RefreshAudit();
+            return;
         }
 
-        var deleted = 0;
-
-        try
-        {
-            deleted = _auditStore.Clear();
-            LocalLog.Operation($"记录：用户清空了记录，删除 {deleted} 个文件");
-        }
-        catch (Exception ex)
-        {
-            ShowError("清空记录失败", ex);
-        }
-        finally
-        {
-            if (wasRunning)
-            {
-                StartAuditIfEnabled();
-            }
-        }
+        LocalLog.Operation($"记录：用户清空了记录，删除 {response.Affected} 个文件");
 
         RefreshAudit();
 
@@ -697,7 +790,7 @@ public sealed partial class MainForm
             MessageBox.Show(
                 this,
                 $"有 {remaining} 个记录文件删不掉（可能正被其它程序占用）。\n" +
-                $"已删除 {deleted} 个。\n\n" +
+                $"已删除 {response.Affected} 个。\n\n" +
                 $"可以稍后再试，或手动删除：\n{_auditStore.DirectoryPath}",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,

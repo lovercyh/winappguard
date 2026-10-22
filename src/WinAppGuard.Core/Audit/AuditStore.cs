@@ -43,7 +43,16 @@ internal sealed class AuditStore : IDisposable
         _maxFileBytes = maxFileBytes;
         _retentionDays = retentionDays;
 
-        Directory.CreateDirectory(DirectoryPath);
+        // 3.0-c：界面以普通权限读 ProgramData 里的记录时可能建不了目录；
+        // 这里失败不抛 —— 读取能力不受影响，写入失败会由 Append 计入 WriteFailures。
+        try
+        {
+            Directory.CreateDirectory(DirectoryPath);
+        }
+        catch (Exception)
+        {
+            // 读不到/建不了时保持原状，由调用方按"没有记录"处理。
+        }
     }
 
     /// <summary>审计文件所在目录。</summary>

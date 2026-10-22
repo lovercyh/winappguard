@@ -21,4 +21,7 @@ public static class ServicePaths
 
     /// <summary>审计记录目录（3.0-c 起由服务写入）。</summary>
     public static string AuditDirectory => Path.Combine(DataDirectory, "audit");
+
+    /// <summary>审计设置（机器级；服务读写）。</summary>
+    public static string AuditSettingsFile => Path.Combine(DataDirectory, "audit-settings.json");
 }

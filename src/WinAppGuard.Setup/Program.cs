@@ -1,6 +1,7 @@
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Audit;
 
 namespace WinAppGuard.Setup;
 
@@ -102,6 +103,9 @@ internal static class Program
         // 老版本装的是「自动（延迟启动）」：VM 实测经常起不来，这里统一修正。
         ServiceControl.EnsureAutoStartNoDelay(ServiceProtocol.ServiceName);
 
+        // 2.x 的审计记录在用户目录；服务读不到，装/修时顺手迁到 ProgramData。
+        TryMigrateAuditRecords();
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
@@ -145,6 +149,8 @@ internal static class Program
         // 覆盖安装不会重建服务：必须显式把「延迟启动」改掉。
         ServiceControl.EnsureAutoStartNoDelay(ServiceProtocol.ServiceName);
 
+        TryMigrateAuditRecords();
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
@@ -163,6 +169,32 @@ internal static class Program
     /// <summary>
     /// 只启动服务（界面在"离线"状态下调用；也用于把老版本的延迟启动修正掉）。
     /// </summary>
+    /// <summary>
+    /// 2.x 的审计记录迁移（方案 C：复制 → 校验 → 删源）。
+    /// 必须在服务启动前做：服务运行时会打开这些文件。
+    /// </summary>
+    private static void TryMigrateAuditRecords()
+    {
+        try
+        {
+            var source = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppConstants.AppDataFolderName,
+                "audit");
+
+            var result = AuditMigration.Migrate(source, ServicePaths.AuditDirectory);
+
+            if (result.Migrated > 0 || result.Failed > 0)
+            {
+                Console.WriteLine(result.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"记录迁移失败（不影响安装，源文件保留）：{ex.Message}");
+        }
+    }
+
     private static int StartServiceOnly()
     {
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))

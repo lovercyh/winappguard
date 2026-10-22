@@ -55,6 +55,9 @@ internal sealed class RuleHandlers
                 ServiceProtocol.Commands.StrictRefresh => StrictRefresh(request),
                 ServiceProtocol.Commands.StrictRecoverLegacy => StrictRecoverLegacy(request),
 
+                ServiceProtocol.Commands.AuditConfigure => AuditConfigure(request),
+                ServiceProtocol.Commands.AuditClear => AuditClear(request),
+
                 _ => Fail(request, $"不支持的命令：{request.Command}"),
             };
         }
@@ -124,6 +127,53 @@ internal sealed class RuleHandlers
             Ok = true,
             Message = result.Message,
             Affected = result.WasLeftOn ? 1 : 0,
+        };
+    }
+
+    private ServiceResponse AuditConfigure(ServiceRequest request)
+    {
+        var settings = AuditHost.Snapshot();
+
+        if (request.AuditEnabled is { } enabled)
+        {
+            settings.Enabled = enabled;
+        }
+
+        if (request.AuditDomainLookup is { } lookup)
+        {
+            settings.DomainLookup = lookup;
+        }
+
+        if (request.AuditRetentionDays is { } days)
+        {
+            settings.RetentionDays = days;
+        }
+
+        var applied = AuditHost.Apply(settings);
+
+        ServiceLog.Info(
+            $"记录：设置已更新（{(applied.Enabled ? "开" : "关")}，" +
+            $"保留 {applied.RetentionDays} 天，域名推测{(applied.DomainLookup ? "开" : "关")}）");
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Message = "记录设置已更新。",
+            Status = ControlServer.BuildStatus(),
+        };
+    }
+
+    private ServiceResponse AuditClear(ServiceRequest request)
+    {
+        var deleted = AuditHost.Clear();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Affected = deleted,
+            Status = ControlServer.BuildStatus(),
         };
     }
 

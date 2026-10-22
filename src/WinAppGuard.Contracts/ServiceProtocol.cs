@@ -82,6 +82,14 @@ public static class ServiceProtocol
 
         /// <summary>1.x 升级兜底：按界面传来的设置文件路径还原全局默认出站。</summary>
         public const string StrictRecoverLegacy = "write.strict.recoverLegacy";
+
+        // ---- 3.0-c：审计（采集在服务，界面只读）----
+
+        /// <summary>修改机器级审计设置（开关 / 域名推测 / 保留期）。</summary>
+        public const string AuditConfigure = "write.audit.configure";
+
+        /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
+        public const string AuditClear = "write.audit.clear";
     }
 
     /// <summary>JSON 序列化选项（双方必须一致）。</summary>

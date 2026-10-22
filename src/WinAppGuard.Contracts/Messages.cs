@@ -37,6 +37,14 @@ public sealed class ServiceRequest
 
     /// <summary>清理到期规则时：本次是否是"刚登录"（决定「直到下次重启」类规则是否到期）。</summary>
     public bool FreshLogonSession { get; set; }
+
+    // ---- 3.0-c：审计设置（null = 不改这一项）----
+
+    public bool? AuditEnabled { get; set; }
+
+    public bool? AuditDomainLookup { get; set; }
+
+    public int? AuditRetentionDays { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -125,4 +133,19 @@ public sealed class ServiceStatus
 
     /// <summary>严格模式当前放行的程序数量（3.0-c）。</summary>
     public int StrictModePermittedCount { get; set; }
+
+    /// <summary>审计开关（机器级设置）。</summary>
+    public bool AuditEnabled { get; set; }
+
+    /// <summary>审计采集是否真的在跑（服务实际状态）。</summary>
+    public bool AuditCollecting { get; set; }
+
+    /// <summary>审计设置：域名推测。</summary>
+    public bool AuditDomainLookup { get; set; }
+
+    /// <summary>审计设置：保留天数。</summary>
+    public int AuditRetentionDays { get; set; }
+
+    /// <summary>本次服务运行以来写入的记录条数。</summary>
+    public int AuditEventsWritten { get; set; }
 }

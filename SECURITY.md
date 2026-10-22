@@ -28,34 +28,42 @@ Please include:
 
 - What the problem is and how it can be triggered.
 - Which version you tested and your Windows build number.
-- The relevant lines from `%LOCALAPPDATA%\WinAppGuard\logs\` if the tool produced any.
+- The relevant lines from `%ProgramData%\WinAppGuard\logs\` (service) or `%LOCALAPPDATA%\WinAppGuard\logs\` (UI), if any.
 - Whether the tool had administrator rights at the time.
 
 ## What counts as a vulnerability here
+
+> 3.0 note: the service runs as SYSTEM and is the **only** writer of WFP rules.
+> Administrators can still stop the service or delete rules — that is an accepted,
+> documented capability, not a vulnerability. Ordinary users can read state but must
+> pass UAC for any write.
+
 
 This tool deliberately modifies system state, so the boundary matters.
 **Design intent — not a vulnerability:**
 
 | Behaviour | Why it is intended |
 | --------- | ------------------ |
-| Creating outbound block rules in Windows Firewall | That is the entire point of the tool |
-| Creating one scheduled task named `WinAppGuard` that runs at logon with highest privileges | That is how auto-start is implemented (required behaviour) |
+| Creating outbound WFP filters in WinAppGuard's own sublayer | That is the entire point of the tool |
+| Installing one Windows service `WinAppGuardSvc` (SYSTEM) and one scheduled task `WinAppGuard` (logon, highest privileges) | That is how protection survives closing the UI and how auto-start works |
 | Not deleting rules that do not start with `AppGuard_` | Deliberate safety guard |
 | Refusing to block `lsass.exe`, `svchost.exe`, WinAppGuard itself, etc. | Deliberate safety guard |
-| Blocking applies per executable path, so all instances of that path are affected | Windows Firewall works on paths, not PIDs |
+| Blocking applies per executable path, so all instances of that path are affected | WFP filters work on paths, not PIDs |
 | Changing no global firewall policy whatsoever | Enforced in code — see below |
 
 **Would be a vulnerability:**
 
-- Any code path that can create, modify, or delete a firewall rule whose name does
-  **not** start with `AppGuard_`.
+- Any code path that can create, modify, or delete a WFP filter **outside WinAppGuard's
+  own sublayer**, or a Windows Firewall rule.
+- Any action that lets a non-admin UI token perform a write without a UAC prompt
+  (M1.5: rule changes must go through the elevated helper).
 - Any code path that changes global firewall policy (enabling/disabling the firewall,
   changing default inbound/outbound actions).
-- Any code path that registers persistence other than the single scheduled task
-  named `WinAppGuard` (for example a registry `Run` key).
-- Any network traffic that goes to a destination **other than a certificate authority's CRL/OCSP
-  endpoint**, or that carries any data about the user or their machine. The default certificate
-  revocation lookup is intended and documented; anything beyond it is a vulnerability.
+- Any code path that registers persistence other than the `WinAppGuardSvc` service and
+  the single scheduled task `WinAppGuard` (for example a registry `Run` key).
+- Any network traffic that goes to a destination **other than the IP-ownership WHOIS
+  endpoint** (`whois.cymru.com:43`) or certificate revocation endpoints, or that carries
+  any data about the user or their machine.
 - Sending any user data anywhere, ever.
 - Any path traversal / argument injection that makes the tool operate on something
   other than the executable path the user selected.
@@ -74,11 +82,12 @@ WinAppGuard.SelfCheck.exe --audit
 The expected result for a released build:
 
 ```
-Referenced assemblies         25, all from the .NET framework   → no third-party libraries
-Networking types referenced   2 — TcpClient / NetworkStream     → the IP ownership lookup only
-Native API calls (P/Invoke)   16
-Network-related native calls  none                              → nothing bypasses the managed check
-Registry access               none
+Referenced assemblies         all from the .NET framework + own assemblies  → no third-party libraries
+Networking types referenced   TcpClient / NetworkStream only                → the IP ownership lookup
+Native API calls (P/Invoke)   listed per assembly
+Network-related native calls  none outside the documented paths
+Registry access               read-only service key (checks whether the service is installed)
+Compile-time isolation        UI and Core do NOT reference WinAppGuard.Wfp
 ```
 
 Since 1.2 this check no longer asserts "zero networking types" — it asserts that every networking
@@ -86,7 +95,11 @@ type is **on an expected list** (and that no one bypassed it via a direct `ws2_3
 P/Invoke). The reason is stated plainly in the README: the IP ownership lookup is real networking
 that the app performs itself, and pretending otherwise would make the audit worthless.
 
-Those 17 native calls are the complete set of non-managed functions the program can reach:
+3.0 splits the product into UI / Core / Wfp; `--audit` reads all three and fails if the UI or
+Core references the WFP assembly. The WFP implementation is still audited (and still lists its
+native imports) — it just is not part of the UI binary.
+
+Those native calls are the complete set of non-managed functions the program can reach:
 
 ```
 iphlpapi.dll!GetExtendedTcpTable                    read the TCP connection table

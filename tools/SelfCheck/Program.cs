@@ -141,6 +141,7 @@ internal static class Program
                          && !args.Contains("--auth-codec-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--protected-mode-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
@@ -334,6 +335,10 @@ internal static class Program
             else if (args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunUiOfflineRulesTest();
+            }
+            else if (args.Contains("--protected-mode-ui-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunProtectedModeUiTest();
             }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -8439,6 +8444,79 @@ internal static class Program
             && CliText.Usage.Contains("--unblock-all") && CliText.Usage.Contains("--help"));
         CheckAssertion(results, "帮助里写清了退出码", CliText.Usage.Contains("退出码"));
         CheckAssertion(results, "帮助里写清了确认框的例外", CliText.Usage.Contains("不会弹确认框"));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 界面三态（离线）：不是所有者 / 密钥不可用 / 未初始化。
+    /// 用反射设置 ProtectedModeClient 的状态，再走真实的 UpdateServiceStatusLabel。
+    /// </summary>
+    private static void RunProtectedModeUiTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var field = typeof(ProtectedModeClient).GetField(
+            "_status", BindingFlags.Static | BindingFlags.NonPublic);
+
+        W("################################################################");
+        W("#   受保护模式界面三态（不是所有者 / 密钥不可用 / 未初始化）      #");
+        W("################################################################");
+        W();
+
+        if (field is null)
+        {
+            CheckAssertion(results, "找得到受保护模式状态字段", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        MainForm.SuppressBackgroundServices = true;
+
+        using var form = new MainForm(isAutostart: false);
+        TrySetField(form, "_runtimeInitialized", true);
+
+        if (!TryGetField<Button>(form, "_rulesAddButton", out var addButton)
+            || !TryGetField<Label>(form, "_rulesNoticeLabel", out var notice)
+            || !TryGetField<ToolStripStatusLabel>(form, "_serviceStatusLabel", out var serviceLabel))
+        {
+            CheckAssertion(results, "找得到界面状态控件", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        void SetState(ProtectedModeStatus status)
+        {
+            field.SetValue(null, status);
+            InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { null });
+            form.Refresh();
+        }
+
+        SetState(new ProtectedModeStatus(
+            ProtectedModeState.NotOwner, "OTHER\\user", "S-1-5-21-1",
+            null, "不是所有者"));
+        W($"    不是所有者：{serviceLabel.Text}");
+        CheckAssertion(results, "不是所有者：状态栏写明原因",
+            (serviceLabel.Text ?? string.Empty).Contains("不是所有者"));
+        CheckAssertion(results, "不是所有者：规则加入禁用", !addButton.Enabled);
+        CheckAssertion(results, "不是所有者：提示写明只读",
+            (notice.Text ?? string.Empty).Contains("只读"));
+        CheckAssertion(results, "不是所有者：状态栏不可点击启动",
+            !serviceLabel.IsLink);
+
+        SetState(new ProtectedModeStatus(
+            ProtectedModeState.KeyUnavailable, "VM\\VM", "S-1-5-21-1",
+            null, "DPAPI 解不开"));
+        W($"    密钥不可用：{serviceLabel.Text}");
+        CheckAssertion(results, "密钥不可用：状态栏写明原因",
+            (serviceLabel.Text ?? string.Empty).Contains("密钥不可用"));
+        CheckAssertion(results, "密钥不可用：规则加入禁用", !addButton.Enabled);
+
+        SetState(new ProtectedModeStatus(
+            ProtectedModeState.NotInitialized, null, null, null, "未初始化"));
+        W($"    未初始化：{serviceLabel.Text}");
+        CheckAssertion(results, "未初始化：状态栏写明原因",
+            (serviceLabel.Text ?? string.Empty).Contains("未初始化"));
+        CheckAssertion(results, "未初始化：规则加入禁用", !addButton.Enabled);
 
         PrintSummary(results, showFirewallResidue: false);
     }

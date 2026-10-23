@@ -1,3 +1,5 @@
+using WinAppGuard.Contracts;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
@@ -55,12 +57,21 @@ internal static class CliRunner
 
                 try
                 {
-                    // 命令行也可能面对一台从 1.x 升级上来的机器：
-                    // 先把旧规则迁过来，后面的读写才是完整的一幅图。
-                    // （--migrate 自己会做并打印报告；--recover 是要清空，更不能先迁移。）
-                    if (options.Kind is not (CommandKind.Migrate or CommandKind.Recover))
+                    // 3.1：block / list / unblock 改为签名 IPC，不再直接写 WFP。
+                    // migrate / recover 是管理员恢复命令，保留直接 WFP（文档写明）。
+                    if (options.Kind is CommandKind.Block
+                        or CommandKind.ListBlocked
+                        or CommandKind.UnblockAll)
                     {
-                        StartupMigration.RunIfNeeded(out _);
+                        if (!ProtectedModeClient.TryConfigureSigner(
+                                out _, out var authError))
+                        {
+                            Console.Error.WriteLine(
+                                $"当前账户不是所有者，或密钥不可用：{authError}");
+                            Console.Error.WriteLine(
+                                "请用安装时的所有者账户运行；密钥损坏时用 --rotate-key 重建。");
+                            return ExitFailed;
+                        }
                     }
 
                     return options.Kind switch
@@ -87,12 +98,44 @@ internal static class CliRunner
 
     private static int RunBlock(string programPath)
     {
-        var fullPath = TryResolvePath(programPath);
+        // 路径校验仍在客户端做一次（服务端会再做一次，安全闸没有放宽）。
+        var fullPath = FirewallManager.ValidateProgramPath(programPath, forBlocking: true);
 
-        // 非法路径这里返回 false（不抛），所以正好拿来判断"是不是已经拦过了"。
-        var alreadyBlocked = RuleEngine.IsProgramBlocked(fullPath);
+        var before = QueryRules(out var queryError);
 
-        var ruleName = RuleEngine.CreateBlockRule(fullPath);
+        if (before is null)
+        {
+            Console.Error.WriteLine($"读取规则失败：{queryError}");
+            return ExitFailed;
+        }
+
+        var alreadyBlocked = before.Any(rule =>
+            string.Equals(rule.Action, "block", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(rule.Value, fullPath, StringComparison.OrdinalIgnoreCase));
+
+        var response = ServiceClient.TryRequest(
+            new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.AddProgramRule,
+                Value = fullPath,
+                Action = "block",
+            },
+            TimeSpan.FromSeconds(15),
+            out var error);
+
+        if (response is not { Ok: true })
+        {
+            Console.Error.WriteLine($"阻止失败：{response?.Error ?? error}");
+            return ExitFailed;
+        }
+
+        // 服务不返回规则名；再查一次，保持原来的输出格式。
+        var after = QueryRules(out _);
+        var ruleName = after?
+            .FirstOrDefault(rule =>
+                string.Equals(rule.Action, "block", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(rule.Value, fullPath, StringComparison.OrdinalIgnoreCase))?
+            .Name ?? "(服务未返回规则名)";
 
         Console.WriteLine(alreadyBlocked
             ? $"该程序已经在阻止列表中：{fullPath}"
@@ -106,8 +149,18 @@ internal static class CliRunner
 
     private static int RunListBlocked()
     {
-        var all = RuleEngine.GetRules();
-        var blocked = all.Where(rule => rule.Action == FirewallAction.Block).ToList();
+        var all = QueryRules(out var error);
+
+        if (all is null)
+        {
+            Console.Error.WriteLine($"读取规则失败：{error}");
+            return ExitFailed;
+        }
+
+        var blocked = all
+            .Where(rule => string.Equals(
+                rule.Action, "block", StringComparison.OrdinalIgnoreCase))
+            .ToList();
         var allowCount = all.Count - blocked.Count;
 
         Console.Write(CliText.BuildListBlockedOutput(blocked, allowCount, BuildVersionText()));
@@ -121,7 +174,13 @@ internal static class CliRunner
         // 否则紧接着把白名单删光，等于让整台机器断网。
         var recovery = StrictModeManager.RecoverIfLeftOn();
 
-        var rules = RuleEngine.GetRules();
+        var rules = QueryRules(out var error);
+
+        if (rules is null)
+        {
+            Console.Error.WriteLine($"读取规则失败：{error}");
+            return ExitFailed;
+        }
 
         if (rules.Count == 0)
         {
@@ -145,7 +204,18 @@ internal static class CliRunner
             return ExitUsage;
         }
 
-        var deleted = RuleEngine.DeleteAllRules();
+        var response = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.ClearAllRules },
+            TimeSpan.FromSeconds(30),
+            out var deleteError);
+
+        if (response is not { Ok: true })
+        {
+            Console.Error.WriteLine($"删除失败：{response?.Error ?? deleteError}");
+            return ExitFailed;
+        }
+
+        var deleted = response.Affected;
 
         Console.WriteLine();
         Console.WriteLine($"已删除 {deleted} 条规则。");
@@ -158,6 +228,22 @@ internal static class CliRunner
 
         LocalLog.Operation($"命令行：删除全部 AppGuard 规则，实际删除 {deleted} 条");
         return ExitOk;
+    }
+
+    private static List<RuleDto>? QueryRules(out string? error)
+    {
+        var response = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
+            TimeSpan.FromSeconds(15),
+            out error);
+
+        if (response is not { Ok: true })
+        {
+            error = response?.Error ?? error ?? "服务没有返回规则。";
+            return null;
+        }
+
+        return response.Rules ?? new List<RuleDto>();
     }
 
     /// <summary>

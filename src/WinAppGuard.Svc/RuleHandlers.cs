@@ -78,6 +78,7 @@ internal sealed class RuleHandlers
                 ServiceProtocol.Commands.DeleteRulesForProgram => DeleteForProgram(request),
                 ServiceProtocol.Commands.ClearBlocklist => Clear(request, FirewallAction.Block),
                 ServiceProtocol.Commands.ClearWhitelist => Clear(request, FirewallAction.Allow),
+                ServiceProtocol.Commands.ClearAllRules => ClearAll(request),
                 ServiceProtocol.Commands.SetGroup => SetGroup(request),
                 ServiceProtocol.Commands.ImportRules => Import(request),
                 ServiceProtocol.Commands.PurgeExpiredRules => PurgeExpired(request),
@@ -569,6 +570,23 @@ internal sealed class RuleHandlers
 
         SaveSnapshotNow();
         ServiceLog.Info($"规则：清空{(action == FirewallAction.Block ? "黑名单" : "白名单")} {deleted} 条");
+
+        return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
+    }
+
+    /// <summary>CLI --unblock-all：删除本工具创建的全部规则（阻止 + 允许 + IP）。</summary>
+    private ServiceResponse ClearAll(ServiceRequest request)
+    {
+        var deleted = RuleEngine.DeleteAllRules();
+
+        _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
+        _groups.Save();
+
+        // 白名单可能被一起删掉；严格模式会话要重建。
+        StrictModeHost.RefreshIfEnabled();
+
+        SaveSnapshotNow();
+        ServiceLog.Info($"规则：CLI 清空全部规则 {deleted} 条");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
     }

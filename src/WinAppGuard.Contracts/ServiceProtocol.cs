@@ -66,6 +66,9 @@ public static class ServiceProtocol
         public const string DeleteRulesForProgram = "write.rules.deleteForProgram";
         public const string ClearBlocklist = "write.rules.clearBlocklist";
         public const string ClearWhitelist = "write.rules.clearWhitelist";
+
+        /// <summary>删除本工具创建的全部规则（CLI --unblock-all）。</summary>
+        public const string ClearAllRules = "write.rules.clearAll";
         public const string SetGroup = "write.rules.setGroup";
         public const string ImportRules = "write.rules.import";
 

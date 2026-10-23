@@ -1,4 +1,5 @@
 using System.Text;
+using WinAppGuard.Contracts;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
@@ -43,6 +44,13 @@ public static class CliText
     public static string FormatRuleLine(FirewallRuleItem rule)
         => $"{rule.Name}\t{rule.ApplicationPath}\t{rule.ExpiryText}";
 
+    /// <summary>3.1：服务返回的 DTO 版本（CLI 不再直接读 WFP）。</summary>
+    public static string FormatRuleLine(RuleDto rule)
+    {
+        var expiry = RuleExpiry.Parse(rule.Expiry).Describe(DateTime.UtcNow);
+        return $"{rule.Name}\t{rule.Value}\t{expiry}";
+    }
+
     /// <summary>
     /// 生成 <c>--list-blocked</c> 的完整输出。
     /// </summary>
@@ -84,8 +92,53 @@ public static class CliText
         return builder.ToString();
     }
 
+    /// <summary>3.1：服务 DTO 版本的 --list-blocked 输出。</summary>
+    public static string BuildListBlockedOutput(
+        IReadOnlyList<RuleDto> blockedRules, int allowRuleCount, string version)
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine($"# WinAppGuard {version} —— 已阻止的程序：{blockedRules.Count} 条");
+        builder.AppendLine("# 规则名\t程序路径\t自动解除");
+
+        if (blockedRules.Count == 0)
+        {
+            builder.AppendLine("# （没有阻止规则）");
+        }
+        else
+        {
+            foreach (var rule in blockedRules)
+            {
+                builder.AppendLine(FormatRuleLine(rule));
+            }
+        }
+
+        if (allowRuleCount > 0)
+        {
+            builder.AppendLine(
+                $"# 另有 {allowRuleCount} 条「允许」规则（白名单），本命令不列出；"
+                + "要管理它们在图形界面的「规则」页里看。");
+        }
+
+        return builder.ToString();
+    }
+
     /// <summary>生成 <c>--unblock-all</c> 的"待删除清单"。</summary>
     public static string BuildUnblockPreview(IReadOnlyList<FirewallRuleItem> rules)
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine($"# 将要删除这 {rules.Count} 条 AppGuard 规则：");
+        foreach (var rule in rules)
+        {
+            builder.AppendLine(FormatRuleLine(rule));
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>3.1：服务 DTO 版本的 --unblock-all 预览。</summary>
+    public static string BuildUnblockPreview(IReadOnlyList<RuleDto> rules)
     {
         var builder = new StringBuilder();
 

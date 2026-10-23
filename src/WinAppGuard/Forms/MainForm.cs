@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Forms;
@@ -4493,10 +4494,13 @@ public partial class MainForm : Form
                     {
                         RefreshRulesFromFirewall();
                     }
-                    else if (status is null)
+                    else if (status is null
+                             && ProtectedModeClient.CurrentStatus.State
+                                == ProtectedModeState.Ready)
                     {
                         // 服务没起来：如果界面已经是管理员、且服务已安装，顺手拉一次。
                         // （非管理员时不主动弹 UAC —— 用户点状态栏的"点击启动"即可。）
+                        // 不是所有者/密钥不可用时不要尝试启动，那只会制造误导。
                         MaybeAutoStartService();
                     }
                 }));
@@ -4513,6 +4517,61 @@ public partial class MainForm : Form
     {
         if (status is null)
         {
+            // 3.1：先说明“为什么连不上”——不是所有者 / 密钥不可用 / 未初始化，
+            // 而不是一律显示“服务未运行”，让用户去点启动。
+            var protectedMode = ProtectedModeClient.CurrentStatus;
+
+            if (protectedMode.State != ProtectedModeState.Ready)
+            {
+                var (text, tooltip, reason, ruleReason) = protectedMode.State switch
+                {
+                    ProtectedModeState.NotOwner => (
+                        "受保护模式：当前账户不是所有者（离线模式，界面只读）",
+                        "只有安装 WinAppGuard 时的账户能使用服务。\n"
+                        + "请用所有者账户登录；或由管理员运行 WinAppGuardSetup.exe --reset-owner。",
+                        "受保护模式：当前账户不是所有者",
+                        "当前账户不是所有者（规则只读）"),
+                    ProtectedModeState.KeyUnavailable => (
+                        "受保护模式：密钥不可用（离线模式，界面只读）",
+                        "密钥文件缺失，或 DPAPI 解不开。\n"
+                        + "请以所有者身份运行 WinAppGuardSetup.exe --rotate-key 重建密钥。",
+                        "受保护模式：密钥不可用",
+                        "密钥不可用（规则只读）"),
+                    ProtectedModeState.ConfigBroken => (
+                        "受保护模式：配置损坏（离线模式，界面只读）",
+                        "受保护模式配置无法读取或校验失败。\n"
+                        + "请以所有者身份运行 WinAppGuardSetup.exe --repair。",
+                        "受保护模式：配置损坏",
+                        "受保护模式配置损坏（规则只读）"),
+                    _ => (
+                        "服务：未运行（离线模式）—— 受保护模式未初始化",
+                        "还没有受保护模式密钥。\n"
+                        + "请运行 WinAppGuardSetup.exe --install/--repair。",
+                        "受保护模式未初始化",
+                        "受保护模式未初始化（规则只读）"),
+                };
+
+                _serviceStatusLabel.Text = text;
+                _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
+                _serviceStatusLabel.IsLink = false;
+                _serviceStatusLabel.ToolTipText = tooltip;
+
+                _serviceAvailable = false;
+                _statusRulesLabel.Text = ruleReason;
+                MarkRulesReadOnly(reason);
+                UpdateRulesActionState();
+                UpdateWhitelistActionState();
+                UpdateActionState();
+
+                _strictModeEnabled = false;
+                _strictModePermittedCount = 0;
+                RefreshStrictModeStatus();
+
+                _auditCollecting = false;
+                UpdateAuditControlsEnabled();
+                return;
+            }
+
             var installed = ServiceIsInstalled();
 
             _serviceStatusLabel.Text = installed

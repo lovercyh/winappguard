@@ -97,6 +97,7 @@ Write-Host "    .\dist-tools\$exeName --service-rules-test 服务：规则增删
 Write-Host "    .\dist-tools\$exeName --service-strict-test 服务：严格模式开启/停服务即撤销（需管理员 + 服务已运行）"
 Write-Host "    .\dist-tools\$exeName --ui-offline-rules-test 界面：服务不可用时规则页只读（离线）"
 Write-Host "    .\dist-tools\$exeName --snapshot-test      规则快照：原子写 / 往返 / 坏文件容错（离线）"
+Write-Host "    .\dist-tools\$exeName --key-primitive-test 密钥：ECDSA + DPAPI / 签名 / 篡改（离线）"
 Write-Host "    .\dist-tools\$exeName --audit-migrate-test 记录迁移：复制/校验/删源（离线）"
 Write-Host "    .\dist-tools\$exeName --service-audit-test 服务：无界面时仍在记录（需管理员 + 服务已运行）"
 Write-Host "    .\dist-tools\$exeName --service-tamper-test 服务：删过滤器后自动重建（需管理员 + 服务，约 40 秒）"

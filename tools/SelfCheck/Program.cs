@@ -6,12 +6,14 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
 using WinAppGuard.Interop;
@@ -137,6 +139,7 @@ internal static class Program
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
@@ -277,6 +280,10 @@ internal static class Program
             else if (args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunSnapshotTest();
+            }
+            else if (args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunKeyPrimitiveTest();
             }
             else if (args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3915,6 +3922,106 @@ internal static class Program
             W($"    ！sc {arguments} 失败：{ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 密钥原语（离线）：ECDSA P-256 + DPAPI 用户级加密。
+    /// 不写任何系统文件，不需要管理员。
+    /// </summary>
+    private static void RunKeyPrimitiveTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var entropy = RandomNumberGenerator.GetBytes(32);
+        OwnerKey? created = null;
+        OwnerKey? loaded = null;
+        OwnerKey? imported = null;
+
+        W("################################################################");
+        W("#   密钥原语（离线：生成 / DPAPI 往返 / 签名 / 篡改 / 错误密钥）  #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            created = OwnerKey.Create();
+
+            W($"    公钥长度 = {created.PublicKey.Length} 字节");
+            W($"    指纹 = {created.Fingerprint[..16]}…");
+            CheckAssertion(results, "能生成 P-256 密钥对",
+                created.PublicKey.Length > 0 && created.Fingerprint.Length == 64);
+
+            var blob = created.ProtectPrivateKey(entropy);
+            W($"    DPAPI blob = {blob.Length} 字节");
+            CheckAssertion(results, "私钥能被 DPAPI 加密", blob.Length > 0);
+
+            loaded = OwnerKey.Unprotect(blob, entropy);
+            CheckAssertion(results, "DPAPI 往返后是同一把钥匙",
+                loaded.Fingerprint == created.Fingerprint);
+
+            var data = Encoding.UTF8.GetBytes("nonce||request-payload");
+
+            var signature = created.Sign(data);
+            W($"    签名长度 = {signature.Length} 字节");
+            CheckAssertion(results, "签名能被公钥验证",
+                OwnerKey.Verify(created.PublicKey, data, signature));
+
+            var tamperedData = data.ToArray();
+            tamperedData[0] ^= 0xFF;
+            CheckAssertion(results, "数据被篡改后验签失败",
+                !OwnerKey.Verify(created.PublicKey, tamperedData, signature));
+
+            var tamperedSignature = signature.ToArray();
+            tamperedSignature[0] ^= 0xFF;
+            CheckAssertion(results, "签名被篡改后验签失败",
+                !OwnerKey.Verify(created.PublicKey, data, tamperedSignature));
+
+            imported = OwnerKey.ImportPublicKey(created.PublicKey);
+            CheckAssertion(results, "公钥可以重新导入且指纹不变",
+                imported.Fingerprint == created.Fingerprint
+                && OwnerKey.Verify(imported.PublicKey, data, signature));
+
+            var wrongEntropyRejected = false;
+
+            try
+            {
+                using var wrong = OwnerKey.Unprotect(
+                    blob, RandomNumberGenerator.GetBytes(32));
+            }
+            catch (Exception)
+            {
+                wrongEntropyRejected = true;
+            }
+
+            CheckAssertion(results, "错误 entropy 解不开私钥", wrongEntropyRejected);
+
+            var corrupted = blob.ToArray();
+            corrupted[corrupted.Length / 2] ^= 0xFF;
+            var corruptedRejected = false;
+
+            try
+            {
+                using var bad = OwnerKey.Unprotect(corrupted, entropy);
+            }
+            catch (Exception)
+            {
+                corruptedRejected = true;
+            }
+
+            CheckAssertion(results, "损坏的 blob 解不开", corruptedRejected);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "密钥原语执行完成", false);
+        }
+        finally
+        {
+            imported?.Dispose();
+            loaded?.Dispose();
+            created?.Dispose();
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
     }
 
     /// <summary>

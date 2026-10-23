@@ -142,6 +142,7 @@ internal static class Program
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--protected-mode-owner-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
@@ -290,6 +291,10 @@ internal static class Program
             else if (args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunProtectedModeStoreTest();
+            }
+            else if (args.Contains("--protected-mode-owner-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunProtectedModeOwnerTest();
             }
             else if (args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4226,6 +4231,107 @@ internal static class Program
     private static bool HasRule(
         IEnumerable<FileSystemAccessRule> rules, SecurityIdentifier sid)
         => rules.Any(rule => rule.IdentityReference.Equals(sid));
+
+    /// <summary>
+    /// 检查**已安装**的受保护模式密钥（只读，不改系统）：
+    /// 文件存在、所有者为当前账户、DPAPI 能解开、能签名、ACL 正确。
+    /// 用于 VM 安装后的验收。
+    /// </summary>
+    private static void RunProtectedModeOwnerTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var store = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory);
+        var identity = WindowsIdentity.GetCurrent();
+        var owner = identity.User;
+
+        W("################################################################");
+        W("#   已安装的受保护模式密钥（只读：所有者 / DPAPI / ACL / 签名）  #");
+        W("################################################################");
+        W();
+
+        if (owner is null)
+        {
+            W("    ！无法获取当前账户 SID。");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        try
+        {
+            CheckAssertion(results, "配置文件存在", File.Exists(store.ConfigPath));
+            CheckAssertion(results, "私钥文件存在", File.Exists(store.KeyPath));
+
+            var config = store.ReadConfig();
+
+            CheckAssertion(results, "所有者是当前账户",
+                string.Equals(config.OwnerSid, owner.Value,
+                    StringComparison.OrdinalIgnoreCase));
+
+            using var key = store.LoadForOwner(owner);
+
+            CheckAssertion(results, "DPAPI 解开的指纹与配置一致",
+                string.Equals(key.Fingerprint, config.Fingerprint,
+                    StringComparison.OrdinalIgnoreCase));
+
+            var payload = Encoding.UTF8.GetBytes("WinAppGuard owner test");
+            var signature = key.Sign(payload);
+
+            CheckAssertion(results, "能用公钥验证签名",
+                OwnerKey.Verify(config.GetPublicKeyBytes(), payload, signature));
+
+            var configText = File.ReadAllText(store.ConfigPath);
+            CheckAssertion(results, "配置里没有私钥/密文副本",
+                !configText.Contains("PRIVATE KEY", StringComparison.Ordinal)
+                && !configText.Contains(
+                    Convert.ToBase64String(File.ReadAllBytes(store.KeyPath)),
+                    StringComparison.Ordinal));
+
+            var directorySecurity = new DirectoryInfo(
+                ServicePaths.ProtectedModeDirectory).GetAccessControl();
+            var directoryRules = directorySecurity
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .ToList();
+
+            CheckAssertion(results, "密钥目录只给 SYSTEM + 所有者",
+                directorySecurity.AreAccessRulesProtected
+                && HasRule(directoryRules, owner)
+                && HasRule(directoryRules, new SecurityIdentifier(
+                    WellKnownSidType.LocalSystemSid, null))
+                && !HasRule(directoryRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinUsersSid, null))
+                && !HasRule(directoryRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinAdministratorsSid, null)));
+
+            var fileSecurity = new FileInfo(store.ConfigPath).GetAccessControl();
+            var fileRules = fileSecurity
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .ToList();
+
+            CheckAssertion(results, "配置文件只给 SYSTEM + 所有者",
+                fileSecurity.AreAccessRulesProtected
+                && HasRule(fileRules, owner)
+                && HasRule(fileRules, new SecurityIdentifier(
+                    WellKnownSidType.LocalSystemSid, null))
+                && !HasRule(fileRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinUsersSid, null))
+                && !HasRule(fileRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinAdministratorsSid, null)));
+
+            W();
+            W($"    所有者 = {config.OwnerName}（{config.OwnerSid}）");
+            W($"    指纹   = {key.Fingerprint[..16]}…");
+            W($"    创建   = {config.CreatedUtc:yyyy-MM-dd HH:mm:ss} UTC");
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "已安装密钥检查执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
 
     /// <summary>
     /// 规则快照（离线）：服务写的 rules.json 必须能被界面读回；

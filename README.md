@@ -18,6 +18,10 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 >
 > **3.0 起拆成「防护服务 + 界面」**：规则写入、严格模式会话、审计采集都由服务
 > `WinAppGuardSvc` 持有；界面以普通权限运行，改规则时才弹一次 UAC。
+>
+> **3.1 起启用受保护模式**：安装时的账户成为**唯一所有者**。服务只接受所有者签名，
+> 其他账户（包括其他管理员）不能通过界面或 IPC 修改规则。私钥用 DPAPI 用户级加密，
+> 服务端只保存公钥。详见 [`docs/受保护模式设计.md`](docs/受保护模式设计.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
@@ -291,14 +295,24 @@ powershell -ExecutionPolicy Bypass -File .\build\publish.ps1
 exe 没有代码签名 —— 代码签名证书要花钱，而这是个免费工具。
 点「更多信息」→「仍要运行」，或者先核对发布说明里的 SHA-256。
 
-### 权限模型（3.0 起）
+### 权限模型（3.1 起）
 
-- **界面**：`asInvoker`，双击不弹 UAC；查看连接、规则、记录都不需要管理员。
+- **所有者**：运行安装器时的提权账户。只有所有者能使用界面/服务。
+- **界面**：`asInvoker`，双击不弹 UAC；所有者查看连接、规则、记录不需要管理员。
 - **修改规则 / 严格模式 / 记录设置**：弹一次 UAC，由提权助手
-  （`WinAppGuardSvc.exe --elevated-ipc`）转发给服务。
-- **服务** `WinAppGuardSvc`：以 SYSTEM 运行，是**唯一**写 WFP 的进程。
+  （`WinAppGuardSvc.exe --elevated-ipc`）转发给服务；助手也使用所有者密钥签名。
+- **服务** `WinAppGuardSvc`：以 SYSTEM 运行，是**唯一**写 WFP 的进程；
+  只接受所有者 ECDSA 签名。
+- **管道/服务 ACL**：管道只允许 `SYSTEM` + 所有者；服务 DACL 给
+  `Administrators` 仅查询/启动，其他账户无权限。管理员仍可通过接管所有权绕过。
+- **密钥**：`%ProgramData%\WinAppGuard\protected-mode\client-key.dpapi`
+  （DPAPI 用户级）；`config.json` 只存公钥/entropy/指纹。卸载时始终删除。
 - **开机自启**：计划任务以「最高权限」运行，登录时**不会弹 UAC**，并可静默拉起服务。
-- **命令行模式**：仍需要管理员（无人值守场景），由服务 exe 代跑。
+- **命令行模式**：`--block / --list-blocked / --unblock-all` 通过签名 IPC 执行；
+  `--migrate / --recover` 是管理员恢复命令。CLI 仍要求管理员权限。
+
+> 不是所有者 / 密钥不可用 / 未初始化时，界面会明确说明原因，规则页只读。
+> 更换所有者请用所有者运行 `WinAppGuardSetup.exe --reset-owner`。
 
 ### 我点了关闭，但它还在运行
 
@@ -311,20 +325,39 @@ exe 没有代码签名 —— 代码签名证书要花钱，而这是个免费�
 **不等于。** 退出只结束界面进程，防火墙规则依然生效，被阻止的程序依然上不了网。
 要放行必须用「解除阻止（允许联网）」或「删除全部 AppGuard 规则」。退出时的确认框会明确写这一点。
 
+### 界面提示“当前账户不是所有者”/“密钥不可用”
+
+3.1 起只有安装时的账户（所有者）能使用界面和服务。
+
+- **不是所有者**：用安装时的账户登录；确需更换所有者，由管理员以新所有者身份运行
+  `WinAppGuardSetup.exe --reset-owner`。
+- **密钥不可用**：密钥文件缺失或 DPAPI 解不开。由所有者运行
+  `WinAppGuardSetup.exe --rotate-key` 重建密钥。
+- **未初始化**：3.0 升级后还没生成密钥，运行 `WinAppGuardSetup.exe --repair`。
+
+其他管理员仍可以杀进程、替换二进制或直接操作 WFP；受保护模式提高门槛并留痕，
+但不宣称防住铁了心的本机管理员。
+
 ### 怎么彻底清理干净？
 
 ```
-1. 打开 WinAppGuard
-2. 「黑名单」页 → 清空黑名单（或者跑：WinAppGuard.exe --recover）
-3. 「设置」页 → 关闭开机自启
-4. 托盘右键 → 退出
-5. 删除 WinAppGuard.exe
-6. （可选）删除 %LOCALAPPDATA%\WinAppGuard 目录
+1. 双击 WinAppGuardUninstall.exe（或 WinAppGuardSetup.exe --uninstall）
+2. 确认卸载
 ```
 
-第 2、3 步不做就直接删 exe 的话，过滤器子层和计划任务会留在系统里继续生效。
-真遇到这种情况：跑 `WinAppGuard.exe --recover` 清掉 WFP 里的对象，
-用 `taskschd.msc` 删任务。
+卸载会删除服务、WFP 规则/子层、快捷方式、开机自启任务、记录、设置、
+受保护模式密钥和安装目录。
+想保留规则/记录（但**仍会删除密钥**）可以运行：
+
+```powershell
+WinAppGuardUninstall.exe --uninstall --keep-data
+```
+
+如果只是遇到异常、想清掉本工具在 WFP 里的对象，用管理员运行：
+
+```powershell
+WinAppGuard.exe --recover
+```
 
 ### 阻止是按路径生效的，不是按 PID
 
@@ -352,7 +385,8 @@ exe 没有代码签名 —— 代码签名证书要花钱，而这是个免费�
 | [`docs/验收清单.md`](docs/验收清单.md) | 全量验收清单（自动化结论 + 手动勾选项） |
 | [`docs/测试用例.md`](docs/测试用例.md) | 各阶段测试用例与实测结论 |
 | [`docs/发布手册.md`](docs/发布手册.md) | 从构建、验证到发布的操作流程 |
-| [`docs/服务化设计.md`](docs/服务化设计.md) | 2.6 起的防护服务 + 界面客户端设计（**设计稿，未实现**） |
+| [`docs/服务化设计.md`](docs/服务化设计.md) | 3.0 防护服务 + 界面客户端设计（已实现） |
+| [`docs/受保护模式设计.md`](docs/受保护模式设计.md) | 3.1 单所有者、ECDSA/DPAPI、协议 v2、ACL 与生命周期 |
 
 ## 参与贡献
 

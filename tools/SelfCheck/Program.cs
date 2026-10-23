@@ -3949,26 +3949,61 @@ internal static class Program
 
             W($"    {output.Trim()}");
 
-            CheckAssertion(results, "安全描述符包含 DACL",
-                output.Contains("D:", StringComparison.Ordinal));
+            // sc sdshow 会把服务权限编码成字母（CC/DC/LC/SW/RP/WP/DT/LO/CR/SD/RC/WD/WO），
+            // 不是 (A;;GA;;;SY)。另外 S: 是 SACL（系统审计 Everyone），不是 DACL，
+            // 不能拿它来判断“通配访问”。
+            var daclStart = output.IndexOf("D:", StringComparison.Ordinal);
+            var saclStart = daclStart >= 0
+                ? output.IndexOf("S:", daclStart + 2, StringComparison.Ordinal)
+                : -1;
+            var dacl = daclStart < 0
+                ? string.Empty
+                : (saclStart > daclStart
+                    ? output[daclStart..saclStart]
+                    : output[daclStart..]);
 
-            CheckAssertion(results, "SYSTEM 完全控制",
-                output.Contains("(A;;GA;;;SY)", StringComparison.Ordinal));
+            W($"    DACL = {dacl}");
+
+            const string FullMask = "CCDCLCSWRPWPDTLOCRSDRCWDWO";
+
+            bool AceFor(string sid, string rights)
+            {
+                foreach (var ace in dacl.Split(
+                             '(', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (ace.Contains($";;;{sid})", StringComparison.Ordinal)
+                        && ace.Contains(rights, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            bool HasFullControl(string sid)
+                => AceFor(sid, FullMask) || AceFor(sid, "GA");
+
+            CheckAssertion(results, "安全描述符包含 DACL",
+                daclStart >= 0 && dacl.Length > 0);
+
+            CheckAssertion(results, "SYSTEM 完全控制", HasFullControl("SY"));
 
             CheckAssertion(results, $"所有者 {ownerSid} 完全控制",
-                output.Contains($"(A;;GA;;;{ownerSid})", StringComparison.Ordinal));
+                HasFullControl(ownerSid));
 
             CheckAssertion(results, "Administrators 只有查询/启动/读权限",
-                output.Contains("0x20014;;;BA", StringComparison.Ordinal)
-                || output.Contains("0x00020014;;;BA", StringComparison.Ordinal));
+                AceFor("BA", "LCRPRC")
+                || AceFor("BA", "0x20014")
+                || AceFor("BA", "0x00020014"));
 
             CheckAssertion(results, "Administrators 没有完全控制",
-                !output.Contains("GA;;;BA", StringComparison.Ordinal));
+                !HasFullControl("BA"));
 
-            CheckAssertion(results, "没有 Interactive / Everyone / Users 通配",
-                !output.Contains(";;;IU)", StringComparison.Ordinal)
-                && !output.Contains(";;;WD)", StringComparison.Ordinal)
-                && !output.Contains(";;;BU)", StringComparison.Ordinal));
+            CheckAssertion(results, "DACL 没有 Interactive / Everyone / Users 通配",
+                !dacl.Contains(";;;IU)", StringComparison.Ordinal)
+                && !dacl.Contains(";;;WD)", StringComparison.Ordinal)
+                && !dacl.Contains(";;;BU)", StringComparison.Ordinal));
         }
         catch (Exception ex)
         {

@@ -291,6 +291,10 @@ internal static class Program
             {
                 RunServiceAuthTest();
             }
+            else if (args.Contains("--service-acl-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceAclTest();
+            }
             else if (args.Contains("--service-rules-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceRulesTest();
@@ -3911,6 +3915,66 @@ internal static class Program
     }
 
     /// <summary>
+    /// 服务 DACL（需管理员 + 服务已安装）：只给 SYSTEM + 所有者完全控制，
+    /// Administrators 只有查询/启动；不允许 Interactive/Everyone 等。
+    /// 管道 ACL 用行为验证：所有者能连、其他账户连不上（手工/第 4 步）。
+    /// </summary>
+    private static void RunServiceAclTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   服务 DACL（SYSTEM + 所有者；管理员仅查询/启动）              #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var ownerSid = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory)
+                .ReadConfig().OwnerSid;
+
+            var output = RunScCapture("sdshow " + ServiceProtocol.ServiceName);
+
+            if (output is null)
+            {
+                CheckAssertion(results, "能读取服务安全描述符", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            W($"    {output.Trim()}");
+
+            CheckAssertion(results, "安全描述符包含 DACL",
+                output.Contains("D:", StringComparison.Ordinal));
+
+            CheckAssertion(results, "SYSTEM 完全控制",
+                output.Contains("(A;;GA;;;SY)", StringComparison.Ordinal));
+
+            CheckAssertion(results, $"所有者 {ownerSid} 完全控制",
+                output.Contains($"(A;;GA;;;{ownerSid})", StringComparison.Ordinal));
+
+            CheckAssertion(results, "Administrators 只有查询/启动/读权限",
+                output.Contains("0x20014;;;BA", StringComparison.Ordinal)
+                || output.Contains("0x00020014;;;BA", StringComparison.Ordinal));
+
+            CheckAssertion(results, "Administrators 没有完全控制",
+                !output.Contains("GA;;;BA", StringComparison.Ordinal));
+
+            CheckAssertion(results, "没有 Interactive / Everyone / Users 通配",
+                !output.Contains(";;;IU)", StringComparison.Ordinal)
+                && !output.Contains(";;;WD)", StringComparison.Ordinal)
+                && !output.Contains(";;;BU)", StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "服务 DACL 检查执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
     /// 服务端签名鉴权（**需管理员 + 服务已运行 + 所有者密钥**）：
     /// 正确签名、无签名、篡改、重放、错误密钥、未配置 signer。
     /// </summary>
@@ -4239,6 +4303,35 @@ internal static class Program
         {
             W($"    ！读取过滤器失败：{ex.Message}");
             return -1;
+        }
+    }
+
+    private static string? RunScCapture(string arguments)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("sc.exe", arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+
+            if (process is null)
+            {
+                return null;
+            }
+
+            var output = process.StandardOutput.ReadToEnd();
+            _ = process.StandardError.ReadToEnd();
+            process.WaitForExit(15000);
+            return process.HasExited && process.ExitCode == 0 ? output : null;
+        }
+        catch (Exception ex)
+        {
+            W($"    ！sc {arguments} 失败：{ex.Message}");
+            return null;
         }
     }
 

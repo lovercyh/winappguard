@@ -1,5 +1,7 @@
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Text;
 using WinAppGuard.Core;
 
 namespace WinAppGuard.Service;
@@ -21,6 +23,10 @@ internal static class ClientAuth
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint clientProcessId);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageNameW(
+        IntPtr process, uint flags, StringBuilder exeName, ref int size);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
 
@@ -29,10 +35,13 @@ internal static class ClientAuth
     /// </summary>
     /// <returns>能确定身份返回 true；连进程/令牌都打不开返回 false（此时应拒绝连接）。</returns>
     internal static bool TryGetElevation(
-        NamedPipeServerStream pipe, out bool elevated, out uint processId, out string? error)
+        NamedPipeServerStream pipe, out bool elevated, out uint processId,
+        out string? clientSid, out string? imagePath, out string? error)
     {
         elevated = false;
         processId = 0;
+        clientSid = null;
+        imagePath = null;
         error = null;
 
         if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out processId))
@@ -49,6 +58,14 @@ internal static class ClientAuth
             return false;
         }
 
+        var pathBuffer = new StringBuilder(1024);
+        var pathLength = pathBuffer.Capacity;
+
+        if (QueryFullProcessImageNameW(process, 0, pathBuffer, ref pathLength))
+        {
+            imagePath = pathBuffer.ToString();
+        }
+
         var token = IntPtr.Zero;
 
         try
@@ -62,6 +79,17 @@ internal static class ClientAuth
             }
 
             elevated = TokenInspector.IsElevated(token);
+
+            try
+            {
+                using var identity = new WindowsIdentity(token);
+                clientSid = identity.User?.Value;
+            }
+            catch (Exception)
+            {
+                clientSid = null;
+            }
+
             return true;
         }
         finally

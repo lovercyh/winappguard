@@ -182,6 +182,12 @@ internal static class Program
             return 6;
         }
 
+        if (!ApplyServiceDacl())
+        {
+            Console.Error.WriteLine("服务 DACL 设置失败，安装中止（服务未启动）。");
+            return 6;
+        }
+
         if (!ConfigureSignerForIpc())
         {
             Console.Error.WriteLine("受保护模式签名密钥加载失败，安装中止（服务未启动）。");
@@ -251,6 +257,15 @@ internal static class Program
             return 6;
         }
 
+        var daclApplied = ApplyServiceDacl();
+
+        if (!daclApplied && IsCurrentUserOwner())
+        {
+            Console.Error.WriteLine(
+                "受保护模式：当前账户是所有者，但服务 DACL 设置失败；修复中止。");
+            return 6;
+        }
+
         var signerReady = ConfigureSignerForIpc();
 
         if (!signerReady && IsCurrentUserOwner())
@@ -296,6 +311,32 @@ internal static class Program
         }
         catch (Exception)
         {
+            return false;
+        }
+    }
+
+    /// <summary>把服务对象 DACL 收紧为 SYSTEM + 所有者（管理员只读/启动）。</summary>
+    private static bool ApplyServiceDacl()
+    {
+        try
+        {
+            var config = CreateOwnerKeyStore().ReadConfig();
+
+            if (!ServiceSecurity.TrySetOwnerOnlyDacl(
+                    ServiceProtocol.ServiceName, config.OwnerSid, out var error))
+            {
+                Console.Error.WriteLine($"设置服务 DACL 失败：{error}");
+                return false;
+            }
+
+            Console.WriteLine(
+                $"服务 DACL：SYSTEM + {config.OwnerName} 完全控制；"
+                + "Administrators 仅查询/启动。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"设置服务 DACL 失败：{ex.Message}");
             return false;
         }
     }
@@ -638,6 +679,11 @@ internal static class Program
             return 6;
         }
 
+        if (!ApplyServiceDacl())
+        {
+            return 6;
+        }
+
         if (!ConfigureSignerForIpc())
         {
             return 6;
@@ -687,6 +733,11 @@ internal static class Program
         }
 
         Console.WriteLine($"所有者已切换为：{ownerName}");
+
+        if (!ApplyServiceDacl())
+        {
+            return 6;
+        }
 
         if (!ConfigureSignerForIpc())
         {
@@ -930,6 +981,8 @@ internal static class Program
 
         ShellShortcut.DeleteDesktopShortcut();
 
+        var serviceRemoved = true;
+
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
             Console.WriteLine("停止服务…");
@@ -945,6 +998,14 @@ internal static class Program
 
             Console.WriteLine("删除服务…");
             ServiceControl.Uninstall(ServiceProtocol.ServiceName);
+            serviceRemoved = !ServiceControl.IsInstalled(ServiceProtocol.ServiceName);
+
+            if (!serviceRemoved)
+            {
+                Console.Error.WriteLine(
+                    "服务仍然存在（可能是服务 DACL 只允许所有者删除；"
+                    + "请由所有者运行卸载，或先由管理员接管服务权限）。");
+            }
         }
 
         // 完整删除本程序在 WFP 里留下的对象（过滤器 + 子层）。
@@ -983,7 +1044,7 @@ internal static class Program
         var installDeleted = DeleteInstallDirectory();
 
         Console.WriteLine();
-        Console.WriteLine(rulesRecovered && installDeleted && keyDeleted
+        Console.WriteLine(rulesRecovered && installDeleted && keyDeleted && serviceRemoved
             ? "卸载完成。"
             : "卸载完成，但有部分内容未能删除（见上）。");
 
@@ -993,7 +1054,7 @@ internal static class Program
                 $"已保留数据目录：{DataDirectory}（受保护模式密钥已删除，重装会生成新密钥）");
         }
 
-        return rulesRecovered && installDeleted && keyDeleted ? 0 : 3;
+        return rulesRecovered && installDeleted && keyDeleted && serviceRemoved ? 0 : 3;
     }
 
     /// <summary>卸载时删除密钥目录并校验；删不掉要如实报告。</summary>

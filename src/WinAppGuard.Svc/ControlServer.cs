@@ -170,12 +170,12 @@ internal sealed class ControlServer : IDisposable
                 // 用 NamedPipeServerStreamAcl.Create：安全描述符在**创建时**就生效，
                 // 不存在"先建默认管道再收紧"的竞态；也不需要手工 SetSecurityInfo
                 // （后者在非管理员下会直接 ACCESS_DENIED，实测）。
-                using var pipe = CreateAdminOnlyPipe();
+                using var pipe = CreateOwnerOnlyPipe();
 
                 if (!_loggedReady)
                 {
                     _loggedReady = true;
-                    ServiceLog.Info("命名管道已创建（ACL：仅 SYSTEM + Administrators）。");
+                    ServiceLog.Info("命名管道已创建（ACL：仅 SYSTEM + 所有者）。");
                 }
 
                 pipe.WaitForConnectionAsync(_cancellation.Token).GetAwaiter().GetResult();
@@ -213,7 +213,9 @@ internal sealed class ControlServer : IDisposable
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
 
-        if (!ClientAuth.TryGetElevation(pipe, out var elevated, out var clientPid, out var reason))
+        if (!ClientAuth.TryGetElevation(
+                pipe, out var elevated, out var clientPid,
+                out var clientSid, out var clientPath, out var reason))
         {
             ServiceLog.Warning($"拒绝 IPC 连接：{reason}");
             TryWrite(pipe, new ServiceResponse { Ok = false, Error = reason }, timeout.Token);
@@ -296,7 +298,7 @@ internal sealed class ControlServer : IDisposable
         {
             var rejected = Interlocked.Increment(ref _authRejectedCount);
             ServiceLog.Warning(
-                $"拒绝 IPC：签名无效（PID {clientPid}，累计 {rejected} 次）。");
+                $"拒绝 IPC：签名无效（PID {clientPid}，SID {clientSid ?? "?"}，路径 {clientPath ?? "?"}，累计 {rejected} 次）。");
             TryWrite(pipe, new ServiceResponse
             {
                 Id = challenge.Id,
@@ -322,6 +324,12 @@ internal sealed class ControlServer : IDisposable
         if (request is null)
         {
             return;
+        }
+
+        if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
+        {
+            ServiceLog.Info(
+                $"IPC 写操作：PID {clientPid}，SID {clientSid ?? "?"}，路径 {clientPath ?? "?"}，命令 {request.Command}。");
         }
 
         TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
@@ -493,10 +501,11 @@ internal sealed class ControlServer : IDisposable
     }
 
     /// <summary>
-    /// 创建一条只有 SYSTEM 与 Administrators 能连接的命名管道。
+    /// 创建一条只有 SYSTEM 与**所有者 SID** 能连接的命名管道。
     /// 安全描述符在建管道时生效，避免"先建后收紧"的窗口。
+    /// 其他账户（包括其他管理员）连不上；这是 3.1 第 4 步的边界。
     /// </summary>
-    private static NamedPipeServerStream CreateAdminOnlyPipe()
+    private static NamedPipeServerStream CreateOwnerOnlyPipe()
     {
         var security = new PipeSecurity();
 
@@ -506,16 +515,8 @@ internal sealed class ControlServer : IDisposable
             AccessControlType.Allow));
 
         security.AddAccessRule(new PipeAccessRule(
-            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            _protectedMode!.GetOwnerSid(),
             PipeAccessRights.FullControl,
-            AccessControlType.Allow));
-
-        // M1.5：查看 / 记录不需要管理员，所以**交互登录用户**必须能连上。
-        // 写命令由服务端逐条校验"令牌是否提权"，而不是靠管道 ACL 一刀切。
-        // 用 Interactive 而不是 Authenticated Users：排除网络登录（远程管道访问）。
-        security.AddAccessRule(new PipeAccessRule(
-            new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
-            PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
 
         return NamedPipeServerStreamAcl.Create(

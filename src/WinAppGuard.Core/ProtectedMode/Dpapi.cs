@@ -47,11 +47,7 @@ internal static class Dpapi
         {
             FreeBlob(ref input);
             FreeBlob(ref entropyBlob);
-
-            if (output.pbData != IntPtr.Zero)
-            {
-                LocalFree(output.pbData);
-            }
+            FreeOutput(ref output);
         }
     }
 
@@ -87,11 +83,7 @@ internal static class Dpapi
         {
             FreeBlob(ref input);
             FreeBlob(ref entropyBlob);
-
-            if (output.pbData != IntPtr.Zero)
-            {
-                LocalFree(output.pbData);
-            }
+            FreeOutput(ref output);
         }
     }
 
@@ -124,6 +116,21 @@ internal static class Dpapi
         var result = new byte[blob.cbData];
         Marshal.Copy(blob.pbData, result, 0, blob.cbData);
         return result;
+    }
+
+    private static void FreeOutput(ref DataBlob blob)
+    {
+        if (blob.pbData == IntPtr.Zero)
+        {
+            return;
+        }
+
+        // 解密输出可能是私钥明文：LocalFree 之前先清零。
+        var zeros = new byte[blob.cbData];
+        Marshal.Copy(zeros, 0, blob.pbData, blob.cbData);
+        LocalFree(blob.pbData);
+        blob.pbData = IntPtr.Zero;
+        blob.cbData = 0;
     }
 
     private static void FreeBlob(ref DataBlob blob)

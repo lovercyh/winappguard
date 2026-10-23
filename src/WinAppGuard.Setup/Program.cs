@@ -3,6 +3,7 @@ using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 
 namespace WinAppGuard.Setup;
@@ -34,14 +35,27 @@ internal static class Program
 
         try
         {
+            var allowOwnerMismatch = args.Contains(
+                "--allow-owner-mismatch", StringComparer.OrdinalIgnoreCase);
+
             if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))
             {
-                return Install();
+                return Install(allowOwnerMismatch);
             }
 
             if (args.Contains("--repair", StringComparer.OrdinalIgnoreCase))
             {
-                return Repair();
+                return Repair(allowOwnerMismatch);
+            }
+
+            if (args.Contains("--rotate-key", StringComparer.OrdinalIgnoreCase))
+            {
+                return RotateKey();
+            }
+
+            if (args.Contains("--reset-owner", StringComparer.OrdinalIgnoreCase))
+            {
+                return ResetOwner();
             }
 
             if (args.Contains("--start-service", StringComparer.OrdinalIgnoreCase))
@@ -84,7 +98,7 @@ internal static class Program
                     return RunUninstallerInteractive();
                 }
 
-                return RunSetupDefault();
+                return RunSetupDefault(allowOwnerMismatch);
             }
 
             PrintUsage();
@@ -106,28 +120,37 @@ internal static class Program
         Console.WriteLine("  双击 WinAppGuardUninstall.exe        完整卸载（服务 / 规则 / 快捷方式 / 记录 / 设置 / 目录）");
         Console.WriteLine();
         Console.WriteLine("  WinAppGuardSetup.exe --install     安装（复制文件 + 创建服务 + 启动）");
-        Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留规则与数据）");
+        Console.WriteLine("                       --allow-owner-mismatch  提权账户与登录账户不同时仍继续（所有者=提权账户）");
+        Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留密钥/规则/数据）");
+        Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  同一所有者换一把新密钥（旧密钥删除）");
+        Console.WriteLine("  WinAppGuardSetup.exe --reset-owner 把当前提权账户设为新所有者（换新密钥）");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service 只启动服务（顺带修正为「自动（不延迟）」）");
         Console.WriteLine("  WinAppGuardSetup.exe --uninstall   完整卸载（停止/删除服务 + 删除全部规则与数据）");
-        Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard");
+        Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard（密钥始终删除）");
         Console.WriteLine();
         Console.WriteLine("安装器旁边必须同时有 WinAppGuard.exe 和 WinAppGuardSvc.exe。");
+        Console.WriteLine("3.1 起只有安装时的提权账户（所有者）能使用界面/服务；其他账户会被拒绝。");
     }
 
-    private static int Install()
+    private static int Install(bool allowOwnerMismatch)
     {
+        if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
+        {
+            Console.WriteLine("检测到已安装：按修复处理（保留现有密钥与所有者）。");
+            return Repair(allowOwnerMismatch);
+        }
+
+        if (!CheckOwnerMatchesInteractiveSession(allowOwnerMismatch))
+        {
+            return 5;
+        }
+
         using var payload = LocatePayload();
 
         // 覆盖安装时界面可能正开着，占用 exe；先结束它，否则复制会失败。
         TryStopUiProcesses();
 
         Directory.CreateDirectory(InstallDirectory);
-
-        if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
-        {
-            Console.WriteLine("检测到已安装：先停止旧服务。");
-            ServiceControl.Stop(ServiceProtocol.ServiceName);
-        }
 
         CopyPayload(payload);
         Console.WriteLine($"已复制到：{InstallDirectory}");
@@ -152,6 +175,13 @@ internal static class Program
         // 2.x 的审计记录在用户目录；服务读不到，装/修时顺手迁到 ProgramData。
         TryMigrateAuditRecords();
 
+        // 3.1：首次安装必须生成全新密钥；旧残留一律先删，绝不复用。
+        if (!CreateFreshProtectedModeKey())
+        {
+            Console.Error.WriteLine("受保护模式密钥创建失败，安装中止（服务未启动）。");
+            return 6;
+        }
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
@@ -173,7 +203,7 @@ internal static class Program
         return 0;
     }
 
-    private static int Repair()
+    private static int Repair(bool allowOwnerMismatch)
     {
         using var payload = LocatePayload();
 
@@ -203,6 +233,12 @@ internal static class Program
 
         TryMigrateAuditRecords();
 
+        if (!EnsureProtectedModeForRepair(allowOwnerMismatch))
+        {
+            Console.Error.WriteLine("受保护模式准备失败，修复中止（服务未启动）。");
+            return 6;
+        }
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
@@ -219,9 +255,356 @@ internal static class Program
         return ServiceControl.IsRunning(ServiceProtocol.ServiceName) ? 0 : 4;
     }
 
+    private static OwnerKeyStore CreateOwnerKeyStore()
+        => new(ServicePaths.ProtectedModeDirectory);
+
     /// <summary>
-    /// 只启动服务（界面在"离线"状态下调用；也用于把老版本的延迟启动修正掉）。
+    /// 目录不存在 → true/空；存在且能列 → true/是否有内容；
+    /// 存在但拒绝访问 → false（不当成空目录处理）。
     /// </summary>
+    private static bool TryInspectProtectedModeDirectory(out bool hasEntries)
+    {
+        hasEntries = false;
+
+        if (!Directory.Exists(ServicePaths.ProtectedModeDirectory))
+        {
+            return true;
+        }
+
+        try
+        {
+            hasEntries = Directory
+                .EnumerateFileSystemEntries(ServicePaths.ProtectedModeDirectory)
+                .Any();
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 首次安装：删除任何残留密钥，强制生成全新的一把。
+    /// 失败就中止安装，不复用旧钥匙。
+    /// </summary>
+    private static bool CreateFreshProtectedModeKey()
+    {
+        try
+        {
+            var owner = OwnerAccount.GetCurrentSid();
+            var ownerName = OwnerAccount.GetCurrentName();
+            var store = CreateOwnerKeyStore();
+
+            if (!store.TryDeleteAll(owner, out var error, out var deleteScheduled))
+            {
+                Console.Error.WriteLine($"清理旧密钥失败：{error ?? "未知原因"}");
+
+                if (deleteScheduled)
+                {
+                    Console.Error.WriteLine("已登记重启后删除；请重启 Windows 后再安装。");
+                }
+
+                return false;
+            }
+
+            using var key = store.Create(owner, ownerName);
+            Console.WriteLine(
+                $"受保护模式：已为 {ownerName} 生成新密钥（指纹 {key.Fingerprint[..16]}…）。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"受保护模式密钥创建失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 修复/升级：有可用密钥就保留；缺失/损坏才重建。
+    /// 当前账户不是所有者时，明确提示但**不碰**原密钥。
+    /// </summary>
+    private static bool EnsureProtectedModeForRepair(bool allowOwnerMismatch)
+    {
+        var store = CreateOwnerKeyStore();
+        var owner = OwnerAccount.GetCurrentSid();
+        var ownerName = OwnerAccount.GetCurrentName();
+
+        if (!store.HasFiles)
+        {
+            // 目录存在但文件读不到：通常说明当前账户不是所有者。
+            // 不要把它当成“没有密钥”而覆盖掉。
+            if (!TryInspectProtectedModeDirectory(out var hasEntries))
+            {
+                Console.WriteLine(
+                    "受保护模式目录存在但无法读取（当前账户不是所有者）；保留原配置。");
+                return true;
+            }
+
+            if (hasEntries)
+            {
+                Console.WriteLine(
+                    "受保护模式目录存在但没有可读配置；为安全起见保留，"
+                    + "请由所有者运行 --repair，或用 --reset-owner 重建。");
+                return true;
+            }
+
+            if (!CheckOwnerMatchesInteractiveSession(allowOwnerMismatch))
+            {
+                return false;
+            }
+
+            Console.WriteLine("受保护模式：未发现密钥（首次升级/配置缺失），按当前账户生成。");
+            return CreateKeyFor(store, owner, ownerName);
+        }
+
+        try
+        {
+            var config = store.ReadConfig();
+
+            if (!string.Equals(
+                    config.OwnerSid, owner.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine(
+                    $"受保护模式：现有所有者是 {config.OwnerName}（{config.OwnerSid}）。");
+                Console.WriteLine(
+                    "当前账户不是所有者：密钥保留，当前账户仍无法使用界面/服务。");
+                return true;
+            }
+
+            try
+            {
+                using var key = store.LoadForOwner(owner);
+                Console.WriteLine(
+                    $"受保护模式：保留现有密钥（指纹 {key.Fingerprint[..16]}…）。");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"现有密钥不可用：{ex.Message}");
+                Console.Error.WriteLine("按同一所有者重建密钥（旧密钥将被替换）。");
+                return CreateKeyFor(store, owner, ownerName);
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.WriteLine($"受保护模式：无法读取配置（当前账户不是所有者？）：{ex.Message}");
+            Console.WriteLine("保留原配置与密钥；当前账户仍无法使用界面/服务。");
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException)
+        {
+            Console.Error.WriteLine($"受保护模式配置缺失/损坏：{ex.Message}");
+            Console.Error.WriteLine("按当前账户重建所有者与密钥。");
+            return CreateKeyFor(store, owner, ownerName);
+        }
+    }
+
+    private static bool CreateKeyFor(
+        OwnerKeyStore store, System.Security.Principal.SecurityIdentifier owner,
+        string ownerName)
+    {
+        try
+        {
+            using var key = store.Create(owner, ownerName);
+            Console.WriteLine(
+                $"受保护模式：已生成密钥（指纹 {key.Fingerprint[..16]}…）。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"受保护模式密钥创建失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 正常 UAC 时提权账户 == 登录账户；over-the-shoulder 时不同。
+    /// 3.1 默认拒绝后者，必须显式 --allow-owner-mismatch。
+    /// </summary>
+    private static bool CheckOwnerMatchesInteractiveSession(bool allowMismatch)
+    {
+        var current = OwnerAccount.GetCurrentSid();
+        var interactive = OwnerAccount.TryGetInteractiveSid(out var interactiveName);
+
+        if (interactive is null)
+        {
+            Console.WriteLine("提示：无法检测交互登录账户，跳过跨账户检查。");
+            return true;
+        }
+
+        if (interactive.Equals(current))
+        {
+            return true;
+        }
+
+        Console.Error.WriteLine("检测到提权账户与当前登录账户不同：");
+        Console.Error.WriteLine($"  登录账户：{interactiveName ?? interactive.Value}");
+        Console.Error.WriteLine($"  所有者（提权账户）：{OwnerAccount.GetCurrentName()}");
+
+        if (allowMismatch)
+        {
+            Console.WriteLine(
+                "已按 --allow-owner-mismatch 继续；之后只有提权账户能使用界面/服务。");
+            return true;
+        }
+
+        Console.Error.WriteLine(
+            "默认取消。确认要让提权账户成为唯一所有者，请加 --allow-owner-mismatch。");
+        return false;
+    }
+
+    /// <summary>同一所有者换新密钥；旧密钥被覆盖。</summary>
+    private static int RotateKey()
+    {
+        if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
+        {
+            Console.Error.WriteLine("防护服务尚未安装。请先运行 --install 或 --repair。");
+            return 2;
+        }
+
+        var store = CreateOwnerKeyStore();
+        var owner = OwnerAccount.GetCurrentSid();
+        var ownerName = OwnerAccount.GetCurrentName();
+        ProtectedModeConfig config;
+
+        try
+        {
+            config = store.ReadConfig();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"读取受保护模式配置失败：{ex.Message}");
+            return 6;
+        }
+
+        if (!string.Equals(
+                config.OwnerSid, owner.Value, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                $"当前账户不是所有者（所有者：{config.OwnerName}）。");
+            Console.Error.WriteLine("要更换所有者，请运行 --reset-owner。");
+            return 7;
+        }
+
+        if (!StopServiceForMaintenance())
+        {
+            return 4;
+        }
+
+        try
+        {
+            using var key = store.Create(owner, ownerName);
+            Console.WriteLine(
+                $"密钥已轮换：{config.Fingerprint[..16]}… → {key.Fingerprint[..16]}…");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"密钥轮换失败：{ex.Message}");
+            return 6;
+        }
+
+        return StartServiceAfterKeyChange() ? 0 : 4;
+    }
+
+    /// <summary>把当前提权账户设为新所有者；旧密钥删除，生成全新密钥。</summary>
+    private static int ResetOwner()
+    {
+        if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
+        {
+            Console.Error.WriteLine("防护服务尚未安装。请先运行 --install 或 --repair。");
+            return 2;
+        }
+
+        if (!StopServiceForMaintenance())
+        {
+            return 4;
+        }
+
+        var owner = OwnerAccount.GetCurrentSid();
+        var ownerName = OwnerAccount.GetCurrentName();
+        var store = CreateOwnerKeyStore();
+
+        if (!store.TryDeleteAll(owner, out var error, out var deleteScheduled))
+        {
+            Console.Error.WriteLine($"删除旧密钥失败：{error ?? "未知原因"}");
+
+            if (deleteScheduled)
+            {
+                Console.Error.WriteLine("已登记重启后删除；请重启 Windows 后再运行 --reset-owner。");
+            }
+
+            return 6;
+        }
+
+        if (!CreateKeyFor(store, owner, ownerName))
+        {
+            return 6;
+        }
+
+        Console.WriteLine($"所有者已切换为：{ownerName}");
+        return StartServiceAfterKeyChange() ? 0 : 4;
+    }
+
+    private static bool StopServiceForMaintenance()
+    {
+        TryStopUiProcesses();
+
+        try
+        {
+            if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+            {
+                Console.WriteLine("停止服务…");
+                ServiceControl.Stop(ServiceProtocol.ServiceName);
+            }
+
+            if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+            {
+                Console.Error.WriteLine("服务仍在运行，无法安全更换密钥。");
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"停止服务失败：{ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool StartServiceAfterKeyChange()
+    {
+        try
+        {
+            ServiceControl.EnsureAutoStartNoDelay(ServiceProtocol.ServiceName);
+            ServiceControl.Start(ServiceProtocol.ServiceName);
+
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+
+            while (DateTime.UtcNow < deadline
+                   && !ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+            {
+                Thread.Sleep(300);
+            }
+
+            if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+            {
+                Console.WriteLine("服务已启动。");
+                return true;
+            }
+
+            Console.Error.WriteLine(
+                "服务没有在 10 秒内进入运行状态。请查看 %ProgramData%\\WinAppGuard\\logs。");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"启动服务失败：{ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>
     /// 把 2.x 的用户级数据交给服务（3.0-c：界面以普通权限运行，启动时不再做迁移）：
     ///   - 规则分组：导入后删除旧文件；
@@ -419,6 +802,9 @@ internal static class Program
             Console.Error.WriteLine("规则可能仍存在。请稍后重新运行卸载程序。");
         }
 
+        // 密钥始终删除，包括 --keep-data。卸载后应用不再持有任何可用副本。
+        var keyDeleted = DeleteProtectedMode();
+
         if (!keepData)
         {
             DeleteDirectoryIfExists(DataDirectory, "数据目录（记录 / 快照 / 设置）");
@@ -430,47 +816,100 @@ internal static class Program
             DeleteDirectoryIfExists(localData, "用户目录（界面设置 / 日志）");
         }
 
+        // 数据目录统删可能已经把密钥目录一起删掉；以实际结果为准。
+        keyDeleted |= !ProtectedModeFilesExist();
+
         var installDeleted = DeleteInstallDirectory();
 
         Console.WriteLine();
-        Console.WriteLine(rulesRecovered && installDeleted
+        Console.WriteLine(rulesRecovered && installDeleted && keyDeleted
             ? "卸载完成。"
             : "卸载完成，但有部分内容未能删除（见上）。");
 
         if (keepData)
         {
-            Console.WriteLine($"已保留数据目录：{DataDirectory}");
+            Console.WriteLine(
+                $"已保留数据目录：{DataDirectory}（受保护模式密钥已删除，重装会生成新密钥）");
         }
 
-        return rulesRecovered && installDeleted ? 0 : 3;
+        return rulesRecovered && installDeleted && keyDeleted ? 0 : 3;
+    }
+
+    /// <summary>卸载时删除密钥目录并校验；删不掉要如实报告。</summary>
+    private static bool DeleteProtectedMode()
+    {
+        var store = CreateOwnerKeyStore();
+
+        if (!ProtectedModeFilesExist())
+        {
+            Console.WriteLine("受保护模式密钥：不存在（无需删除）。");
+            return true;
+        }
+
+        var owner = OwnerAccount.GetCurrentSid();
+
+        if (store.TryDeleteAll(owner, out var error, out var deleteScheduled))
+        {
+            Console.WriteLine("受保护模式密钥：已删除并校验不存在。");
+            return true;
+        }
+
+        Console.Error.WriteLine($"受保护模式密钥删除失败：{error ?? "未知原因"}");
+
+        if (deleteScheduled)
+        {
+            Console.Error.WriteLine(
+                "已登记重启后删除；请在重启后确认 protected-mode 目录已消失。");
+        }
+
+        return false;
+    }
+
+    private static bool ProtectedModeFilesExist()
+    {
+        var store = CreateOwnerKeyStore();
+
+        if (store.HasFiles)
+        {
+            return true;
+        }
+
+        if (!Directory.Exists(store.DirectoryPath))
+        {
+            return false;
+        }
+
+        // 能列目录就看是否为空；列不了（不是所有者）按“仍存在”处理，
+        // 不能因为读不到就报告删除成功。
+        return !TryInspectProtectedModeDirectory(out var hasEntries) || hasEntries;
     }
 
     /// <summary>双击安装器（无参数）：未安装就装，已安装就修复。</summary>
-    private static int RunSetupDefault()
+    private static int RunSetupDefault(bool allowOwnerMismatch)
     {
         Console.WriteLine("WinAppGuard 安装工具（双击模式）");
         Console.WriteLine();
 
         var code = ServiceControl.IsInstalled(ServiceProtocol.ServiceName)
-            ? RepairWithBanner()
-            : InstallWithBanner();
+            ? RepairWithBanner(allowOwnerMismatch)
+            : InstallWithBanner(allowOwnerMismatch);
 
         PauseIfInteractive();
         return code;
     }
 
-    private static int InstallWithBanner()
+    private static int InstallWithBanner(bool allowOwnerMismatch)
     {
         Console.WriteLine("执行安装…");
         Console.WriteLine();
-        return Install();
+        return Install(allowOwnerMismatch);
     }
 
-    private static int RepairWithBanner()
+    private static int RepairWithBanner(bool allowOwnerMismatch)
     {
-        Console.WriteLine("检测到已安装：执行修复（保留规则与数据）…");
+        Console.WriteLine("检测到已安装：执行修复（保留密钥、规则与数据）…");
         Console.WriteLine();
-        return Repair();
+        return Repair(allowOwnerMismatch);
     }
 
     /// <summary>双击卸载器（WinAppGuardUninstall.exe）：确认后完整卸载。</summary>
@@ -482,6 +921,7 @@ internal static class Program
         Console.WriteLine("  - 防护服务 WinAppGuardSvc");
         Console.WriteLine("  - 本程序创建的全部 WFP 规则与子层");
         Console.WriteLine("  - 桌面快捷方式、开机自启任务");
+        Console.WriteLine("  - 受保护模式密钥（protected-mode，始终删除）");
         Console.WriteLine("  - 记录 / 规则快照 / 设置（%ProgramData%\\WinAppGuard）");
         Console.WriteLine("  - 界面设置与日志（%LOCALAPPDATA%\\WinAppGuard）");
         Console.WriteLine("  - 安装目录（C:\\Program Files\\WinAppGuard）");

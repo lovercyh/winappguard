@@ -24,4 +24,13 @@ public static class ServicePaths
 
     /// <summary>审计设置（机器级；服务读写）。</summary>
     public static string AuditSettingsFile => Path.Combine(DataDirectory, "audit-settings.json");
+
+    /// <summary>3.1 受保护模式密钥目录（SYSTEM + 所有者；其他账户无权限）。</summary>
+    public static string ProtectedModeDirectory => Path.Combine(DataDirectory, "protected-mode");
+
+    /// <summary>受保护模式配置：所有者 SID、公钥、entropy、指纹（不含私钥）。</summary>
+    public static string ProtectedModeConfigFile => Path.Combine(ProtectedModeDirectory, "config.json");
+
+    /// <summary>DPAPI 用户级加密后的私钥（服务从不读取）。</summary>
+    public static string OwnerKeyFile => Path.Combine(ProtectedModeDirectory, "client-key.dpapi");
 }

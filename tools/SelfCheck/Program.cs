@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -140,6 +141,7 @@ internal static class Program
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
 
@@ -284,6 +286,10 @@ internal static class Program
             else if (args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunKeyPrimitiveTest();
+            }
+            else if (args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunProtectedModeStoreTest();
             }
             else if (args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4023,6 +4029,203 @@ internal static class Program
 
         PrintSummary(results, showFirewallResidue: false);
     }
+
+    /// <summary>
+    /// 受保护模式文件存储（离线）：目录/文件 ACL、DPAPI 往返、轮换、删除。
+    /// 不碰 ProgramData；只在临时目录里验证原语。
+    /// </summary>
+    private static void RunProtectedModeStoreTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var root = Path.Combine(
+            Path.GetTempPath(), $"WinAppGuard-pm-test-{Guid.NewGuid():N}");
+        var directory = Path.Combine(root, "protected-mode");
+        var store = new OwnerKeyStore(directory);
+        var identity = WindowsIdentity.GetCurrent();
+        var owner = identity.User;
+
+        W("################################################################");
+        W("#   受保护模式存储（离线：ACL / DPAPI / 轮换 / 删除）             #");
+        W("################################################################");
+        W();
+
+        if (owner is null)
+        {
+            W("    ！无法获取当前账户 SID。");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        try
+        {
+            string? firstFingerprint;
+
+            using (var key = store.Create(owner, identity.Name))
+            {
+                firstFingerprint = key.Fingerprint;
+                CheckAssertion(results, "能为当前账户生成密钥",
+                    key.PublicKey.Length > 0 && key.Fingerprint.Length == 64);
+            }
+
+            CheckAssertion(results, "配置与私钥文件都已落盘",
+                File.Exists(store.ConfigPath) && File.Exists(store.KeyPath));
+
+            var config = store.ReadConfig();
+            CheckAssertion(results, "配置里的所有者是当前账户",
+                string.Equals(config.OwnerSid, owner.Value,
+                    StringComparison.OrdinalIgnoreCase));
+
+            using (var loaded = store.LoadForOwner(owner))
+            {
+                CheckAssertion(results, "能用当前账户解回同一把钥匙",
+                    string.Equals(loaded.Fingerprint, firstFingerprint,
+                        StringComparison.OrdinalIgnoreCase));
+            }
+
+            var configText = File.ReadAllText(store.ConfigPath);
+            var keyBlobBase64 = Convert.ToBase64String(
+                File.ReadAllBytes(store.KeyPath));
+
+            CheckAssertion(results, "配置文件里没有私钥/密文副本",
+                !configText.Contains("PRIVATE KEY", StringComparison.Ordinal)
+                && !configText.Contains(keyBlobBase64, StringComparison.Ordinal));
+
+            var directorySecurity = new DirectoryInfo(directory).GetAccessControl();
+            var directoryRules = directorySecurity
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .ToList();
+
+            CheckAssertion(results, "密钥目录关闭继承，且只给 SYSTEM + 所有者",
+                directorySecurity.AreAccessRulesProtected
+                && HasRule(directoryRules, owner)
+                && HasRule(directoryRules, new SecurityIdentifier(
+                    WellKnownSidType.LocalSystemSid, null))
+                && !HasRule(directoryRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinUsersSid, null))
+                && !HasRule(directoryRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinAdministratorsSid, null)));
+
+            var fileSecurity = new FileInfo(store.ConfigPath).GetAccessControl();
+            var fileRules = fileSecurity
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .ToList();
+
+            CheckAssertion(results, "配置文件关闭继承，且只给 SYSTEM + 所有者",
+                fileSecurity.AreAccessRulesProtected
+                && HasRule(fileRules, owner)
+                && HasRule(fileRules, new SecurityIdentifier(
+                    WellKnownSidType.LocalSystemSid, null))
+                && !HasRule(fileRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinUsersSid, null))
+                && !HasRule(fileRules, new SecurityIdentifier(
+                    WellKnownSidType.BuiltinAdministratorsSid, null)));
+
+            string rotatedFingerprint;
+
+            using (var rotated = store.Create(owner, identity.Name))
+            {
+                rotatedFingerprint = rotated.Fingerprint;
+                CheckAssertion(results, "轮换后指纹发生变化",
+                    !string.Equals(rotated.Fingerprint, firstFingerprint,
+                        StringComparison.OrdinalIgnoreCase));
+            }
+
+            using (var loaded = store.LoadForOwner(owner))
+            {
+                CheckAssertion(results, "轮换后仍能正常解密",
+                    string.Equals(loaded.Fingerprint, rotatedFingerprint,
+                        StringComparison.OrdinalIgnoreCase));
+            }
+
+            var wrongOwnerRejected = false;
+
+            try
+            {
+                using var _ = store.LoadForOwner(new SecurityIdentifier(
+                    WellKnownSidType.BuiltinUsersSid, null));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                wrongOwnerRejected = true;
+            }
+
+            CheckAssertion(results, "非所有者读取被拒绝", wrongOwnerRejected);
+
+            File.WriteAllBytes(store.KeyPath, RandomNumberGenerator.GetBytes(64));
+            var tamperedKeyRejected = false;
+
+            try
+            {
+                using var _ = store.LoadForOwner(owner);
+            }
+            catch (Exception)
+            {
+                tamperedKeyRejected = true;
+            }
+
+            CheckAssertion(results, "损坏的私钥被拒绝", tamperedKeyRejected);
+
+            using (var restored = store.Create(owner, identity.Name))
+            {
+                _ = restored.Fingerprint;
+            }
+
+            File.WriteAllText(store.ConfigPath, "{ this is not json");
+            var corruptConfigRejected = false;
+
+            try
+            {
+                _ = store.ReadConfig();
+            }
+            catch (InvalidDataException)
+            {
+                corruptConfigRejected = true;
+            }
+
+            CheckAssertion(results, "损坏的配置被拒绝", corruptConfigRejected);
+
+            var deleted = store.TryDeleteAll(owner, out var deleteError, out _);
+
+            CheckAssertion(results, "删除密钥目录并校验不存在",
+                deleted && !Directory.Exists(directory));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "受保护模式存储测试执行完成", false);
+        }
+        finally
+        {
+            try
+            {
+                _ = store.TryDeleteAll(owner, out _, out _);
+            }
+            catch (Exception)
+            {
+                // 清理失败不影响报告。
+            }
+
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 同上。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static bool HasRule(
+        IEnumerable<FileSystemAccessRule> rules, SecurityIdentifier sid)
+        => rules.Any(rule => rule.IdentityReference.Equals(sid));
 
     /// <summary>
     /// 规则快照（离线）：服务写的 rules.json 必须能被界面读回；

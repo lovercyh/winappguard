@@ -182,6 +182,12 @@ internal static class Program
             return 6;
         }
 
+        if (!ConfigureSignerForIpc())
+        {
+            Console.Error.WriteLine("受保护模式签名密钥加载失败，安装中止（服务未启动）。");
+            return 6;
+        }
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
@@ -189,6 +195,12 @@ internal static class Program
         {
             Console.Error.WriteLine("服务没有进入运行状态。请查看 %ProgramData%\\WinAppGuard\\logs。");
             return 4;
+        }
+
+        if (!VerifyServiceAuth())
+        {
+            Console.Error.WriteLine("受保护模式签名自检失败，安装中止。请查看服务日志。");
+            return 6;
         }
 
         TryMigrateUserDataToService();
@@ -239,11 +251,26 @@ internal static class Program
             return 6;
         }
 
+        var signerReady = ConfigureSignerForIpc();
+
+        if (!signerReady && IsCurrentUserOwner())
+        {
+            Console.Error.WriteLine(
+                "受保护模式：当前账户是所有者，但签名密钥加载失败；修复中止。");
+            return 6;
+        }
+
         ServiceControl.Start(ServiceProtocol.ServiceName);
         Thread.Sleep(1200);
 
         if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
         {
+            if (signerReady && !VerifyServiceAuth())
+            {
+                Console.Error.WriteLine("受保护模式签名自检失败，修复中止。请查看服务日志。");
+                return 6;
+            }
+
             TryMigrateUserDataToService();
             TryRecoverLegacyStrictMode();
         }
@@ -257,6 +284,113 @@ internal static class Program
 
     private static OwnerKeyStore CreateOwnerKeyStore()
         => new(ServicePaths.ProtectedModeDirectory);
+
+    private static bool IsCurrentUserOwner()
+    {
+        try
+        {
+            var config = CreateOwnerKeyStore().ReadConfig();
+            return string.Equals(
+                config.OwnerSid, OwnerAccount.GetCurrentSid().Value,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>把已安装密钥加载成 ServiceClient 的签名器。</summary>
+    private static bool ConfigureSignerForIpc()
+    {
+        if (ProtectedModeClient.TryConfigureSigner(out var fingerprint, out var error))
+        {
+            Console.WriteLine(
+                $"受保护模式：签名密钥已加载（指纹 {fingerprint?[..16]}…）。");
+            return true;
+        }
+
+        Console.WriteLine(
+            $"受保护模式：当前账户无法加载签名密钥（{error}）；"
+            + "签名自检与旧数据迁移将跳过。");
+        return false;
+    }
+
+    /// <summary>
+    /// 安装后自检：用新密钥签名调用 status，确认服务真的认这把钥匙。
+    /// 当前账户不是所有者（没有 signer）时调用方应跳过。
+    /// </summary>
+    private static bool VerifyServiceAuth()
+    {
+        if (!ServiceClient.HasSigner)
+        {
+            Console.WriteLine("受保护模式：没有签名能力，跳过安装后签名自检。");
+            return true;
+        }
+
+        string expectedFingerprint;
+
+        try
+        {
+            expectedFingerprint = CreateOwnerKeyStore().ReadConfig().Fingerprint;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"读取受保护模式配置失败：{ex.Message}");
+            return false;
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        ServiceStatus? status = null;
+        string? lastError = null;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                TimeSpan.FromSeconds(1),
+                out var error);
+
+            lastError = response?.Error ?? error;
+
+            if (response is { Ok: true } && response.Status is not null)
+            {
+                status = response.Status;
+                break;
+            }
+
+            Thread.Sleep(300);
+        }
+
+        if (status is null)
+        {
+            Console.Error.WriteLine(
+                $"签名 status 自检失败：{lastError ?? "服务没有返回状态"}");
+            return false;
+        }
+
+        if (status.ProtocolVersion != ServiceProtocol.Version || !status.ProtectedMode)
+        {
+            Console.Error.WriteLine(
+                $"签名自检失败：协议 {status.ProtocolVersion}，"
+                + $"受保护模式={status.ProtectedMode}。");
+            return false;
+        }
+
+        if (!string.Equals(
+                status.ProtectedModeFingerprint, expectedFingerprint,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                "签名自检失败：服务使用的公钥指纹与本地配置不一致。");
+            return false;
+        }
+
+        Console.WriteLine(
+            $"受保护模式：签名自检通过（所有者 {status.ProtectedModeOwner}，"
+            + $"指纹 {status.ProtectedModeFingerprint![..16]}…）。");
+        return true;
+    }
 
     /// <summary>
     /// 目录不存在 → true/空；存在且能列 → true/是否有内容；
@@ -504,7 +638,17 @@ internal static class Program
             return 6;
         }
 
-        return StartServiceAfterKeyChange() ? 0 : 4;
+        if (!ConfigureSignerForIpc())
+        {
+            return 6;
+        }
+
+        if (!StartServiceAfterKeyChange())
+        {
+            return 4;
+        }
+
+        return VerifyServiceAuth() ? 0 : 6;
     }
 
     /// <summary>把当前提权账户设为新所有者；旧密钥删除，生成全新密钥。</summary>
@@ -543,7 +687,18 @@ internal static class Program
         }
 
         Console.WriteLine($"所有者已切换为：{ownerName}");
-        return StartServiceAfterKeyChange() ? 0 : 4;
+
+        if (!ConfigureSignerForIpc())
+        {
+            return 6;
+        }
+
+        if (!StartServiceAfterKeyChange())
+        {
+            return 4;
+        }
+
+        return VerifyServiceAuth() ? 0 : 6;
     }
 
     private static bool StopServiceForMaintenance()
@@ -614,6 +769,12 @@ internal static class Program
     {
         try
         {
+            if (!ServiceClient.HasSigner)
+            {
+                Console.WriteLine("没有签名密钥，跳过旧数据迁移。");
+                return;
+            }
+
             var ready = false;
 
             for (var attempt = 0; attempt < 30; attempt++)

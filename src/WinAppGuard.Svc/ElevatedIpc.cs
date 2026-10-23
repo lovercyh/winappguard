@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.ProtectedMode;
 
 namespace WinAppGuard.Service;
 
@@ -49,13 +50,25 @@ internal static class ElevatedIpc
             }
             else
             {
-                response = ServiceClient.TryRequest(
-                    request, TimeSpan.FromSeconds(15), out var error)
-                    ?? new ServiceResponse
+                // 提权助手以所有者身份运行：加载 DPAPI 密钥后才能签名。
+                if (!ProtectedModeClient.TryConfigureSigner(out _, out var authError))
+                {
+                    response = new ServiceResponse
                     {
                         Ok = false,
-                        Error = $"防护服务没有响应：{error}",
+                        Error = $"当前提权账户无法加载签名密钥：{authError}",
                     };
+                }
+                else
+                {
+                    response = ServiceClient.TryRequest(
+                        request, TimeSpan.FromSeconds(15), out var error)
+                        ?? new ServiceResponse
+                        {
+                            Ok = false,
+                            Error = $"防护服务没有响应：{error}",
+                        };
+                }
             }
         }
         catch (Exception ex)

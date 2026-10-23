@@ -57,6 +57,9 @@ public sealed class ServiceResponse
     /// <summary>失败原因（只在 <see cref="Ok"/> 为 false 时非空）。</summary>
     public string? Error { get; set; }
 
+    /// <summary>3.1：auth.challenge 返回的 32 字节 nonce（Base64）。</summary>
+    public string? Nonce { get; set; }
+
     /// <summary>服务状态（status 命令返回）。</summary>
     public ServiceStatus? Status { get; set; }
 
@@ -162,4 +165,21 @@ public sealed class ServiceStatus
 
     /// <summary>最近一次自动解除的程序路径（最多 20 条）。</summary>
     public List<string>? LastPurgedPrograms { get; set; }
+
+    // ---- 3.1：受保护模式 ----
+
+    /// <summary>服务是否成功加载了受保护模式配置（失败关闭时为 false）。</summary>
+    public bool ProtectedMode { get; set; }
+
+    /// <summary>所有者显示名（只读展示）。</summary>
+    public string? ProtectedModeOwner { get; set; }
+
+    /// <summary>所有者 SID。</summary>
+    public string? ProtectedModeOwnerSid { get; set; }
+
+    /// <summary>服务正在使用的公钥指纹（完整 64 位十六进制）。</summary>
+    public string? ProtectedModeFingerprint { get; set; }
+
+    /// <summary>本次服务运行以来签名验证失败的次数。</summary>
+    public int AuthRejectedCount { get; set; }
 }

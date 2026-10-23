@@ -22,6 +22,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 受保护模式需要 ServicePaths / IServiceSigner / ServiceClient。 -->
+    <ProjectReference Include="..\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       这些类型是 internal（不对外暴露）：
         - WinAppGuard（界面程序集）要用它们；

@@ -60,6 +60,75 @@ public static class PipeCodec
         return JsonSerializer.Deserialize<T>(payload, ServiceProtocol.JsonOptions);
     }
 
+    /// <summary>
+    /// 3.1 协议 v2 的签名封套：
+    /// [4 字节签名长度][签名 DER][4 字节请求长度][请求 JSON]。
+    /// </summary>
+    public static async Task WriteSignedAsync(
+        Stream stream,
+        ReadOnlyMemory<byte> signature,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
+    {
+        if (signature.Length <= 0 || signature.Length > ServiceProtocol.MaxSignatureBytes)
+        {
+            throw new InvalidDataException(
+                $"签名长度不合法：{signature.Length}（上限 {ServiceProtocol.MaxSignatureBytes}）。");
+        }
+
+        if (payload.Length <= 0 || payload.Length > ServiceProtocol.MaxMessageBytes)
+        {
+            throw new InvalidDataException(
+                $"请求长度不合法：{payload.Length}（上限 {ServiceProtocol.MaxMessageBytes}）。");
+        }
+
+        var header = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(0, 4), signature.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(4, 4), payload.Length);
+
+        await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(signature, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<SignedEnvelope> ReadSignedAsync(
+        Stream stream, CancellationToken cancellationToken)
+    {
+        var header = new byte[8];
+
+        if (!await ReadExactlyAsync(stream, header, cancellationToken).ConfigureAwait(false))
+        {
+            throw new EndOfStreamException("签名封套没有开始就被关闭。");
+        }
+
+        var signatureLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(0, 4));
+        var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(4, 4));
+
+        if (signatureLength <= 0 || signatureLength > ServiceProtocol.MaxSignatureBytes)
+        {
+            throw new InvalidDataException(
+                $"签名长度不合法：{signatureLength}（上限 {ServiceProtocol.MaxSignatureBytes}）。");
+        }
+
+        if (payloadLength <= 0 || payloadLength > ServiceProtocol.MaxMessageBytes)
+        {
+            throw new InvalidDataException(
+                $"请求长度不合法：{payloadLength}（上限 {ServiceProtocol.MaxMessageBytes}）。");
+        }
+
+        var signature = new byte[signatureLength];
+        var payload = new byte[payloadLength];
+
+        if (!await ReadExactlyAsync(stream, signature, cancellationToken).ConfigureAwait(false)
+            || !await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false))
+        {
+            throw new EndOfStreamException("签名封套没有读完，连接被提前关闭。");
+        }
+
+        return new SignedEnvelope(signature, payload);
+    }
+
     private static async Task<bool> ReadExactlyAsync(
         Stream stream, byte[] buffer, CancellationToken cancellationToken)
     {
@@ -83,4 +152,18 @@ public static class PipeCodec
 
         return true;
     }
+}
+
+/// <summary>3.1 协议 v2 的签名封套内容。</summary>
+public sealed class SignedEnvelope
+{
+    public SignedEnvelope(byte[] signature, byte[] payload)
+    {
+        Signature = signature;
+        Payload = payload;
+    }
+
+    public byte[] Signature { get; }
+
+    public byte[] Payload { get; }
 }

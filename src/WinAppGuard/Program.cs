@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using WinAppGuard.Core;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Forms;
 using WinAppGuard.Interop;
 
@@ -73,6 +74,18 @@ internal static class Program
             $"管理员权限={isAdmin}（按需提权），" +
             $"启动模式={(IsAutostart ? AppConstants.AutostartArgument : "手动")}，" +
             $"进程路径={Environment.ProcessPath}");
+
+        // 4.5) 3.1：加载所有者密钥，给所有 IPC 请求签名。
+        //      不是所有者 / DPAPI 解不开时不要崩：界面仍能启动，
+        //      但 ServiceClient 会明确返回"未配置签名密钥"，显示为离线。
+        if (ProtectedModeClient.TryConfigureSigner(out var fingerprint, out var authError))
+        {
+            LocalLog.Info($"受保护模式：已加载签名密钥（指纹 {fingerprint?[..16]}…）。");
+        }
+        else
+        {
+            LocalLog.Warning($"受保护模式：无法加载签名密钥（{authError}）。");
+        }
 
         // 5) 启动界面。
         ApplicationConfiguration.Initialize();

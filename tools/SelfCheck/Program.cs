@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Buffers.Binary;
+using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -137,6 +138,7 @@ internal static class Program
                          && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ipc-codec-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--auth-codec-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
@@ -163,6 +165,15 @@ internal static class Program
             }
 
             return 2;
+        }
+
+        // 3.1：服务/IPC 相关测试需要所有者密钥；离线测试没有密钥也能跑。
+        var signerReady = ProtectedModeClient.TryConfigureSigner(out _, out var signerError);
+
+        if (!signerReady
+            && args.Any(a => a.StartsWith("--service", StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.WriteLine($"提示：未加载受保护模式签名密钥（{signerError}）；服务测试会失败。");
         }
 
         try
@@ -260,6 +271,10 @@ internal static class Program
             {
                 RunIpcCodecTest();
             }
+            else if (args.Contains("--auth-codec-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAuthCodecTest();
+            }
             else if (args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceUiTest();
@@ -271,6 +286,10 @@ internal static class Program
             else if (args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServicePingTest();
+            }
+            else if (args.Contains("--service-auth-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceAuthTest();
             }
             else if (args.Contains("--service-rules-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3473,9 +3492,9 @@ internal static class Program
         W("################################################################");
         W();
 
-        CheckAssertion(results, "协议版本为 1", ServiceProtocol.Version == 1);
+        CheckAssertion(results, "协议版本为 2", ServiceProtocol.Version == 2);
         CheckAssertion(results, "管道名带协议版本（不兼容时会连不上而不是误解）",
-            ServiceProtocol.PipeName.EndsWith(".v1", StringComparison.Ordinal));
+            ServiceProtocol.PipeName.EndsWith(".v2", StringComparison.Ordinal));
 
         // ---------------- 1. 请求往返 + 长度前缀 ----------------
         W("===== 1. 请求往返 =====");
@@ -3511,7 +3530,7 @@ internal static class Program
 
         var status = new ServiceStatus
         {
-            ServiceVersion = "3.0",
+            ServiceVersion = "3.1",
             SublayerPresent = true,
             BlockRuleCount = 3,
             AllowRuleCount = 1,
@@ -3527,7 +3546,7 @@ internal static class Program
 
         CheckAssertion(results, "状态字段全部保留",
             parsedStatus is not null
-            && parsedStatus.ServiceVersion == "3.0"
+            && parsedStatus.ServiceVersion == "3.1"
             && parsedStatus.SublayerPresent
             && parsedStatus.BlockRuleCount == 3
             && parsedStatus.AllowRuleCount == 1
@@ -3587,6 +3606,131 @@ internal static class Program
     }
 
     /// <summary>服务状态标签的两种状态（离线 / 运行中）。</summary>
+    /// <summary>
+    /// 3.1 签名封套（离线）：nonce + payload 签名、篡改、重放、长度上限。
+    /// </summary>
+    private static void RunAuthCodecTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   签名封套（离线：nonce / 签名 / 篡改 / 重放 / 长度上限）       #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            using var key = OwnerKey.Create();
+            var nonce = RandomNumberGenerator.GetBytes(32);
+            var payload = Encoding.UTF8.GetBytes("{\"command\":\"status\"}");
+            var signed = new byte[nonce.Length + payload.Length];
+            Buffer.BlockCopy(nonce, 0, signed, 0, nonce.Length);
+            Buffer.BlockCopy(payload, 0, signed, nonce.Length, payload.Length);
+
+            var signature = key.Sign(signed);
+
+            using var stream = new MemoryStream();
+            PipeCodec.WriteSignedAsync(
+                    stream, signature, payload, CancellationToken.None)
+                .GetAwaiter().GetResult();
+
+            stream.Position = 0;
+            var envelope = PipeCodec.ReadSignedAsync(stream, CancellationToken.None)
+                .GetAwaiter().GetResult();
+
+            CheckAssertion(results, "签名封套长度往返一致",
+                envelope.Signature.Length == signature.Length
+                && envelope.Payload.Length == payload.Length);
+
+            CheckAssertion(results, "签名封套内容往返一致",
+                envelope.Signature.AsSpan().SequenceEqual(signature)
+                && envelope.Payload.AsSpan().SequenceEqual(payload));
+
+            CheckAssertion(results, "nonce + payload 签名能验证",
+                OwnerKey.Verify(key.PublicKey, signed, envelope.Signature));
+
+            var tamperedPayload = payload.ToArray();
+            tamperedPayload[^1] ^= 0x01;
+            var tamperedSigned = new byte[nonce.Length + tamperedPayload.Length];
+            Buffer.BlockCopy(nonce, 0, tamperedSigned, 0, nonce.Length);
+            Buffer.BlockCopy(
+                tamperedPayload, 0, tamperedSigned, nonce.Length, tamperedPayload.Length);
+
+            CheckAssertion(results, "篡改请求后验签失败",
+                !OwnerKey.Verify(key.PublicKey, tamperedSigned, envelope.Signature));
+
+            var tamperedSignature = signature.ToArray();
+            tamperedSignature[0] ^= 0x01;
+
+            CheckAssertion(results, "篡改签名后验签失败",
+                !OwnerKey.Verify(key.PublicKey, signed, tamperedSignature));
+
+            var replayNonce = RandomNumberGenerator.GetBytes(32);
+            var replayData = new byte[replayNonce.Length + payload.Length];
+            Buffer.BlockCopy(replayNonce, 0, replayData, 0, replayNonce.Length);
+            Buffer.BlockCopy(payload, 0, replayData, replayNonce.Length, payload.Length);
+
+            CheckAssertion(results, "换一个 nonce 重放旧签名失败",
+                !OwnerKey.Verify(key.PublicKey, replayData, signature));
+
+            var emptySignatureRejected = false;
+
+            try
+            {
+                using var _ = new MemoryStream();
+                PipeCodec.WriteSignedAsync(
+                        _, Array.Empty<byte>(), payload, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch (InvalidDataException)
+            {
+                emptySignatureRejected = true;
+            }
+
+            CheckAssertion(results, "空签名被拒绝", emptySignatureRejected);
+
+            var oversizedPayloadRejected = false;
+
+            try
+            {
+                using var _ = new MemoryStream();
+                PipeCodec.WriteSignedAsync(
+                        _, signature,
+                        new byte[ServiceProtocol.MaxMessageBytes + 1],
+                        CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch (InvalidDataException)
+            {
+                oversizedPayloadRejected = true;
+            }
+
+            CheckAssertion(results, "超长请求被拒绝", oversizedPayloadRejected);
+
+            var challenge = new ServiceResponse
+            {
+                Ok = true,
+                Nonce = Convert.ToBase64String(nonce),
+            };
+
+            var challengeJson = JsonSerializer.Serialize(
+                challenge, ServiceProtocol.JsonOptions);
+            var parsedChallenge = JsonSerializer.Deserialize<ServiceResponse>(
+                challengeJson, ServiceProtocol.JsonOptions);
+
+            CheckAssertion(results, "challenge nonce 能原样往返",
+                parsedChallenge?.Nonce is not null
+                && Convert.FromBase64String(parsedChallenge.Nonce).Length == 32);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "签名封套测试执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunServiceUiTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -3615,7 +3759,7 @@ internal static class Program
 
         var status = new ServiceStatus
         {
-            ServiceVersion = "3.0",
+            ServiceVersion = "3.1",
             SublayerPresent = true,
             BlockRuleCount = 3,
             AllowRuleCount = 1,
@@ -3763,6 +3907,197 @@ internal static class Program
             authResponse is not null && authResponse.Ok == elevated);
 
         W("    提示：这个模式不会自动提权；请在两种账号下各跑一次。");
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 服务端签名鉴权（**需管理员 + 服务已运行 + 所有者密钥**）：
+    /// 正确签名、无签名、篡改、重放、错误密钥、未配置 signer。
+    /// </summary>
+    private static void RunServiceAuthTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var currentSigner = ServiceClient.CurrentSigner;
+
+        W("################################################################");
+        W("#   服务端签名鉴权（需服务已运行：正确 / 无签名 / 篡改 / 重放）  #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+            CheckAssertion(results, "正确签名能查询状态", status is not null);
+
+            if (status is not null)
+            {
+                W($"    服务版本 = {status.ServiceVersion}，协议 = {status.ProtocolVersion}");
+                W($"    受保护模式 = {status.ProtectedMode}，所有者 = {status.ProtectedModeOwner}");
+                W($"    指纹 = {status.ProtectedModeFingerprint?[..16]}…");
+                CheckAssertion(results, "status 报告受保护模式已启用",
+                    status.ProtectedMode && status.ProtocolVersion == ServiceProtocol.Version);
+            }
+
+            var user = WindowsIdentity.GetCurrent().User
+                       ?? throw new InvalidOperationException("拿不到当前 SID。");
+
+            using var ownerKey = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory)
+                .LoadForOwner(user);
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            byte[] Challenge(NamedPipeClientStream pipe)
+            {
+                PipeCodec.WriteAsync(
+                        pipe,
+                        new ServiceRequest { Command = ServiceProtocol.Commands.AuthChallenge },
+                        timeout.Token)
+                    .GetAwaiter().GetResult();
+
+                var response = PipeCodec
+                    .ReadAsync<ServiceResponse>(pipe, timeout.Token)
+                    .GetAwaiter().GetResult();
+
+                if (response is not { Ok: true } || response.Nonce is null)
+                {
+                    throw new InvalidOperationException(
+                        response?.Error ?? "challenge 没有返回 nonce");
+                }
+
+                return Convert.FromBase64String(response.Nonce);
+            }
+
+            NamedPipeClientStream Connect()
+            {
+                var pipe = new NamedPipeClientStream(
+                    ".", ServiceProtocol.PipeName,
+                    PipeDirection.InOut, PipeOptions.Asynchronous);
+                pipe.Connect(3000);
+                return pipe;
+            }
+
+            static byte[] JoinNonce(byte[] nonce, byte[] payload)
+            {
+                var data = new byte[nonce.Length + payload.Length];
+                Buffer.BlockCopy(nonce, 0, data, 0, nonce.Length);
+                Buffer.BlockCopy(payload, 0, data, nonce.Length, payload.Length);
+                return data;
+            }
+
+            static ServiceResponse SendSigned(
+                NamedPipeClientStream pipe,
+                byte[] nonce,
+                byte[] payload,
+                byte[] signature,
+                CancellationToken token)
+            {
+                PipeCodec.WriteSignedAsync(pipe, signature, payload, token)
+                    .GetAwaiter().GetResult();
+                return PipeCodec.ReadAsync<ServiceResponse>(pipe, token)
+                           .GetAwaiter().GetResult()
+                       ?? new ServiceResponse { Ok = false, Error = "无响应" };
+            }
+
+            var payload = JsonSerializer.SerializeToUtf8Bytes(
+                new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                ServiceProtocol.JsonOptions);
+
+            // 1) challenge nonce 长度
+            using (var pipe = Connect())
+            {
+                var nonce = Challenge(pipe);
+                CheckAssertion(results, "challenge 返回 32 字节 nonce",
+                    nonce.Length == 32);
+            }
+
+            // 2) 无签名（把 status 当第一条命令）
+            using (var pipe = Connect())
+            {
+                PipeCodec.WriteAsync(
+                        pipe,
+                        new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                        timeout.Token)
+                    .GetAwaiter().GetResult();
+
+                var response = PipeCodec
+                    .ReadAsync<ServiceResponse>(pipe, timeout.Token)
+                    .GetAwaiter().GetResult();
+
+                CheckAssertion(results, "无签名的请求被拒绝",
+                    response is { Ok: false });
+            }
+
+            // 3) 篡改签名
+            using (var pipe = Connect())
+            {
+                var nonce = Challenge(pipe);
+                var signature = ownerKey.Sign(JoinNonce(nonce, payload));
+                signature[0] ^= 0x01;
+
+                var response = SendSigned(
+                    pipe, nonce, payload, signature, timeout.Token);
+
+                CheckAssertion(results, "篡改签名被拒绝", !response.Ok);
+            }
+
+            // 4) 重放：在另一个连接里复用旧签名（nonce 不同）
+            byte[] replayedSignature;
+
+            using (var pipe = Connect())
+            {
+                var nonce = Challenge(pipe);
+                replayedSignature = ownerKey.Sign(JoinNonce(nonce, payload));
+
+                var response = SendSigned(
+                    pipe, nonce, payload, replayedSignature, timeout.Token);
+
+                CheckAssertion(results, "正确签名能通过原始封套发送", response.Ok);
+            }
+
+            using (var pipe = Connect())
+            {
+                var newNonce = Challenge(pipe);
+
+                var response = SendSigned(
+                    pipe, newNonce, payload, replayedSignature, timeout.Token);
+
+                CheckAssertion(results, "重放旧签名被拒绝", !response.Ok);
+            }
+
+            // 5) 错误密钥
+            using (var wrongKey = OwnerKey.Create())
+            using (var pipe = Connect())
+            {
+                var nonce = Challenge(pipe);
+                var signature = wrongKey.Sign(JoinNonce(nonce, payload));
+
+                var response = SendSigned(
+                    pipe, nonce, payload, signature, timeout.Token);
+
+                CheckAssertion(results, "错误密钥的签名被拒绝", !response.Ok);
+            }
+
+            // 6) 客户端没有 signer 时不发请求
+            ServiceClient.SetSigner(null);
+
+            var noSigner = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                TimeSpan.FromSeconds(1),
+                out var noSignerError);
+
+            CheckAssertion(results, "没有 signer 时客户端拒绝发送",
+                noSigner is null && noSignerError is not null);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "签名鉴权测试执行完成", false);
+        }
+        finally
+        {
+            ServiceClient.SetSigner(currentSigner);
+        }
+
         PrintSummary(results, showFirewallResidue: false);
     }
 

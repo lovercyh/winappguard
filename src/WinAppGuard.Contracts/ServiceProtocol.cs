@@ -5,16 +5,16 @@ namespace WinAppGuard.Contracts;
 /// <summary>
 /// 服务与界面之间的 IPC 约定。
 ///
-/// 命名管道名带 <c>v1</c>：协议不兼容时**换一个管道**，而不是在同一管道里猜版本 ——
+/// 命名管道名带 <c>v2</c>：协议不兼容时**换一个管道**，而不是在同一管道里猜版本 ——
 /// 这样旧界面连不上新服务时会立刻失败并给出明确提示，而不是发出一条被误解的指令。
 /// </summary>
 public static class ServiceProtocol
 {
     /// <summary>管道名（不带 <c>\\.\pipe\</c> 前缀）。</summary>
-    public const string PipeName = "WinAppGuard.Control.v1";
+    public const string PipeName = "WinAppGuard.Control.v2";
 
     /// <summary>协议版本。任何不兼容的字段变化都要 +1。</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary>单条消息上限（64 KB）。正常请求只有几百字节。</summary>
     /// <summary>
@@ -25,6 +25,9 @@ public static class ServiceProtocol
     /// 读取方向的规则列表（几千条）同样可能超过 64 KB。
     /// </summary>
     public const int MaxMessageBytes = 4 * 1024 * 1024;
+
+    /// <summary>ECDSA P-256 DER 签名上限（实际 64 字节左右）。</summary>
+    public const int MaxSignatureBytes = 256;
 
     /// <summary>服务显示名（安装/卸载、SCM 里看到的名字）。</summary>
     public const string ServiceName = "WinAppGuardSvc";
@@ -38,6 +41,9 @@ public static class ServiceProtocol
     /// <summary>请求里的命令名（v1 只有只读命令）。</summary>
     public static class Commands
     {
+        /// <summary>3.1 协议 v2：获取一次性 nonce（只有这条命令免签）。</summary>
+        public const string AuthChallenge = "auth.challenge";
+
         public const string Status = "status";
         public const string Ping = "ping";
 

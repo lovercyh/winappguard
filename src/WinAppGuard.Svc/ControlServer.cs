@@ -3,20 +3,27 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Service;
 
 /// <summary>
-/// 命名管道服务端（v1 只读命令）。
+/// 命名管道服务端（3.1 协议 v2）。
 ///
-/// 两道门：
-///   1. **管道 ACL**：只允许 SYSTEM 与 Administrators 连接（非管理员连不上）；
-///   2. **令牌校验**：连上之后还要确认客户端令牌**已提权**（M1.5）。
-/// 第二道是真正的边界：ACL 只是提前把大多数无关进程挡在外面。
+/// 认证顺序：
+///   1. 管道 ACL（3.1 仍是 SYSTEM + Administrators + Interactive）；
+///   2. 客户端令牌检查（拿 PID / 是否提权）；
+///   3. **挑战-签名**：服务发 32 字节 nonce，客户端用所有者 ECDSA 私钥
+///      对 <c>nonce || 请求原始字节</c> 签名；验签失败一律拒绝。
+///
+/// 写命令仍然要求客户端令牌已提权（M1.5 的 UAC 模型）；
+/// 查看/记录只要求签名，不要求提权。
 /// </summary>
 internal sealed class ControlServer : IDisposable
 {
@@ -25,18 +32,44 @@ internal sealed class ControlServer : IDisposable
     private readonly CancellationTokenSource _cancellation = new();
     private Thread? _thread;
     private bool _loggedReady;
+    // 服务进程里只有一个 ControlServer；BuildStatus 被 RuleHandlers 静态调用，
+    // 所以这两项用 static，保证状态命令和规则命令看到同一份配置。
+    private static ProtectedModeConfig? _protectedMode;
+    private static int _authRejectedCount;
     private System.Threading.Timer? _expiryTimer;
     private System.Threading.Timer? _tamperTimer;
 
     internal void Start()
     {
-        _thread = new Thread(Loop)
+        // 3.1：启动时加载受保护模式配置。缺失/损坏就**不创建控制管道**（失败关闭），
+        // 但 WFP / 审计仍然工作；由 Setup --repair 重建配置。
+        try
         {
-            IsBackground = true,
-            Name = "ipc-server",
-        };
+            _protectedMode = ProtectedModeConfig.Load(
+                ServicePaths.ProtectedModeConfigFile);
 
-        _thread.Start();
+            ServiceLog.Info(
+                $"受保护模式：所有者 {_protectedMode.OwnerName}，"
+                + $"指纹 {_protectedMode.Fingerprint[..16]}…");
+        }
+        catch (Exception ex)
+        {
+            _protectedMode = null;
+            ServiceLog.Error(
+                "受保护模式配置不可用，控制管道不会创建（失败关闭）。"
+                + "请以所有者身份运行 WinAppGuardSetup.exe --repair。", ex);
+        }
+
+        if (_protectedMode is not null)
+        {
+            _thread = new Thread(Loop)
+            {
+                IsBackground = true,
+                Name = "ipc-server",
+            };
+
+            _thread.Start();
+        }
 
         // 到期清理归服务：界面关掉、没人点刷新时也要准时解除临时阻断。
         _expiryTimer = new System.Threading.Timer(
@@ -90,7 +123,10 @@ internal sealed class ControlServer : IDisposable
         ServiceLog.Info("启动：启动审计采集…");
         AuditHost.StartIfEnabled();
 
-        ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}");
+        if (_protectedMode is not null)
+        {
+            ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}（v2 签名鉴权）");
+        }
     }
 
     internal void Stop()
@@ -167,10 +203,15 @@ internal sealed class ControlServer : IDisposable
         }
     }
 
-    private static void HandleClient(NamedPipeServerStream pipe, CancellationToken serverToken)
+    private void HandleClient(NamedPipeServerStream pipe, CancellationToken serverToken)
     {
+        if (_protectedMode is null)
+        {
+            return;
+        }
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
 
         if (!ClientAuth.TryGetElevation(pipe, out var elevated, out var clientPid, out var reason))
         {
@@ -179,21 +220,102 @@ internal sealed class ControlServer : IDisposable
             return;
         }
 
-        ServiceRequest? request;
+        ServiceRequest? challenge;
 
         try
         {
-            request = PipeCodec.ReadAsync<ServiceRequest>(pipe, timeout.Token)
+            challenge = PipeCodec.ReadAsync<ServiceRequest>(pipe, timeout.Token)
                 .GetAwaiter().GetResult();
         }
         catch (OperationCanceledException)
         {
-            ServiceLog.Warning("IPC 请求超时。");
+            ServiceLog.Warning("IPC 认证挑战超时。");
             return;
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"IPC 请求不合法：{ex.Message}");
+            ServiceLog.Warning($"IPC 认证挑战不合法：{ex.Message}");
+            return;
+        }
+
+        if (challenge is null)
+        {
+            return;
+        }
+
+        if (challenge.ProtocolVersion != ServiceProtocol.Version
+            || !string.Equals(
+                challenge.Command, ServiceProtocol.Commands.AuthChallenge,
+                StringComparison.Ordinal))
+        {
+            ServiceLog.Warning(
+                $"拒绝 IPC：第一条命令必须是 auth.challenge（PID {clientPid}，"
+                + $"命令 {challenge.Command}）。");
+            TryWrite(pipe, new ServiceResponse
+            {
+                Id = challenge.Id,
+                Ok = false,
+                Error = "认证失败",
+            }, timeout.Token);
+            return;
+        }
+
+        var nonce = RandomNumberGenerator.GetBytes(32);
+
+        TryWrite(pipe, new ServiceResponse
+        {
+            Id = challenge.Id,
+            Ok = true,
+            Nonce = Convert.ToBase64String(nonce),
+        }, timeout.Token);
+
+        SignedEnvelope envelope;
+
+        try
+        {
+            envelope = PipeCodec.ReadSignedAsync(pipe, timeout.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            ServiceLog.Warning("IPC 签名封套超时。");
+            return;
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning($"IPC 签名封套不合法：{ex.Message}");
+            return;
+        }
+
+        var signedData = new byte[nonce.Length + envelope.Payload.Length];
+        Buffer.BlockCopy(nonce, 0, signedData, 0, nonce.Length);
+        Buffer.BlockCopy(envelope.Payload, 0, signedData, nonce.Length, envelope.Payload.Length);
+
+        if (!OwnerKey.Verify(
+                _protectedMode.GetPublicKeyBytes(), signedData, envelope.Signature))
+        {
+            var rejected = Interlocked.Increment(ref _authRejectedCount);
+            ServiceLog.Warning(
+                $"拒绝 IPC：签名无效（PID {clientPid}，累计 {rejected} 次）。");
+            TryWrite(pipe, new ServiceResponse
+            {
+                Id = challenge.Id,
+                Ok = false,
+                Error = "认证失败",
+            }, timeout.Token);
+            return;
+        }
+
+        ServiceRequest? request;
+
+        try
+        {
+            request = JsonSerializer.Deserialize<ServiceRequest>(
+                envelope.Payload, ServiceProtocol.JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning($"IPC 请求 JSON 不合法：{ex.Message}");
             return;
         }
 
@@ -217,7 +339,7 @@ internal sealed class ControlServer : IDisposable
         }
     }
 
-    private static ServiceResponse Dispatch(ServiceRequest request, bool elevated, uint clientPid)
+    private ServiceResponse Dispatch(ServiceRequest request, bool elevated, uint clientPid)
     {
         if (request.ProtocolVersion != ServiceProtocol.Version)
         {
@@ -306,6 +428,11 @@ internal sealed class ControlServer : IDisposable
         {
             ServiceVersion = BuildVersion(),
             ProtocolVersion = ServiceProtocol.Version,
+            ProtectedMode = _protectedMode is not null,
+            ProtectedModeOwner = _protectedMode?.OwnerName,
+            ProtectedModeOwnerSid = _protectedMode?.OwnerSid,
+            ProtectedModeFingerprint = _protectedMode?.Fingerprint,
+            AuthRejectedCount = Volatile.Read(ref _authRejectedCount),
         };
 
         try

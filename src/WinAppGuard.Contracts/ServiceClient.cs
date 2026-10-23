@@ -1,19 +1,32 @@
 using System.IO.Pipes;
+using System.Text.Json;
 
 namespace WinAppGuard.Contracts;
 
 /// <summary>
-/// 界面侧的 IPC 客户端。
+/// 界面侧的 IPC 客户端（3.1 协议 v2）。
 ///
-/// 刻意做成"失败就返回 null"而不是抛异常：服务没装、没起、被停，
-/// 都是**正常状态**，界面要能据此显示「离线模式」，而不是弹一堆错误。
+/// 每条请求先取 nonce，再对 <c>nonce || 请求 JSON</c> 签名：
+/// 没配置签名密钥（不是所有者 / DPAPI 解不开）就发不出去。
+/// 连接失败仍按“正常离线”返回 null，不抛异常。
 /// </summary>
 public static class ServiceClient
 {
+    private static IServiceSigner? _signer;
+
+    /// <summary>当前进程的签名能力；null = 没有可用密钥。</summary>
+    public static bool HasSigner => Volatile.Read(ref _signer) is not null;
+
+    /// <summary>当前签名器（自检里用于恢复现场）。</summary>
+    public static IServiceSigner? CurrentSigner => Volatile.Read(ref _signer);
+
     /// <summary>
-    /// 查询服务状态。
+    /// 设置签名器。3.1 的 UI / 安装器 / 提权助手在启动时调用一次；
+    /// 传 null 表示当前账户没有可用密钥。
     /// </summary>
-    /// <returns>拿到状态返回它；连不上 / 超时 / 协议不匹配返回 null。</returns>
+    public static void SetSigner(IServiceSigner? signer)
+        => Volatile.Write(ref _signer, signer);
+
     public static ServiceStatus? TryGetStatus(TimeSpan timeout)
     {
         var response = TryRequest(
@@ -23,19 +36,25 @@ public static class ServiceClient
         return response is { Ok: true } ? response.Status : null;
     }
 
-    /// <summary>发一条请求并等响应；失败返回 null。</summary>
     public static ServiceResponse? TryRequest(ServiceRequest request, TimeSpan timeout)
         => TryRequest(request, timeout, out _);
 
     /// <summary>
     /// 发一条请求并等响应；失败返回 null，并通过 <paramref name="error"/>
-    /// 给出**真实原因**（连接被拒 / 找不到管道 / 超时 / 协议错误）。
-    /// 诊断用：界面不需要它，但自检要能说清"为什么连不上"。
+    /// 给出**真实原因**（没有密钥 / 连接被拒 / 找不到管道 / 超时 / 认证失败）。
     /// </summary>
     public static ServiceResponse? TryRequest(
         ServiceRequest request, TimeSpan timeout, out string? error)
     {
         error = null;
+
+        var signer = Volatile.Read(ref _signer);
+
+        if (signer is null)
+        {
+            error = "未配置签名密钥（当前账户不是所有者，或密钥不可用）。";
+            return null;
+        }
 
         try
         {
@@ -44,7 +63,59 @@ public static class ServiceClient
                 ".", ServiceProtocol.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 
             pipe.Connect((int)Math.Max(1, timeout.TotalMilliseconds));
-            PipeCodec.WriteAsync(pipe, request, cancellation.Token).GetAwaiter().GetResult();
+
+            // 1) 取 nonce（只有这条免签）。
+            var challenge = new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.AuthChallenge,
+            };
+
+            PipeCodec.WriteAsync(pipe, challenge, cancellation.Token)
+                .GetAwaiter().GetResult();
+
+            var challengeResponse = PipeCodec
+                .ReadAsync<ServiceResponse>(pipe, cancellation.Token)
+                .GetAwaiter().GetResult();
+
+            if (challengeResponse is not { Ok: true }
+                || string.IsNullOrWhiteSpace(challengeResponse.Nonce))
+            {
+                error = $"认证挑战失败：{challengeResponse?.Error ?? "服务没有返回 nonce"}";
+                return null;
+            }
+
+            byte[] nonce;
+
+            try
+            {
+                nonce = Convert.FromBase64String(challengeResponse.Nonce);
+            }
+            catch (FormatException)
+            {
+                error = "服务返回的 nonce 不是合法 Base64。";
+                return null;
+            }
+
+            if (nonce.Length != 32)
+            {
+                error = $"服务返回的 nonce 长度是 {nonce.Length}，期望 32。";
+                return null;
+            }
+
+            // 2) 对 nonce || 原始请求字节签名，再发签名封套。
+            var payload = JsonSerializer.SerializeToUtf8Bytes(
+                request, ServiceProtocol.JsonOptions);
+
+            var signed = new byte[nonce.Length + payload.Length];
+            Buffer.BlockCopy(nonce, 0, signed, 0, nonce.Length);
+            Buffer.BlockCopy(payload, 0, signed, nonce.Length, payload.Length);
+
+            var signature = signer.Sign(signed);
+
+            PipeCodec.WriteSignedAsync(
+                    pipe, signature, payload, cancellation.Token)
+                .GetAwaiter().GetResult();
+
             return PipeCodec.ReadAsync<ServiceResponse>(pipe, cancellation.Token)
                 .GetAwaiter().GetResult();
         }
@@ -55,6 +126,6 @@ public static class ServiceClient
         }
     }
 
-    /// <summary>服务是否在运行（只要 status 能通就算）。</summary>
+    /// <summary>服务是否在运行（只要签名后的 status 能通就算）。</summary>
     public static bool IsRunning(TimeSpan timeout) => TryGetStatus(timeout) is not null;
 }

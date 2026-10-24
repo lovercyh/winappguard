@@ -32,7 +32,7 @@ internal static class StartupMigration
         catch (Exception ex)
         {
             // 读不到旧规则不影响使用（2.0 的规则在 WFP 里，和这里无关）。
-            LocalLog.Error("读取 1.x 规则失败，本轮不做迁移（下次启动会重试）", ex);
+            LocalLog.Error("[WAG-DATA-030] Failed to read 1.x rules; migration skipped (retried on next start).", ex);
             error = ex.Message;
             return null;
         }
@@ -50,19 +50,23 @@ internal static class StartupMigration
             var report = WfpMigration.Migrate(engine, legacy);
 
             LocalLog.Operation(
-                $"1.x 规则迁移：成功 {report.Migrated}，跳过 {report.Skipped}，" +
-                $"失败 {report.Failed}，删除旧规则 {report.FirewallRulesDeleted}");
+                $"[WAG-DATA-031] 1.x rule migration: migrated {report.Migrated}, skipped {report.Skipped}, "
+                + $"failed {report.Failed}, legacy firewall rules deleted {report.FirewallRulesDeleted}.");
 
-            foreach (var line in report.Details)
+            if (!LocalLog.English)
             {
-                LocalLog.Info("  迁移：" + line);
+                // 服务日志固定英文，而迁移明细是面向界面的中文句子：只在非服务模式记录。
+                foreach (var line in report.Details)
+                {
+                    LocalLog.Info("  migration: " + line);
+                }
             }
 
             return report;
         }
         catch (Exception ex)
         {
-            LocalLog.Error("1.x 规则迁移失败：旧规则全部保留，下次启动会重试", ex);
+            LocalLog.Error("[WAG-DATA-033] 1.x rule migration failed; all legacy rules kept and retried on next start.", ex);
             error = ex.Message;
             return null;
         }

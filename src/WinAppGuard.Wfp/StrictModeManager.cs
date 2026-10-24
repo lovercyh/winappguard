@@ -105,7 +105,7 @@ public static class StrictModeManager
         }
         catch (Exception ex)
         {
-            LocalLog.Error("严格模式：读取白名单失败", ex);
+            LocalLog.Error("[WAG-STRICT-010] Failed to read the allowlist.", ex);
             return new StrictModeChangeResult(false, $"读取白名单失败：{ex.Message}");
         }
 
@@ -129,7 +129,7 @@ public static class StrictModeManager
         {
             _session?.Dispose();
             _session = null;
-            LocalLog.Error("严格模式：建立会话失败", ex);
+            LocalLog.Error("[WAG-STRICT-011] Failed to create the strict-mode session.", ex);
             return new StrictModeChangeResult(false, $"开启严格模式失败：{ex.Message}");
         }
 
@@ -138,7 +138,7 @@ public static class StrictModeManager
             $"（白名单 + 本程序 + {systemPaths.Count} 个系统必需程序）。" +
             "程序退出或崩溃时会自动撤销。";
 
-        LocalLog.Operation(message);
+        LocalLog.Operation($"[WAG-STRICT-012] Strict mode enabled: {_session.PermittedPrograms.Count} programs permitted.");
         return new StrictModeChangeResult(true, message);
     }
 
@@ -155,7 +155,7 @@ public static class StrictModeManager
         _session.Dispose();
         _session = null;
 
-        LocalLog.Operation("严格模式已关闭（会话结束，限制由系统自动删除）");
+        LocalLog.Operation("[WAG-STRICT-013] Strict mode disabled (session ended; restrictions removed by the system).");
         return new StrictModeChangeResult(true, "严格模式已关闭：所有程序恢复联网（白名单规则本身保留）。");
     }
 
@@ -206,12 +206,14 @@ public static class StrictModeManager
 
         if (after.AllAllowed)
         {
-            LocalLog.Warning($"严格模式启动兜底成功：{message}");
+            LocalLog.Warning("[WAG-STRICT-014] Legacy strict-mode recovery succeeded: outbound is Allow for all three profiles.");
         }
         else
         {
             // 极少见，但必须说清楚 —— 这种情况下用户是真的上不了网。
-            LocalLog.Error($"严格模式启动兜底失败：还原后是 {after.Describe()}，不是全部「允许」。");
+            LocalLog.Error(
+                $"[WAG-STRICT-015] Legacy strict-mode recovery failed: outbound default is not Allow for all profiles "
+                + $"(domain={after.DomainAllowed}, private={after.PrivateAllowed}, public={after.PublicAllowed}).");
             message += " ⚠ 但还原没有完全成功，请手工把三套配置文件的「出站连接」都改成「允许」。";
         }
 
@@ -241,7 +243,7 @@ public static class StrictModeManager
             // 2.0 的规则在 WFP 里，1.x 的规则在 Windows 防火墙里 —— 这条只在后者。
             if (!FirewallManager.DeleteRule(name))
             {
-                LocalLog.Info($"严格模式收尾：1.x 留下的自身白名单规则 {name} 已不存在，无需删除");
+                LocalLog.Info($"[WAG-STRICT-016] Legacy self-allow rule {name} no longer exists; nothing to delete.");
                 return false;
             }
 
@@ -249,7 +251,7 @@ public static class StrictModeManager
         }
         catch (Exception ex)
         {
-            LocalLog.Error($"严格模式收尾：删除 1.x 自身白名单规则失败（{name}）", ex);
+            LocalLog.Error($"[WAG-STRICT-017] Failed to delete legacy self-allow rule {name}.", ex);
             return false;
         }
     }

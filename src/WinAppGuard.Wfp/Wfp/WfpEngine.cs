@@ -135,7 +135,7 @@ internal sealed class WfpEngine : IDisposable
                 && rc != WfpNativeMethods.FWP_E_ALREADY_EXISTS)
             {
                 // 极少数环境不接受自定义安全描述符：退回默认 SD，保证功能可用。
-                LocalLog.Warning($"加固子层失败（改用默认安全描述符）：{WfpNativeMethods.DescribeError(rc)}");
+                LocalLog.Warning($"[WAG-WFP-001] Failed to harden the sublayer; falling back to the default security descriptor: 0x{rc:X8}");
                 rc = WfpNativeMethods.FwpmSubLayerAdd0(_handle, ref subLayer, IntPtr.Zero);
             }
 
@@ -394,7 +394,7 @@ internal sealed class WfpEngine : IDisposable
             if (rc != WfpNativeMethods.ERROR_SUCCESS)
             {
                 // 安全描述符不被接受时退回默认 SD —— 加固失败不能让规则建不出来。
-                LocalLog.Warning($"加固 IP 过滤器失败（改用默认安全描述符）：{WfpNativeMethods.DescribeError(rc)}");
+                LocalLog.Warning($"[WAG-WFP-002] Failed to harden the IP filter; falling back to the default security descriptor: 0x{rc:X8}");
                 rc = WfpNativeMethods.FwpmFilterAdd0(_handle, ref filter, IntPtr.Zero, out id);
             }
 
@@ -709,7 +709,7 @@ internal sealed class WfpEngine : IDisposable
             if (rc != WfpNativeMethods.ERROR_SUCCESS)
             {
                 // 安全描述符不被接受时退回默认 SD —— 加固失败不能让规则建不出来。
-                LocalLog.Warning($"加固过滤器失败（改用默认安全描述符）：{WfpNativeMethods.DescribeError(rc)}");
+                LocalLog.Warning($"[WAG-WFP-003] Failed to harden the filter; falling back to the default security descriptor: 0x{rc:X8}");
                 rc = WfpNativeMethods.FwpmFilterAdd0(_handle, ref filter, IntPtr.Zero, out id);
             }
 
@@ -789,11 +789,11 @@ internal sealed class WfpEngine : IDisposable
             }
 
             LocalLog.Warning(
-                $"构造保护性安全描述符失败（改用默认 SD）：Win32 {Marshal.GetLastWin32Error()}");
+                $"[WAG-WFP-004] Failed to build the protective security descriptor; using the default SD (win32 {Marshal.GetLastWin32Error()}).");
         }
         catch (Exception ex)
         {
-            LocalLog.Warning($"构造保护性安全描述符异常（改用默认 SD）：{ex.Message}");
+            LocalLog.Warning("[WAG-WFP-005] Exception while building the protective security descriptor; using the default SD.", ex);
         }
 
         return IntPtr.Zero;

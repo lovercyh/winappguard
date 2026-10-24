@@ -99,12 +99,12 @@ internal sealed class AuditService : IDisposable
             var purged = _store.PurgeExpired(DateTime.Now);
             if (purged > 0)
             {
-                LocalLog.Operation($"记录：按保留期清理了 {purged} 个过期文件（保留 {_store.RetentionDays} 天）");
+                LocalLog.Operation($"[WAG-AUDIT-040] Purged {purged} expired audit files (retention {_store.RetentionDays} days).");
             }
         }
         catch (Exception ex)
         {
-            LocalLog.Warning($"记录：按保留期清理失败（不影响记录）：{ex.Message}");
+            LocalLog.Warning("[WAG-AUDIT-041] Failed to purge expired audit files (recording continues).", ex);
         }
 
         try
@@ -119,7 +119,7 @@ internal sealed class AuditService : IDisposable
         {
             _drops = null;
             LastError = $"拦截事件订阅失败：{ex.Message}";
-            LocalLog.Warning($"审计：{LastError}（连接轮询仍会继续）");
+            LocalLog.Warning("[WAG-AUDIT-042] Failed to subscribe to block events (connection polling continues).", ex);
         }
 
         _cancellation = new CancellationTokenSource();
@@ -132,7 +132,7 @@ internal sealed class AuditService : IDisposable
         IsRunning = true;
         _thread.Start();
 
-        LocalLog.Info($"审计已启动：轮询 {PollSeconds} 秒，拦截事件={(DropSubscriptionActive ? "已订阅" : "未订阅")}");
+        LocalLog.Info($"[WAG-AUDIT-043] Audit capture started: poll {PollSeconds}s, block events={(DropSubscriptionActive ? "subscribed" : "not subscribed")}.");
     }
 
     public void Dispose()
@@ -166,7 +166,7 @@ internal sealed class AuditService : IDisposable
         _cancellation = null;
         _store.Dispose();
 
-        LocalLog.Info($"审计已停止：共写入 {EventsWritten} 条，其中拦截 {DropsSeen} 条");
+        LocalLog.Info($"[WAG-AUDIT-044] Audit capture stopped: {EventsWritten} events written, {DropsSeen} blocked.");
     }
 
     // ==================================================================
@@ -226,7 +226,7 @@ internal sealed class AuditService : IDisposable
                     var deleted = _store.PurgeExpired(DateTime.Now);
                     if (deleted > 0)
                     {
-                        LocalLog.Info($"审计：清理了 {deleted} 个过期文件");
+                        LocalLog.Info($"[WAG-AUDIT-045] Purged {deleted} expired audit files.");
                     }
 
                     _nextPurge = DateTime.Now.Date.AddDays(1);
@@ -235,7 +235,7 @@ internal sealed class AuditService : IDisposable
             catch (Exception ex)
             {
                 LastError = ex.Message;
-                LocalLog.Warning($"审计循环出错（已跳过本轮）：{ex.Message}");
+                LocalLog.Warning("[WAG-AUDIT-046] Audit loop error; this round was skipped.", ex);
             }
 
             try
@@ -307,7 +307,7 @@ internal sealed class AuditService : IDisposable
         catch (Exception ex)
         {
             // 从没成功过时 _ourFilterIds 为 null → 拦截事件一律不记（宁可少记，也不要不准）。
-            LocalLog.Warning($"审计：刷新过滤器 ID 失败（本轮拦截事件可能不记录）：{ex.Message}");
+            LocalLog.Warning("[WAG-AUDIT-047] Failed to refresh filter IDs; block events may not be recorded this round.", ex);
         }
     }
 

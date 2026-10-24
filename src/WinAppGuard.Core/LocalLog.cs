@@ -58,18 +58,64 @@ public static class LocalLog
         _overrideDirectory = string.IsNullOrWhiteSpace(directory) ? null : directory;
     }
 
+    /// <summary>
+    /// 3.3：服务日志固定英文（级别名与异常描述）。
+    /// 由 <c>ServiceLog.Initialize</c> 置为 true；界面日志保持中文级别。
+    /// </summary>
+    public static bool English { get; set; }
+
     /// <summary>记录一般信息（启动、状态同步等）。</summary>
     public static void Info(string message) => Write("信息", message);
 
     /// <summary>记录需要注意但不致命的情况。</summary>
-    public static void Warning(string message) => Write("警告", message);
+    public static void Warning(string message, Exception? exception = null)
+        => Write("警告", Append(message, exception));
 
     /// <summary>记录用户主动做的、会改动系统状态的操作（阻止、允许、开关自启等）。</summary>
     public static void Operation(string message) => Write("操作", message);
 
     /// <summary>记录错误。传入异常时会连同堆栈一起记下来。</summary>
     public static void Error(string message, Exception? exception = null)
-        => Write("错误", exception is null ? message : $"{message}{Environment.NewLine}{exception}");
+        => Write("错误", Append(message, exception));
+
+    private static string Append(string message, Exception? exception)
+    {
+        if (exception is null)
+        {
+            return message;
+        }
+
+        return English
+            ? message + Environment.NewLine + DescribeException(exception)
+            : $"{message}{Environment.NewLine}{exception}";
+    }
+
+    /// <summary>
+    /// 异常的英文描述：只写类型、HResult、Win32 错误码和堆栈。
+    /// 不写 <c>Exception.Message</c>，因为系统异常的 Message 会跟随系统语言。
+    /// </summary>
+    public static string DescribeException(Exception exception)
+    {
+        var builder = new System.Text.StringBuilder();
+        Exception? current = exception;
+
+        while (current is not null)
+        {
+            builder.AppendLine();
+            builder.Append($"exception={current.GetType().FullName} hresult=0x{current.HResult:X8}");
+
+            if (current is System.ComponentModel.Win32Exception win32)
+            {
+                builder.Append($" nativeErrorCode={win32.NativeErrorCode}");
+            }
+
+            builder.AppendLine();
+            builder.Append(current.StackTrace ?? "   at <no stack trace>");
+            current = current.InnerException;
+        }
+
+        return builder.ToString();
+    }
 
     /// <summary>
     /// 在资源管理器里打开日志目录。
@@ -112,10 +158,28 @@ public static class LocalLog
         return path;
     }
 
+    /// <summary>
+    /// 3.3：按调用方给定的级别名写一行。
+    /// 服务日志用英文级别（INFO / WARN / OP / ERROR），界面日志仍用中文级别。
+    /// </summary>
+    public static void WriteLevel(string level, string message) => Write(level, message);
+
     private static void Write(string level, string message)
     {
         try
         {
+            if (English)
+            {
+                level = level switch
+                {
+                    "信息" => "INFO",
+                    "警告" => "WARN",
+                    "操作" => "OP",
+                    "错误" => "ERROR",
+                    _ => level,
+                };
+            }
+
             lock (Gate)
             {
                 var directory = LogDirectory;

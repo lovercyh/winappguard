@@ -49,15 +49,16 @@ internal sealed class ControlServer : IDisposable
                 ServicePaths.ProtectedModeConfigFile);
 
             ServiceLog.Info(
-                $"受保护模式：所有者 {_protectedMode.OwnerName}，"
-                + $"指纹 {_protectedMode.Fingerprint[..16]}…");
+                "WAG-AUTH-001",
+                $"Protected mode: owner {_protectedMode.OwnerName}, fingerprint {_protectedMode.Fingerprint[..16]}...");
         }
         catch (Exception ex)
         {
             _protectedMode = null;
             ServiceLog.Error(
-                "受保护模式配置不可用，控制管道不会创建（失败关闭）。"
-                + "请以所有者身份运行 WinAppGuardSetup.exe --repair。", ex);
+                "WAG-AUTH-002",
+                "Protected-mode config is unavailable; the control pipe will not be created (fail closed). "
+                + "Run WinAppGuardSetup.exe --repair as the owner.", ex);
         }
 
         if (_protectedMode is not null)
@@ -96,23 +97,24 @@ internal sealed class ControlServer : IDisposable
 
             if (migrationError is not null)
             {
-                ServiceLog.Warning($"启动迁移：{migrationError}");
+                ServiceLog.Warning("WAG-DATA-010", "Startup migration reported an error; legacy rules are kept and the next start will retry.");
             }
 
             if (migration is not null)
             {
                 ServiceLog.Info(
-                    $"启动迁移：迁移 {migration.Migrated} 条、跳过 {migration.Skipped} 条、" +
-                    $"失败 {migration.Failed} 条、删除旧规则 {migration.FirewallRulesDeleted} 条。");
+                    "WAG-DATA-011",
+                    $"Startup migration: migrated {migration.Migrated}, skipped {migration.Skipped}, "
+                    + $"failed {migration.Failed}, legacy firewall rules deleted {migration.FirewallRulesDeleted}.");
             }
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"启动迁移失败（不影响服务启动）：{ex.Message}");
+            ServiceLog.Warning("WAG-DATA-012", "Startup migration failed (service startup is not affected).", ex);
         }
 
         // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
-        ServiceLog.Info("启动：写入规则快照…");
+        ServiceLog.Info("WAG-DATA-013", "Startup: writing the rule snapshot.");
         Rules.SaveSnapshotNow();
 
         // 篡改防护：新建的子层/过滤器在创建时就带上保护性 DACL
@@ -120,12 +122,12 @@ internal sealed class ControlServer : IDisposable
         // 不再做"先创建再改安全信息"——VM 实测那样会把服务启动卡死。
 
         // 审计采集随服务启动（设置里关着就不开）。
-        ServiceLog.Info("启动：启动审计采集…");
+        ServiceLog.Info("WAG-AUDIT-002", "Startup: starting audit capture.");
         AuditHost.StartIfEnabled();
 
         if (_protectedMode is not null)
         {
-            ServiceLog.Info($"IPC 已启动：{ServiceProtocol.PipeName}（v2 签名鉴权）");
+            ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
         }
     }
 
@@ -175,7 +177,7 @@ internal sealed class ControlServer : IDisposable
                 if (!_loggedReady)
                 {
                     _loggedReady = true;
-                    ServiceLog.Info("命名管道已创建（ACL：仅 SYSTEM + 所有者）。");
+                    ServiceLog.Info("WAG-IPC-002", "Named pipe created (ACL: SYSTEM + owner only).");
                 }
 
                 pipe.WaitForConnectionAsync(_cancellation.Token).GetAwaiter().GetResult();
@@ -197,7 +199,7 @@ internal sealed class ControlServer : IDisposable
             }
             catch (Exception ex)
             {
-                ServiceLog.Error("IPC 连接处理失败。", ex);
+                ServiceLog.Error("WAG-IPC-003", "IPC connection handling failed.", ex);
                 Thread.Sleep(200);
             }
         }
@@ -217,7 +219,7 @@ internal sealed class ControlServer : IDisposable
                 pipe, out var elevated, out var clientPid,
                 out var clientSid, out var clientPath, out var reason))
         {
-            ServiceLog.Warning($"拒绝 IPC 连接：{reason}");
+            ServiceLog.Warning("WAG-IPC-004", $"Rejected IPC connection (pid={clientPid}); client identity could not be verified.");
             TryWrite(pipe, new ServiceResponse { Ok = false, Error = reason }, timeout.Token);
             return;
         }
@@ -231,12 +233,12 @@ internal sealed class ControlServer : IDisposable
         }
         catch (OperationCanceledException)
         {
-            ServiceLog.Warning("IPC 认证挑战超时。");
+            ServiceLog.Warning("WAG-IPC-005", "IPC authentication challenge timed out.");
             return;
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"IPC 认证挑战不合法：{ex.Message}");
+            ServiceLog.Warning("WAG-IPC-006", "IPC authentication challenge was malformed.", ex);
             return;
         }
 
@@ -251,8 +253,8 @@ internal sealed class ControlServer : IDisposable
                 StringComparison.Ordinal))
         {
             ServiceLog.Warning(
-                $"拒绝 IPC：第一条命令必须是 auth.challenge（PID {clientPid}，"
-                + $"命令 {challenge.Command}）。");
+                "WAG-IPC-007",
+                $"Rejected IPC: the first command must be auth.challenge (pid={clientPid}, command={challenge.Command}).");
             TryWrite(pipe, new ServiceResponse
             {
                 Id = challenge.Id,
@@ -280,12 +282,12 @@ internal sealed class ControlServer : IDisposable
         }
         catch (OperationCanceledException)
         {
-            ServiceLog.Warning("IPC 签名封套超时。");
+            ServiceLog.Warning("WAG-IPC-008", "IPC signed envelope timed out.");
             return;
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"IPC 签名封套不合法：{ex.Message}");
+            ServiceLog.Warning("WAG-IPC-009", "IPC signed envelope was malformed.", ex);
             return;
         }
 
@@ -298,7 +300,8 @@ internal sealed class ControlServer : IDisposable
         {
             var rejected = Interlocked.Increment(ref _authRejectedCount);
             ServiceLog.Warning(
-                $"拒绝 IPC：签名无效（PID {clientPid}，SID {clientSid ?? "?"}，路径 {clientPath ?? "?"}，累计 {rejected} 次）。");
+                "WAG-AUTH-003",
+                $"Rejected IPC: invalid signature (pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, total rejected={rejected}).");
             TryWrite(pipe, new ServiceResponse
             {
                 Id = challenge.Id,
@@ -317,7 +320,7 @@ internal sealed class ControlServer : IDisposable
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"IPC 请求 JSON 不合法：{ex.Message}");
+            ServiceLog.Warning("WAG-IPC-010", "IPC request JSON was invalid.", ex);
             return;
         }
 
@@ -328,8 +331,9 @@ internal sealed class ControlServer : IDisposable
 
         if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
         {
-            ServiceLog.Info(
-                $"IPC 写操作：PID {clientPid}，SID {clientSid ?? "?"}，路径 {clientPath ?? "?"}，命令 {request.Command}。");
+            ServiceLog.Operation(
+                "WAG-IPC-011",
+                $"IPC write operation: pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, command={request.Command}.");
         }
 
         TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
@@ -343,7 +347,7 @@ internal sealed class ControlServer : IDisposable
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"写回 IPC 响应失败：{ex.Message}");
+            ServiceLog.Warning("WAG-IPC-012", "Failed to write the IPC response.", ex);
         }
     }
 
@@ -371,7 +375,7 @@ internal sealed class ControlServer : IDisposable
         // 鉴权探针：不做任何事，只回答"当前客户端有没有提权"。
         if (string.Equals(request.Command, ServiceProtocol.Commands.AuthCheck, StringComparison.Ordinal))
         {
-            ServiceLog.Info($"鉴权探针：PID {clientPid}，提权={elevated}");
+            ServiceLog.Info("WAG-AUTH-004", $"Auth probe: pid={clientPid}, elevated={elevated}.");
 
             return new ServiceResponse
             {
@@ -384,7 +388,7 @@ internal sealed class ControlServer : IDisposable
         // 3.0-b 起写命令会用 "write." 前缀，必须提权；v1 的只读命令允许任何交互用户。
         if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase) && !elevated)
         {
-            ServiceLog.Warning($"拒绝写操作：PID {clientPid} 未提权。");
+            ServiceLog.Warning("WAG-AUTH-005", $"Rejected write operation: pid={clientPid} is not elevated.");
 
             return new ServiceResponse
             {
@@ -464,7 +468,7 @@ internal sealed class ControlServer : IDisposable
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"读取服务状态失败：{ex.Message}");
+            ServiceLog.Warning("WAG-SVC-010", "Failed to read service status.", ex);
         }
 
         status.StrictModeActive = StrictModeHost.IsEnabled;

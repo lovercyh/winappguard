@@ -83,7 +83,7 @@ internal static class AuditHost
             }
             catch (Exception ex)
             {
-                ServiceLog.Warning($"保存审计设置失败：{ex.Message}");
+                ServiceLog.Warning("WAG-AUDIT-020", "Failed to save audit settings.", ex);
             }
 
             StopCore();
@@ -104,7 +104,7 @@ internal static class AuditHost
             {
                 using var store = new AuditStore(ServicePaths.AuditDirectory);
                 var deleted = store.Clear();
-                ServiceLog.Info($"记录：用户清空记录，删除 {deleted} 个文件");
+                ServiceLog.Operation("WAG-AUDIT-010", $"Audit records cleared by user: {deleted} files deleted.");
                 return deleted;
             }
             finally
@@ -132,14 +132,12 @@ internal static class AuditHost
             service.Start();
             _service = service;
 
-            ServiceLog.Info(
-                $"记录：已开始采集（保留 {_settings.RetentionDays} 天，" +
-                $"域名推测{(_settings.DomainLookup ? "开" : "关")}）。");
+            ServiceLog.Info("WAG-AUDIT-001", $"Audit capture started (retention {_settings.RetentionDays} days, domain lookup {(_settings.DomainLookup ? "on" : "off")}).");
         }
         catch (Exception ex)
         {
             _service = null;
-            ServiceLog.Warning($"启动审计采集失败：{ex.Message}");
+            ServiceLog.Warning("WAG-AUDIT-030", "Failed to start audit capture.", ex);
         }
     }
 
@@ -156,10 +154,10 @@ internal static class AuditHost
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"停止审计采集时出错：{ex.Message}");
+            ServiceLog.Warning("WAG-AUDIT-031", "Error while stopping audit capture.", ex);
         }
 
         _service = null;
-        ServiceLog.Info("记录：已停止采集。");
+        ServiceLog.Info("WAG-AUDIT-032", "Audit capture stopped.");
     }
 }

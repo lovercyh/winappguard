@@ -107,7 +107,7 @@ internal static class NativeService
         }
 
         ReportStatus(StateStartPending, waitHint: 10_000);
-        ServiceLog.Info("服务正在启动。");
+        ServiceLog.Info("WAG-SVC-001", "Service is starting.");
 
         try
         {
@@ -115,7 +115,7 @@ internal static class NativeService
             _server.Start();
 
             ReportStatus(StateRunning, waitHint: 0);
-            ServiceLog.Info("服务已启动。");
+            ServiceLog.Info("WAG-SVC-002", "Service started.");
 
             _stopEvent.Wait();
 
@@ -124,11 +124,11 @@ internal static class NativeService
             _server = null;
 
             ReportStatus(StateStopped, waitHint: 0);
-            ServiceLog.Info("服务已停止。");
+            ServiceLog.Info("WAG-SVC-003", "Service stopped.");
         }
         catch (Exception ex)
         {
-            ServiceLog.Error("服务运行失败。", ex);
+            ServiceLog.Error("WAG-SVC-004", "Service run failed.", ex);
             ReportStatus(StateStopped, waitHint: 0);
         }
         finally

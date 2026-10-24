@@ -97,7 +97,7 @@ internal sealed class RuleHandlers
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"规则命令 {request.Command} 失败：{ex.Message}");
+            ServiceLog.Warning("WAG-RULE-900", $"Rule command {request.Command} failed.", ex);
             return Fail(request, ex.Message);
         }
     }
@@ -185,9 +185,9 @@ internal sealed class RuleHandlers
 
         var applied = AuditHost.Apply(settings);
 
-        ServiceLog.Info(
-            $"记录：设置已更新（{(applied.Enabled ? "开" : "关")}，" +
-            $"保留 {applied.RetentionDays} 天，域名推测{(applied.DomainLookup ? "开" : "关")}）");
+        ServiceLog.Operation(
+            "WAG-AUDIT-011",
+            $"Audit settings updated (enabled={applied.Enabled}, retention={applied.RetentionDays} days, domainLookup={applied.DomainLookup}).");
 
         return new ServiceResponse
         {
@@ -255,7 +255,7 @@ internal sealed class RuleHandlers
                     using var probe = WfpEngine.Open();
                     probe.EnsureSublayer(persistent: true);
                     sublayerRecreated = true;
-                    ServiceLog.Warning("篡改防护：子层缺失，已重建。");
+                    ServiceLog.Warning("WAG-RULE-910", "Tamper protection: sublayer was missing and has been recreated.");
                 }
 
                 var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
@@ -273,7 +273,7 @@ internal sealed class RuleHandlers
                 }
                 catch (Exception ex)
                 {
-                    ServiceLog.Warning($"篡改防护：读取实际规则失败：{ex.Message}");
+                    ServiceLog.Warning("WAG-RULE-911", "Tamper protection: failed to read the actual rules.", ex);
                     return;
                 }
 
@@ -335,7 +335,7 @@ internal sealed class RuleHandlers
                     }
                     catch (Exception ex)
                     {
-                        ServiceLog.Warning($"篡改防护：重建 {item.Name} 失败：{ex.Message}");
+                        ServiceLog.Warning("WAG-RULE-912", $"Tamper protection: failed to rebuild rule {item.Name}.", ex);
                     }
                 }
 
@@ -350,12 +350,13 @@ internal sealed class RuleHandlers
 
                     SaveSnapshotNow();
                     ServiceLog.Warning(
-                        $"篡改防护：检测到 {missing.Count} 条规则被外部删除，已自动重建 {rebuilt} 条。");
+                        "WAG-RULE-913",
+                        $"Tamper protection: {missing.Count} rules were deleted externally; {rebuilt} rebuilt.");
                 }
             }
             catch (Exception ex)
             {
-                ServiceLog.Warning($"篡改防护检查失败：{ex.Message}");
+                ServiceLog.Warning("WAG-RULE-914", "Tamper protection check failed.", ex);
             }
         }
     }
@@ -383,11 +384,11 @@ internal sealed class RuleHandlers
                 SaveSnapshotNow();
                 RecordPurged(removed);
 
-                ServiceLog.Info($"规则：服务定时清理到期规则 {removed.Count} 条");
+                ServiceLog.Operation("WAG-RULE-920", $"Rules: expired rules purged by the service timer: {removed.Count}.");
             }
             catch (Exception ex)
             {
-                ServiceLog.Warning($"服务定时清理到期规则失败：{ex.Message}");
+                ServiceLog.Warning("WAG-RULE-921", "Failed to purge expired rules on the service timer.", ex);
             }
         }
     }
@@ -433,7 +434,7 @@ internal sealed class RuleHandlers
             }
             catch (Exception ex)
             {
-                ServiceLog.Warning($"写入规则快照失败：{ex.Message}");
+                ServiceLog.Warning("WAG-RULE-922", "Failed to write the rule snapshot.", ex);
             }
         }
     }
@@ -482,7 +483,7 @@ internal sealed class RuleHandlers
         }
 
         SaveSnapshotNow();
-        ServiceLog.Info($"规则：{(action.Value == FirewallAction.Block ? "阻止" : "允许")} {path}（{name}）");
+        ServiceLog.Operation("WAG-RULE-001", $"Rule {(action.Value == FirewallAction.Block ? "block" : "allow")}: {path} ({name}).");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
     }
@@ -500,7 +501,7 @@ internal sealed class RuleHandlers
         ApplyGroup(name, request.Group);
 
         SaveSnapshotNow();
-        ServiceLog.Info($"规则：封禁 IP {address}（{name}）");
+        ServiceLog.Operation("WAG-RULE-002", $"Rule block IP: {address} ({name}).");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
     }
@@ -525,7 +526,7 @@ internal sealed class RuleHandlers
         StrictModeHost.RefreshIfEnabled();
         SaveSnapshotNow();
 
-        ServiceLog.Info($"规则：删除 {name}");
+        ServiceLog.Operation("WAG-RULE-003", $"Rule deleted: {name}.");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = 1 };
     }
@@ -550,7 +551,7 @@ internal sealed class RuleHandlers
         _groups.Save();
         SaveSnapshotNow();
 
-        ServiceLog.Info($"规则：解除阻止 {path}（删除 {deleted} 条）");
+        ServiceLog.Operation("WAG-RULE-004", $"Rule unblock: {path} ({deleted} rules deleted).");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
     }
@@ -569,7 +570,7 @@ internal sealed class RuleHandlers
         }
 
         SaveSnapshotNow();
-        ServiceLog.Info($"规则：清空{(action == FirewallAction.Block ? "黑名单" : "白名单")} {deleted} 条");
+        ServiceLog.Operation("WAG-RULE-005", $"Rules cleared ({(action == FirewallAction.Block ? "blocklist" : "allowlist")}): {deleted}.");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
     }
@@ -586,7 +587,7 @@ internal sealed class RuleHandlers
         StrictModeHost.RefreshIfEnabled();
 
         SaveSnapshotNow();
-        ServiceLog.Info($"规则：CLI 清空全部规则 {deleted} 条");
+        ServiceLog.Operation("WAG-RULE-006", $"Rules cleared by CLI: {deleted}.");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = deleted };
     }
@@ -604,7 +605,7 @@ internal sealed class RuleHandlers
         _groups.Save();
         SaveSnapshotNow();
 
-        ServiceLog.Info($"规则：分组 {name} → {(string.IsNullOrWhiteSpace(request.Group) ? "未分组" : request.Group)}");
+        ServiceLog.Operation("WAG-RULE-007", $"Rule group: {name} -> {(string.IsNullOrWhiteSpace(request.Group) ? "(none)" : request.Group)}.");
 
         return new ServiceResponse { Id = request.Id, Ok = true };
     }
@@ -621,7 +622,7 @@ internal sealed class RuleHandlers
             SaveSnapshotNow();
             RecordPurged(removed);
 
-            ServiceLog.Info($"规则：清理到期临时规则 {removed.Count} 条");
+            ServiceLog.Operation("WAG-RULE-008", $"Expired temporary rules purged: {removed.Count}.");
         }
 
         return new ServiceResponse
@@ -720,7 +721,7 @@ internal sealed class RuleHandlers
             catch (Exception ex)
             {
                 failed++;
-                ServiceLog.Warning($"导入单条失败：{entry.Value} — {ex.Message}");
+                ServiceLog.Warning("WAG-RULE-030", $"Import of one entry failed: {entry.Value}.", ex);
             }
         }
 
@@ -732,7 +733,7 @@ internal sealed class RuleHandlers
         }
 
         SaveSnapshotNow();
-        ServiceLog.Info($"规则：导入 {created} 条（跳过 {skipped}，失败 {failed}）");
+        ServiceLog.Operation("WAG-RULE-031", $"Rules imported: created {created}, skipped {skipped}, failed {failed}.");
 
         return new ServiceResponse
         {
@@ -749,7 +750,7 @@ internal sealed class RuleHandlers
         _groups.Save();
         SaveSnapshotNow();
 
-        ServiceLog.Info($"规则：导入旧分组记录 {imported} 条");
+        ServiceLog.Operation("WAG-RULE-032", $"Legacy rule groups imported: {imported}.");
 
         return new ServiceResponse { Id = request.Id, Ok = true, Affected = imported };
     }

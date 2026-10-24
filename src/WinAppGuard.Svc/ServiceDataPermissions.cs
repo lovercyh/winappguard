@@ -39,7 +39,7 @@ internal static class ServiceDataPermissions
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning($"设置数据目录读取权限失败（界面可能读不到离线数据）：{ex.Message}");
+            ServiceLog.Warning("WAG-DATA-020", "Failed to set read permissions on the data folder; the UI may not be able to read offline data.", ex);
         }
     }
 }

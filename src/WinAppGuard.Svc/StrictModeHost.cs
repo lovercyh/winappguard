@@ -57,7 +57,7 @@ internal static class StrictModeHost
 
             var result = StrictModeManager.Enable(extras);
 
-            ServiceLog.Info($"严格模式：{(result.Success ? "已开启" : "开启失败")} — {result.Message}");
+            ServiceLog.Info("WAG-STRICT-001", $"Strict mode enable: {(result.Success ? "ok" : "failed")}.");
             return result;
         }
     }
@@ -67,7 +67,7 @@ internal static class StrictModeHost
         lock (Gate)
         {
             var result = StrictModeManager.Disable();
-            ServiceLog.Info($"严格模式：已关闭 — {result.Message}");
+            ServiceLog.Info("WAG-STRICT-002", $"Strict mode disable: {(result.Success ? "ok" : "failed")}.");
             return result;
         }
     }
@@ -81,7 +81,7 @@ internal static class StrictModeHost
 
             if (result is not null)
             {
-                ServiceLog.Info($"严格模式：白名单变化，会话已重建 — {result.Message}");
+                ServiceLog.Info("WAG-STRICT-003", $"Strict mode session rebuilt after allowlist change: {(result.Success ? "ok" : "failed")}.");
             }
         }
     }
@@ -95,7 +95,7 @@ internal static class StrictModeHost
 
             if (result.WasLeftOn)
             {
-                ServiceLog.Warning($"严格模式：1.x 遗留状态已处理 — {result.Message}");
+                ServiceLog.Warning("WAG-STRICT-004", $"Legacy 1.x strict-mode state handled: restored={result.Restored}.");
             }
 
             return result;
@@ -110,7 +110,7 @@ internal static class StrictModeHost
             if (StrictModeManager.IsEnabled)
             {
                 _ = StrictModeManager.Disable();
-                ServiceLog.Info("严格模式：服务停止，会话已撤销。");
+                ServiceLog.Info("WAG-STRICT-005", "Strict mode session revoked because the service is stopping.");
             }
         }
     }

@@ -49,11 +49,10 @@ internal static class Program
             }
 
             // 优先级：--lang > GUI 已生效语言 > 系统。
-            var language = requestedLanguage
-                           ?? UiLanguageStore.ReadAppliedLanguage()
-                           ?? "auto";
-
-            if (language is not ("auto" or "zh" or "en"))
+            if (!CliLanguage.TryResolve(
+                    requestedLanguage,
+                    UiLanguageStore.ReadAppliedLanguage(),
+                    out var language))
             {
                 Console.Error.WriteLine(
                     "参数错误：--lang 只能是 zh / en / auto。\n" +
@@ -88,7 +87,7 @@ internal static class Program
             return 0;
         }
 
-        ServiceLog.Error($"服务启动失败：Win32 错误 {error}");
+        ServiceLog.Error("WAG-SVC-005", $"Service start failed: win32 error {error}.");
         return 1;
     }
 

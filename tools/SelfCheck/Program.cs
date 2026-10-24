@@ -3833,6 +3833,208 @@ internal static class Program
                         CheckAssertion(results, "英文：清空白名单按钮不截断",
                             clearWidth <= clearWhite.Width);
                     }
+
+                    static bool HasCjk(string? text)
+                        => !string.IsNullOrEmpty(text)
+                           && System.Text.RegularExpressions.Regex.IsMatch(
+                               text!, "[\u4e00-\u9fff]");
+
+                    CheckAssertion(results, "英文：窗口标题",
+                        !HasCjk(form.Text)
+                        && form.Text.Contains("program network control", StringComparison.Ordinal));
+
+                    if (TryGetField<DataGridView>(form, "_connectionGrid", out var connectionGrid))
+                    {
+                        W("    连接列头 = " + string.Join(" | ", connectionGrid.Columns
+                            .Cast<DataGridViewColumn>().Select(column => column.HeaderText)));
+                        CheckAssertion(results, "英文：连接表列头无中文",
+                            connectionGrid.Columns.Cast<DataGridViewColumn>()
+                                .All(column => !HasCjk(column.HeaderText)));
+                    }
+
+                    if (TryGetField<DataGridView>(form, "_rulesGrid", out var rulesGrid))
+                    {
+                        W("    黑名单列头 = " + string.Join(" | ", rulesGrid.Columns
+                            .Cast<DataGridViewColumn>().Select(column => column.HeaderText)));
+                        CheckAssertion(results, "英文：黑名单列头无中文",
+                            rulesGrid.Columns.Cast<DataGridViewColumn>()
+                                .All(column => !HasCjk(column.HeaderText)));
+                    }
+
+                    if (TryGetField<DataGridView>(form, "_whitelistGrid", out var whitelistGrid))
+                    {
+                        W("    白名单列头 = " + string.Join(" | ", whitelistGrid.Columns
+                            .Cast<DataGridViewColumn>().Select(column => column.HeaderText)));
+                        CheckAssertion(results, "英文：白名单列头无中文",
+                            whitelistGrid.Columns.Cast<DataGridViewColumn>()
+                                .All(column => !HasCjk(column.HeaderText)));
+                    }
+
+                    if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
+                            form, "_rulesGrid", out var rulesEmpty))
+                    {
+                        CheckAssertion(results, "英文：黑名单空状态无中文",
+                            !HasCjk(rulesEmpty.EmptyText));
+                    }
+
+                    if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
+                            form, "_whitelistGrid", out var whitelistEmpty))
+                    {
+                        CheckAssertion(results, "英文：白名单空状态无中文",
+                            !HasCjk(whitelistEmpty.EmptyText));
+                    }
+
+                    if (TryGetField<TextBox>(form, "_rulesSearchBox", out var rulesSearch))
+                    {
+                        W($"    规则搜索占位 = {rulesSearch.PlaceholderText}");
+                        CheckAssertion(results, "英文：规则搜索占位无中文",
+                            !HasCjk(rulesSearch.PlaceholderText));
+                    }
+
+                    CheckAssertion(results, "英文：确认框标题与标签",
+                        Localizer.T("加入黑名单") == "Add to blocklist"
+                        && Localizer.T("生效范围") == "Scope"
+                        && Localizer.T("任意") == "Any"
+                        && Localizer.T("阻止") == "Block");
+
+                    CheckAssertion(results, "英文：确认框警告无中文",
+                        !HasCjk(Localizer.T(
+                            "这是永久规则，要恢复请回到这一页删除它。")));
+
+                    CheckAssertion(results, "英文：白名单提示（开启/关闭）无中文",
+                        !HasCjk(MainForm.BuildWhitelistNotice(true))
+                        && !HasCjk(MainForm.BuildWhitelistNotice(false)));
+
+                    CheckAssertion(results, "英文：记录页类型/未知/推测无中文",
+                        Localizer.T("连接") == "Connection"
+                        && Localizer.T("拦截") == "Blocked"
+                        && Localizer.T("未知") == "Unknown"
+                        && !HasCjk(Localizer.T("（未知程序）")));
+
+                    CheckAssertion(results, "英文：状态栏计数无中文",
+                        !HasCjk(Localizer.F("已阻止程序：{0} 个", 1))
+                        && !HasCjk(Localizer.F("服务：运行中 · {0} 条规则", 1)));
+
+                    // 直接构造确认框（不弹窗），检查标题、详情、警告、按钮、时长选项。
+                    var confirmCtor = typeof(ConfirmForm)
+                        .GetConstructors(System.Reflection.BindingFlags.NonPublic
+                                         | System.Reflection.BindingFlags.Instance)
+                        .Single(constructor => constructor.GetParameters().Length == 6);
+
+                    var confirmDetails = new List<KeyValuePair<string, string>>
+                    {
+                        new("程序名", "Lark.exe"),
+                        new("完整路径", @"C:\Users\VM\AppData\Local\Lark\Lark.exe"),
+                        new("生效范围", "任意"),
+                        new("将创建规则", "AppGuard_Block_Lark.exe_1"),
+                    }.Select(pair => new KeyValuePair<string, string>(
+                        Localizer.T(pair.Key), Localizer.T(pair.Value))).ToList();
+
+                    var confirmWarnings = new[]
+                    {
+                        "确认后该程序会立刻无法联网（已经建立的连接也会断开）。",
+                        "这是永久规则，要恢复请回到这一页删除它。",
+                        "想限时阻止（30 分钟 / 2 小时 / 下次重启），请到「联网连接」页操作。",
+                    }.Select(Localizer.T).ToList();
+
+                    using (var dialog = (Form)confirmCtor.Invoke(new object[]
+                           {
+                               "加入黑名单",
+                               "确定要阻止「Lark.exe」联网吗？",
+                               confirmDetails,
+                               confirmWarnings,
+                               "阻止",
+                               true,
+                           }))
+                    {
+                        var leftovers = Walk(dialog)
+                            .Where(control => HasCjk(control.Text))
+                            .Select(control => $"{control.GetType().Name}:{control.Text}")
+                            .ToList();
+
+                        if (leftovers.Count > 0)
+                        {
+                            W("    确认框残留：" + string.Join(" / ", leftovers));
+                        }
+
+                        CheckAssertion(results, "英文：确认框控件无中文", leftovers.Count == 0);
+                        CheckAssertion(results, "英文：确认框标题",
+                            dialog.Text == "Add to blocklist");
+                    }
+
+                    var sampleRule = new FirewallRuleItem
+                    {
+                        Name = "AppGuard_Block_a.exe_1",
+                        ApplicationPath = @"C:\Tools\a.exe",
+                        Description = string.Empty,
+                        Grouping = "AppGuard",
+                        Enabled = true,
+                        Action = FirewallAction.Block,
+                        Direction = FirewallDirection.Outbound,
+                        Protocol = 256,
+                    };
+
+                    CheckAssertion(results, "英文：规则单元格值无中文",
+                        !HasCjk(sampleRule.RuleKindText)
+                        && !HasCjk(sampleRule.ScopeText)
+                        && !HasCjk(sampleRule.ExpiryText)
+                        && !HasCjk(sampleRule.EnabledText)
+                        && !HasCjk(sampleRule.ActionText));
+
+                    var sampleConnection = new TcpConnectionItem
+                    {
+                        Pid = 1,
+                        ProcessName = "a.exe",
+                        ProcessPath = @"C:\Tools\a.exe",
+                        Protocol = "IPv4",
+                        LocalPort = 50000,
+                        RemoteAddress = IPAddress.Loopback,
+                        RemotePort = 443,
+                        State = TcpState.Established,
+                    };
+
+                    CheckAssertion(results, "英文：连接单元格值无中文",
+                        !HasCjk(sampleConnection.StateText)
+                        && !HasCjk(sampleConnection.BlockStateText)
+                        && !HasCjk(sampleConnection.WhitelistText));
+
+                    // 诊断：把主窗体上仍然带中文的可见文字全部列出来，避免再漏。
+                    static IEnumerable<Control> Walk(Control root)
+                    {
+                        yield return root;
+
+                        foreach (Control child in root.Controls)
+                        {
+                            foreach (var item in Walk(child))
+                            {
+                                yield return item;
+                            }
+                        }
+                    }
+
+                    W();
+                    W("===== 英文界面残留中文扫描 =====");
+
+                    foreach (var control in Walk(form))
+                    {
+                        if (HasCjk(control.Text))
+                        {
+                            W($"    {control.GetType().Name} {control.Name} = "
+                              + control.Text!.Replace("\r", " ").Replace("\n", " "));
+                        }
+
+                        if (control is TextBox box && HasCjk(box.PlaceholderText))
+                        {
+                            W($"    {control.Name}.PlaceholderText = {box.PlaceholderText}");
+                        }
+
+                        if (control is WinAppGuard.Forms.DataGridViewBuffered buffered
+                            && HasCjk(buffered.EmptyText))
+                        {
+                            W($"    {control.Name}.EmptyText = "
+                              + buffered.EmptyText.Replace("\r", " ").Replace("\n", " "));
+                        }
+                    }
                 }
             }
 

@@ -1113,8 +1113,8 @@ public partial class MainForm : Form
             _tabWhitelist.Text = Localizer.F("严格模式下白名单（{0}）", _whitelistRules.Count);
 
             _statusRulesLabel.Text = fromSnapshot
-                ? $"已阻止程序：{_blockedPaths.Count} 个（上次已知）"
-                : $"已阻止程序：{_blockedPaths.Count} 个";
+                ? Localizer.F("已阻止程序：{0} 个（上次已知）", _blockedPaths.Count)
+                : Localizer.F("已阻止程序：{0} 个", _blockedPaths.Count);
 
             if (fromSnapshot)
             {
@@ -1138,13 +1138,8 @@ public partial class MainForm : Form
             UpdateWhitelistSummaryText();
 
             // 白名单页顶部直接写清"现在白名单到底生不生效"，用户不用去设置页找严格模式开关。
-            _whitelistNoticeLabel.Text =
-                "白名单只在「严格模式」下起作用：严格模式开着时，只有这里列出的程序" +
-                "（以及系统必需程序）能上网。\r\n" +
-                "严格模式没开时，这些规则不会限制任何东西。\r\n" +
-                (_strictModeEnabled
-                    ? "当前：严格模式已开启 —— 白名单正在生效。"
-                    : "当前：严格模式未开启 —— 白名单暂不生效。");
+            _whitelistNoticeLabel.Text = BuildWhitelistNotice(_strictModeEnabled);
+            _whitelistNoticeLabel.Height = Localizer.IsEnglish ? 100 : 64;
 
             if (!fromSnapshot)
             {
@@ -2400,11 +2395,22 @@ public partial class MainForm : Form
 
     private static string DescribeImportEntry(RuleExportEntry entry)
     {
+        var parsed = string.IsNullOrEmpty(entry.Expiry)
+            ? RuleExpiry.Never
+            : RuleExpiry.Parse(entry.Expiry);
+
+        if (Localizer.IsEnglish)
+        {
+            var actionEn = entry.Action == "block" ? "block" : "allow";
+            var kindEn = entry.Kind == "ip" ? "IP" : "program";
+            var groupEn = entry.Group.Length == 0 ? string.Empty : $" | group {entry.Group}";
+
+            return $"[{kindEn}] {actionEn} {entry.Value} ({Localizer.T(parsed.Describe(DateTime.UtcNow))}){groupEn}";
+        }
+
         var action = entry.Action == "block" ? "阻止" : "允许";
         var kind = entry.Kind == "ip" ? "IP" : "程序";
-        var expiry = string.IsNullOrEmpty(entry.Expiry)
-            ? "永久"
-            : RuleExpiry.Parse(entry.Expiry).Describe(DateTime.UtcNow);
+        var expiry = parsed.Describe(DateTime.UtcNow);
         var group = entry.Group.Length == 0 ? string.Empty : $" ｜ 分组 {entry.Group}";
 
         return $"[{kind}] {action} {entry.Value}（{expiry}）{group}";
@@ -3179,7 +3185,9 @@ public partial class MainForm : Form
             {
                 scope.IsAny
                     ? "确认后该程序会立刻无法联网（已经建立的连接也会断开）。"
-                    : $"只拦「{scope.Describe()}」：其它端口 / 网络位置上的连接不受影响。",
+                    : Localizer.IsEnglish
+                        ? $"Only \"{DescribeScopeEnglish(scope)}\" is blocked: connections on other ports or networks are unaffected."
+                        : $"只拦「{scope.Describe()}」：其它端口 / 网络位置上的连接不受影响。",
                 "这是永久规则，要恢复请回到这一页删除它。",
                 "想限时阻止（30 分钟 / 2 小时 / 下次重启），请到「联网连接」页操作。",
             },
@@ -4392,6 +4400,26 @@ public partial class MainForm : Form
     /// 收成一处的好处：以后新增操作时不会再有人忘记写日志，
     /// 而且日志里的记录和用户看到的提示永远是同一句话。
     /// </summary>
+    /// <summary>3.3：白名单页顶部说明（纯函数，便于自检两种语言）。</summary>
+    internal static string BuildWhitelistNotice(bool strictModeOn)
+    {
+        if (Localizer.IsEnglish)
+        {
+            return "The whitelist only applies in strict mode: while strict mode is on, only the programs listed here "
+                   + "(plus required system programs) can reach the network.\r\n"
+                   + "When strict mode is off, these rules restrict nothing.\r\n"
+                   + (strictModeOn
+                       ? "Now: strict mode is ON — this whitelist is in effect."
+                       : "Now: strict mode is OFF — this whitelist has no effect.");
+        }
+
+        return "白名单只在「严格模式」下起作用：严格模式开着时，只有这里列出的程序"
+               + "（以及系统必需程序）能上网。\r\n"
+               + "严格模式没开时，这些规则不会限制任何东西。\r\n"
+               + (strictModeOn
+                   ? "当前：严格模式已开启 —— 白名单正在生效。"
+                   : "当前：严格模式未开启 —— 白名单暂不生效。");
+    }
     /// <summary>3.3：日志用的英文范围描述（中文仍走 RuleScope.Describe）。</summary>
     private static string DescribeScopeEnglish(RuleScope scope)
         => scope.IsAny ? "any" : scope.Encode();
@@ -4770,13 +4798,13 @@ public partial class MainForm : Form
                         "受保护模式未初始化（规则只读）"),
                 };
 
-                _serviceStatusLabel.Text = text;
+                _serviceStatusLabel.Text = Localizer.T(text);
                 _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
                 _serviceStatusLabel.IsLink = false;
-                _serviceStatusLabel.ToolTipText = tooltip;
+                _serviceStatusLabel.ToolTipText = Localizer.T(tooltip);
 
                 _serviceAvailable = false;
-                _statusRulesLabel.Text = ruleReason;
+                _statusRulesLabel.Text = Localizer.T(ruleReason);
                 MarkRulesReadOnly(reason);
                 UpdateRulesActionState();
                 UpdateWhitelistActionState();
@@ -4793,16 +4821,16 @@ public partial class MainForm : Form
 
             var installed = ServiceIsInstalled();
 
-            _serviceStatusLabel.Text = installed
+            _serviceStatusLabel.Text = Localizer.T(installed
                 ? "服务：未运行（离线模式）—— 点击启动"
-                : "服务：未运行（离线模式）";
+                : "服务：未运行（离线模式）");
             _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
             _serviceStatusLabel.IsLink = installed;
-            _serviceStatusLabel.ToolTipText = installed
+            _serviceStatusLabel.ToolTipText = Localizer.T(installed
                 ? "防护服务没有运行：点击这里启动（需要管理员权限）。\n" +
                   "规则页面在服务恢复前只读；查看连接和导出仍然可用。"
                 : "防护服务未安装：规则页面只读。\n" +
-                  "请运行 WinAppGuardSetup.exe --install 安装服务。";
+                  "请运行 WinAppGuardSetup.exe --install 安装服务。");
 
             // 服务停了要**立刻**反映到规则页，不能等用户去点刷新。
             _serviceAvailable = false;
@@ -4831,17 +4859,24 @@ public partial class MainForm : Form
         ApplyAuditStatus(status);
 
         _serviceStatusLabel.Text =
-            $"服务：运行中 · {status.BlockRuleCount + status.AllowRuleCount} 条规则";
+            Localizer.F("服务：运行中 · {0} 条规则", status.BlockRuleCount + status.AllowRuleCount);
         _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
         _serviceStatusLabel.IsLink = false;
-        _serviceStatusLabel.ToolTipText =
-            $"服务版本 {status.ServiceVersion}，协议 v{status.ProtocolVersion}。\n" +
-            $"子层{(status.SublayerPresent ? "存在" : "缺失")}；" +
-            $"阻止 {status.BlockRuleCount} / 允许 {status.AllowRuleCount} / IP {status.IpRuleCount}。" +
-            (status.TamperRebuiltCount > 0
-                ? $"\n已自动重建 {status.TamperRebuiltCount} 条被外部删除的规则" +
-                  (status.LastTamperUtc is { } last ? $"（最近 {last.ToLocalTime():MM-dd HH:mm}）" : string.Empty)
-                : string.Empty);
+        _serviceStatusLabel.ToolTipText = Localizer.IsEnglish
+            ? $"Service version {status.ServiceVersion}, protocol v{status.ProtocolVersion}.\n" +
+              $"Sublayer {(status.SublayerPresent ? "present" : "missing")}; " +
+              $"blocked {status.BlockRuleCount} / allowed {status.AllowRuleCount} / IP {status.IpRuleCount}." +
+              (status.TamperRebuiltCount > 0
+                  ? $"\nRebuilt {status.TamperRebuiltCount} externally deleted rules" +
+                    (status.LastTamperUtc is { } lastEn ? $" (last {lastEn.ToLocalTime():MM-dd HH:mm})" : string.Empty)
+                  : string.Empty)
+            : $"服务版本 {status.ServiceVersion}，协议 v{status.ProtocolVersion}。\n" +
+              $"子层{(status.SublayerPresent ? "存在" : "缺失")}；" +
+              $"阻止 {status.BlockRuleCount} / 允许 {status.AllowRuleCount} / IP {status.IpRuleCount}。" +
+              (status.TamperRebuiltCount > 0
+                  ? $"\n已自动重建 {status.TamperRebuiltCount} 条被外部删除的规则" +
+                    (status.LastTamperUtc is { } last ? $"（最近 {last.ToLocalTime():MM-dd HH:mm}）" : string.Empty)
+                  : string.Empty);
 
         // 篡改提示：计数增加说明服务刚刚重建了规则（第一次同步不弹，避免启动即打扰）。
         if (_lastTamperRebuilt >= 0 && status.TamperRebuiltCount > _lastTamperRebuilt)

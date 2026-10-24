@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using WinAppGuard.Localization;
 
 namespace WinAppGuard.Models;
 
@@ -78,9 +79,9 @@ public sealed class TcpConnectionItem
     /// </summary>
     public string WhitelistText => Whitelist switch
     {
-        WhitelistState.Ours => "已放行·本工具",
-        WhitelistState.OtherSource => "已放行·其它来源",
-        WhitelistState.NotWhitelisted => "未放行",
+        WhitelistState.Ours => Localizer.T("已放行·本工具"),
+        WhitelistState.OtherSource => Localizer.T("已放行·其它来源"),
+        WhitelistState.NotWhitelisted => Localizer.T("未放行"),
         _ => "—",
     };
 
@@ -89,7 +90,7 @@ public sealed class TcpConnectionItem
     /// 拿不到路径的连接无法被阻止，显示为破折号而不是「未阻止」，避免误导。
     /// </summary>
     public string BlockStateText =>
-        string.IsNullOrEmpty(ProcessPath) ? "—" : IsBlocked ? "已阻止" : "未阻止";
+        string.IsNullOrEmpty(ProcessPath) ? "—" : Localizer.T(IsBlocked ? "已阻止" : "未阻止");
 
     /// <summary>
     /// 数字签名列的显示文本。
@@ -100,13 +101,13 @@ public sealed class TcpConnectionItem
     public string SignatureText => Signature.State switch
     {
         SignatureState.Valid => string.IsNullOrEmpty(Signature.SignerName)
-            ? "已签名"
+            ? Localizer.T("已签名")
             : Signature.SignerName,
-        SignatureState.Unsigned => "未签名",
-        SignatureState.Tampered => "签名无效",
-        SignatureState.Untrusted => "不受信任",
-        SignatureState.CertificateProblem => "证书异常",
-        SignatureState.Error => "检查失败",
+        SignatureState.Unsigned => Localizer.T("未签名"),
+        SignatureState.Tampered => Localizer.T("签名无效"),
+        SignatureState.Untrusted => Localizer.T("不受信任"),
+        SignatureState.CertificateProblem => Localizer.T("证书异常"),
+        SignatureState.Error => Localizer.T("检查失败"),
 
         // 还没检查：有路径说明马上会有结果，留空；没路径就永远不会有结果。
         _ => string.IsNullOrEmpty(ProcessPath) ? "—" : string.Empty,
@@ -131,7 +132,7 @@ public sealed class TcpConnectionItem
     /// 程序路径的显示文本。
     /// 取不到路径是正常现象（System 进程、已退出进程、受保护进程），不要当成错误。
     /// </summary>
-    public string ProcessPathText => string.IsNullOrEmpty(ProcessPath) ? "（无法获取）" : ProcessPath;
+    public string ProcessPathText => string.IsNullOrEmpty(ProcessPath) ? Localizer.T("（无法获取）") : ProcessPath;
 
     /// <summary>本地端口的显示文本。</summary>
     public string LocalPortText => LocalPort == 0 ? "-" : LocalPort.ToString();
@@ -148,18 +149,18 @@ public sealed class TcpConnectionItem
     /// <summary>连接状态的显示文本。</summary>
     public string StateText => State switch
     {
-        TcpState.Closed => "已关闭",
-        TcpState.Listen => "监听中",
-        TcpState.SynSent => "同步已发送",
-        TcpState.SynReceived => "同步已接收",
-        TcpState.Established => "已建立",
+        TcpState.Closed => Localizer.T("已关闭"),
+        TcpState.Listen => Localizer.T("监听中"),
+        TcpState.SynSent => Localizer.T("同步已发送"),
+        TcpState.SynReceived => Localizer.T("同步已接收"),
+        TcpState.Established => Localizer.T("已建立"),
         TcpState.FinWait1 => "FIN-WAIT-1",
         TcpState.FinWait2 => "FIN-WAIT-2",
-        TcpState.CloseWait => "关闭等待",
-        TcpState.Closing => "正在关闭",
-        TcpState.LastAck => "最后确认",
-        TcpState.TimeWait => "时间等待",
-        TcpState.DeleteTcb => "已删除",
-        _ => $"未知({(int)State})",
+        TcpState.CloseWait => Localizer.T("关闭等待"),
+        TcpState.Closing => Localizer.T("正在关闭"),
+        TcpState.LastAck => Localizer.T("最后确认"),
+        TcpState.TimeWait => Localizer.T("时间等待"),
+        TcpState.DeleteTcb => Localizer.T("已删除"),
+        _ => Localizer.F("未知({0})", (int)State),
     };
 }

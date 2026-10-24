@@ -104,6 +104,23 @@ public static class Localizer
         (new Regex(@"^确定要退出 WinAppGuard 吗？$"), "Exit WinAppGuard?"),
         (new Regex(@"^确定要关闭严格模式吗？$"), "Disable strict mode?"),
         (new Regex(@"^确定要继续吗？$"), "Continue?"),
+        (new Regex(@"^剩余 (\d+) 小时 (\d+) 分钟$"), "$1 h $2 min left"),
+        (new Regex(@"^剩余 (\d+) 分钟$"), "$1 min left"),
+        (new Regex(@"^未知\((\d+)\)$"), "Unknown ($1)"),
+        (new Regex(@"^(\d+) 个$"), "$1"),
+        (new Regex(@"^(\d+) 条$"), "$1"),
+        (new Regex(@"^（ID (\d+)）$"), "(ID $1)"),
+        (new Regex(@"^当前被阻止的 (\d+) 个程序会继续保持被阻止状态。$"),
+            "The $1 currently blocked programs stay blocked."),
+        (new Regex(@"^(\d+) 个正在联网、但没加白名单的程序$"),
+            "$1 connected programs are not on the whitelist."),
+        (new Regex(@"^本工具白名单 (\d+) 个程序 \+ 本程序 \+ (\d+) 个系统必需程序$"),
+            "This app's whitelist: $1 programs + this app + $2 required system programs."),
+        (new Regex(@"^确认后该程序会立刻无法联网；实测中它当前正在进行中的 (\d+) 条连接也会马上断开（浏览器会立刻掉线）。$"),
+            "Once confirmed, the program cannot connect immediately; its $1 active connections drop at once (browsers go offline)."),
+        (new Regex(@"^只拦「(.+)」：其它端口 / 网络位置上的连接不受影响。$"),
+            "Only \"$1\" is blocked: connections on other ports or networks are unaffected."),
+        (new Regex(@"^（(\d+) 个）$"), "($1)"),
     };
 
     private static string? TranslatePattern(string text)

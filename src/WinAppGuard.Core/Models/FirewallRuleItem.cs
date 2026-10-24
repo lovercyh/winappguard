@@ -1,3 +1,5 @@
+using WinAppGuard.Localization;
+
 namespace WinAppGuard.Models;
 
 /// <summary>
@@ -53,19 +55,19 @@ public sealed class FirewallRuleItem
     /// 自动解除方式的显示文本（如「永久」「剩余 12 分钟」「重启后自动解除」）。
     /// 取的是读取规则那一刻的时间点，属于快照。
     /// </summary>
-    public string ExpiryText => Expiry.Describe(DateTime.UtcNow);
+    public string ExpiryText => Localizer.T(Expiry.Describe(DateTime.UtcNow));
 
     /// <summary>动作的显示文本。</summary>
-    public string ActionText => Action == FirewallAction.Block ? "阻止" : "允许";
+    public string ActionText => Localizer.T(Action == FirewallAction.Block ? "阻止" : "允许");
 
     /// <summary>方向的显示文本。</summary>
-    public string DirectionText => Direction == FirewallDirection.Outbound ? "出站" : "入站";
+    public string DirectionText => Localizer.T(Direction == FirewallDirection.Outbound ? "出站" : "入站");
 
     /// <summary>启用状态的显示文本。</summary>
-    public string EnabledText => Enabled ? "已启用" : "已停用";
+    public string EnabledText => Localizer.T(Enabled ? "已启用" : "已停用");
 
     /// <summary>协议的显示文本。</summary>
-    public string ProtocolText => Protocol == 256 ? "任意" : Protocol.ToString();
+    public string ProtocolText => Protocol == 256 ? Localizer.T("任意") : Protocol.ToString();
 
     /// <summary>
     /// 程序名的显示文本（只取文件名，路径太长不适合放在表格里）。
@@ -74,7 +76,7 @@ public sealed class FirewallRuleItem
     public string ApplicationNameText =>
         !string.IsNullOrEmpty(IpAddress)
             ? IpAddress
-            : string.IsNullOrEmpty(ApplicationPath) ? "（所有程序）" : Path.GetFileName(ApplicationPath);
+            : string.IsNullOrEmpty(ApplicationPath) ? Localizer.T("（所有程序）") : Path.GetFileName(ApplicationPath);
 
     /// <summary>
     /// 精细化范围（2.5）：协议 / 远端端口 / 网络位置。
@@ -83,7 +85,7 @@ public sealed class FirewallRuleItem
     internal RuleScope Scope { get; set; } = RuleScope.Any;
 
     /// <summary>范围的显示文本，例如「TCP 443 · 公用网络」。</summary>
-    public string ScopeText => Scope.Describe();
+    public string ScopeText => Localizer.T(Scope.Describe());
 
     /// <summary>
     /// 分组名（2.4 新增）。空字符串 = 未分组。
@@ -96,5 +98,5 @@ public sealed class FirewallRuleItem
     /// 黑名单页把两类规则放在一起，必须让用户一眼看出区别 ——
     /// 「解除阻止」对程序是恢复联网，对 IP 是解除封禁，含义并不一样。
     /// </summary>
-    public string RuleKindText => string.IsNullOrEmpty(IpAddress) ? "程序" : "IP";
+    public string RuleKindText => string.IsNullOrEmpty(IpAddress) ? Localizer.T("程序") : "IP";
 }

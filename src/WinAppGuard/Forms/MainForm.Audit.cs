@@ -576,14 +576,14 @@ public sealed partial class MainForm
                 }
 
                 var processName = string.IsNullOrEmpty(item.ProcessPath)
-                    ? "（未知程序）"
+                    ? Localizer.T("（未知程序）")
                     : Path.GetFileName(item.ProcessPath);
 
                 var rule = item.FilterId != 0 && idMap.TryGetValue(item.FilterId, out var name)
                     ? name
                     : item.FilterId != 0 ? $"（ID {item.FilterId}）" : string.Empty;
 
-                var domain = string.IsNullOrEmpty(item.Domain) ? "未知" : item.Domain;
+                var domain = string.IsNullOrEmpty(item.Domain) ? Localizer.T("未知") : item.Domain;
 
                 if (keyword.Length > 0
                     && !Contains(item.ProcessPath, keyword)
@@ -594,6 +594,18 @@ public sealed partial class MainForm
                     continue;
                 }
 
+                var detail = Localizer.IsEnglish
+                    ? $"{item.TimeUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}  " +
+                      $"{(item.Kind == AuditEventKind.Blocked ? "Blocked" : "Connection")}  " +
+                      $"{item.ProcessPath} → {item.RemoteAddress}:{item.RemotePort}" +
+                      (string.IsNullOrEmpty(item.Domain) ? " (domain unknown)" : $" ({item.Domain}, guessed)") +
+                      (rule.Length > 0 ? $"  matched: {rule}" : string.Empty)
+                    : $"{item.TimeUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}  " +
+                      $"{(item.Kind == AuditEventKind.Blocked ? "拦截" : "连接")}  " +
+                      $"{item.ProcessPath} → {item.RemoteAddress}:{item.RemotePort}" +
+                      (string.IsNullOrEmpty(item.Domain) ? "（域名未知）" : $"（{item.Domain}，推测）") +
+                      (rule.Length > 0 ? $"  命中：{rule}" : string.Empty);
+
                 rows.Add(new AuditRow(
                     item.TimeUtc,
                     item.Kind == AuditEventKind.Blocked ? "拦截" : "连接",
@@ -603,11 +615,7 @@ public sealed partial class MainForm
                     item.RemoteAddress,
                     domain,
                     rule,
-                    $"{item.TimeUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}  " +
-                    $"{(item.Kind == AuditEventKind.Blocked ? "拦截" : "连接")}  " +
-                    $"{item.ProcessPath} → {item.RemoteAddress}:{item.RemotePort}" +
-                    (string.IsNullOrEmpty(item.Domain) ? "（域名未知）" : $"（{item.Domain}，推测）") +
-                    (rule.Length > 0 ? $"  命中：{rule}" : string.Empty)));
+                    detail));
             }
 
             _auditGrid.SuspendLayout();
@@ -619,7 +627,7 @@ public sealed partial class MainForm
                 {
                     var index = _auditGrid.Rows.Add(
                         row.TimeUtc.ToLocalTime().ToString("MM-dd HH:mm:ss"),
-                        row.Kind,
+                        Localizer.T(row.Kind),
                         row.ProcessName,
                         row.Remote,
                         row.Domain,

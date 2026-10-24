@@ -343,16 +343,19 @@ public sealed class ConfirmForm : Form
 
         if (expiry.Kind == RuleExpiryKind.OnNextBoot)
         {
-            _durationHint.Text =
-                "直到下次重启：重启（或重新登录）之后这条规则会自动解除，该程序恢复联网。" +
-                "本程序由登录触发的开机自启跑起来时才会清理它。";
+            _durationHint.Text = Localizer.IsEnglish
+                ? "Until next restart: the rule is removed after a restart (or sign-out) and the program can connect again. Cleanup happens when this app starts at logon."
+                : "直到下次重启：重启（或重新登录）之后这条规则会自动解除，该程序恢复联网。" +
+                  "本程序由登录触发的开机自启跑起来时才会清理它。";
             return;
         }
 
         var local = (expiry.ExpiresAtUtc ?? DateTime.UtcNow).ToLocalTime();
-        _durationHint.Text =
-            $"限时：规则会在 {local:HH:mm} 自动解除，届时该程序恢复联网。" +
-            "注意：本程序退出后就不会再自动清理了，需要重新打开它。";
+        _durationHint.Text = Localizer.IsEnglish
+            ? $"Timed: the rule is removed at {local:HH:mm} and the program can connect again. " +
+              "Note: cleanup stops if this app exits; reopen it to keep the schedule."
+            : $"限时：规则会在 {local:HH:mm} 自动解除，届时该程序恢复联网。" +
+              "注意：本程序退出后就不会再自动清理了，需要重新打开它。";
     }
 
     /// <summary>

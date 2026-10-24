@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using WinAppGuard.Localization;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
@@ -309,6 +310,27 @@ internal static class RuleExport
         var allows = document.Rules.Count - blocks;
         var ipRules = document.Rules.Count(entry => entry.Kind == "ip");
         var grouped = document.Rules.Count(entry => entry.Group.Length > 0);
+
+        if (Localizer.IsEnglish)
+        {
+            var englishParts = new List<string>
+            {
+                $"block {blocks}",
+                $"allow {allows}",
+            };
+
+            if (ipRules > 0)
+            {
+                englishParts.Add($"{ipRules} IP rules");
+            }
+
+            if (grouped > 0)
+            {
+                englishParts.Add($"{grouped} grouped");
+            }
+
+            return string.Join(" · ", englishParts);
+        }
 
         var parts = new List<string>
         {

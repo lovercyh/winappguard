@@ -64,6 +64,13 @@ public static class LocalLog
     /// </summary>
     public static bool English { get; set; }
 
+    /// <summary>
+    /// 3.3：按当前日志语言二选一。
+    /// 界面日志跟随界面语言；服务日志固定英文（<see cref="English"/> 已由服务打开）。
+    /// </summary>
+    public static string Pick(string chinese, string english)
+        => English ? english : chinese;
+
     /// <summary>记录一般信息（启动、状态同步等）。</summary>
     public static void Info(string message) => Write("信息", message);
 

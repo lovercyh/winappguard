@@ -26,10 +26,11 @@
   CLI 与界面对不上；旧文件自动回退 `Language`。
 - 服务日志固定英文 + 稳定事件码（`WAG-SVC-*` / `WAG-IPC-*` / `WAG-AUTH-*` / `WAG-RULE-*` /
   `WAG-STRICT-*` / `WAG-AUDIT-*` / `WAG-WFP-*` / `WAG-DATA-*`）。
-- 新增 `--cli-language-test`（27 项）与 `--log-format-test`（9 项）。
+- 新增 `--cli-language-test`（27 项）与 `--log-format-test`（11 项）。
 
 ### 变更
 
+- GUI 日志跟随界面语言：English 界面写英文日志，中文界面保持中文；服务日志仍固定英文。
 - 服务日志异常只记录类型、HResult、Win32 错误码和堆栈，不再写入会跟随系统语言的 `Message`。
 - 共享层（WFP / 审计 / 严格模式 / 规则分组）在服务进程里写入的日志改为英文级别与英文描述。
 - CLI 帮助、列表标题、注释与错误提示支持英文；`--list-blocked` 的数据行契约不变

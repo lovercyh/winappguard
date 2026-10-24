@@ -8771,8 +8771,13 @@ internal static class Program
             CheckAssertion(results, "异常没有写入本地化 Message",
                 !text.Contains("这是一条中文异常消息", StringComparison.Ordinal));
 
-            // 界面/CLI 日志不受服务英文开关影响。
+            CheckAssertion(results, "英文模式 Pick 选英文",
+                LocalLog.Pick("中文", "English") == "English");
+
+            // 界面日志跟随界面语言：关掉英文模式后，Pick 必须回到中文。
             LocalLog.English = false;
+            CheckAssertion(results, "中文模式 Pick 选中文",
+                LocalLog.Pick("中文", "English") == "中文");
             LocalLog.Info("界面日志仍用中文级别");
             var updated = File.ReadAllText(file);
             CheckAssertion(results, "关掉英文模式后恢复中文级别",

@@ -235,7 +235,9 @@ internal sealed class RuleGroupStore
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                LocalLog.Warning("[WAG-RULE-040] Failed to save rule groups.", ex);
+                LocalLog.Warning(LocalLog.Pick(
+                "[WAG-RULE-040] 保存规则分组失败。",
+                "[WAG-RULE-040] Failed to save rule groups."), ex);
             }
         }
     }
@@ -268,7 +270,9 @@ internal sealed class RuleGroupStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             // 损坏就当空表：最坏情况是分组回到「未分组」，不影响任何规则是否生效。
-            LocalLog.Warning("[WAG-RULE-041] Failed to read rule groups (treated as empty).", ex);
+            LocalLog.Warning(LocalLog.Pick(
+                "[WAG-RULE-041] 读取规则分组失败（按空表处理）。",
+                "[WAG-RULE-041] Failed to read rule groups (treated as empty)."), ex);
         }
     }
 

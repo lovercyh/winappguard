@@ -465,7 +465,7 @@ public sealed partial class MainForm
 
         _settings.AuditRetentionDays = days;
         _settings.Save();
-        LocalLog.Operation($"记录保留期：改为 {days} 天");
+        LocalLog.Operation(LocalLog.Pick($"记录保留期：改为 {days} 天", $"Audit retention changed to {days} days."));
 
         if (response.Status is not null)
         {
@@ -686,7 +686,7 @@ public sealed partial class MainForm
         }
         catch (Exception ex)
         {
-            LocalLog.Error("刷新审计列表失败", ex);
+            LocalLog.Error(LocalLog.Pick("刷新审计列表失败", "Failed to refresh the audit list."), ex);
             _auditStatusLabel.Text = Localizer.T("读取审计记录失败（详见日志）");
         }
     }
@@ -736,7 +736,7 @@ public sealed partial class MainForm
         catch (Exception ex)
         {
             // 剪贴板被别的程序占用时 SetText 会抛异常，不能让它把程序带崩。
-            ShowError("复制失败", ex);
+            ShowError("复制失败", ex, "Copy failed");
         }
     }
 
@@ -801,7 +801,7 @@ public sealed partial class MainForm
             return;
         }
 
-        LocalLog.Operation($"记录：用户清空了记录，删除 {response.Affected} 个文件");
+        LocalLog.Operation(LocalLog.Pick($"记录：用户清空了记录，删除 {response.Affected} 个文件", $"Audit records cleared by user: {response.Affected} files deleted."));
 
         RefreshAudit();
 
@@ -809,7 +809,7 @@ public sealed partial class MainForm
 
         if (remaining > 0)
         {
-            LocalLog.Warning($"记录：清空后仍有 {remaining} 个文件删不掉");
+            LocalLog.Warning(LocalLog.Pick($"记录：清空后仍有 {remaining} 个文件删不掉", $"After clearing, {remaining} audit files still could not be deleted."));
             UiMessageBox.Show(
                 this,
                 $"有 {remaining} 个记录文件删不掉（可能正被其它程序占用）。\n" +
@@ -834,7 +834,7 @@ public sealed partial class MainForm
         }
         catch (Exception ex)
         {
-            ShowError("打开审计目录失败", ex);
+            ShowError("打开审计目录失败", ex, "Failed to open the audit folder");
         }
     }
 
@@ -936,14 +936,14 @@ public sealed partial class MainForm
                 return;
             }
 
-            LocalLog.Operation($"封禁 IP：{normalized}");
+            LocalLog.Operation(LocalLog.Pick($"封禁 IP：{normalized}", $"Block IP: {normalized}."));
 
             AfterRulesChanged();
             RefreshAudit();
         }
         catch (Exception ex)
         {
-            ShowError("封禁 IP 失败", ex);
+            ShowError("封禁 IP 失败", ex, "Failed to block the IP");
         }
     }
 

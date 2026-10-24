@@ -46,6 +46,10 @@ internal static class Program
         // 命令行模式则要**留着**控制台 —— 那正是输出要走的地方。
         NativeMethods.FreeConsole();
 
+        // 2.5) 3.2/3.3：先确定界面语言，后面的日志也按这个语言写。
+        Localizer.Initialize(UiState.Load().Language);
+        LocalLog.English = Localizer.IsEnglish;
+
         // 2) 1.x → 2.0 规则迁移已移到服务启动时执行（界面不再有 WFP 访问能力）。
 
         // 3) 单实例检查。
@@ -61,7 +65,7 @@ internal static class Program
                 SingleInstance.RequestShowMainWindow();
             }
 
-            LocalLog.Info($"检测到已有实例在运行，本次启动（{AppConstants.AutostartArgument}模式={IsAutostart}）直接退出。");
+            LocalLog.Info(LocalLog.Pick($"检测到已有实例在运行，本次启动（{AppConstants.AutostartArgument}模式={IsAutostart}）直接退出。", $"Another instance is already running; this launch ({AppConstants.AutostartArgument} mode={IsAutostart}) exits now."));
             return 0;
         }
 
@@ -70,26 +74,24 @@ internal static class Program
         //    自启任务以「最高权限」运行，所以自启场景下 isAdmin 通常为 true。
         var isAdmin = AdminHelper.IsRunningAsAdmin();
 
-        LocalLog.Info(
-            $"程序启动：版本 {Application.ProductVersion}，" +
-            $"管理员权限={isAdmin}（按需提权），" +
-            $"启动模式={(IsAutostart ? AppConstants.AutostartArgument : "手动")}，" +
-            $"进程路径={Environment.ProcessPath}");
+        LocalLog.Info(LocalLog.Pick(
+            $"程序启动：版本 {Application.ProductVersion}，管理员权限={isAdmin}（按需提权），启动模式={(IsAutostart ? AppConstants.AutostartArgument : "手动")}，进程路径={Environment.ProcessPath}",
+            $"App started: version {Application.ProductVersion}, admin={isAdmin} (elevate on demand), mode={(IsAutostart ? AppConstants.AutostartArgument : "manual")}, process={Environment.ProcessPath}"));
 
         // 4.5) 3.1：加载所有者密钥，给所有 IPC 请求签名。
         //      不是所有者 / DPAPI 解不开时不要崩：界面仍能启动，
         //      但 ServiceClient 会明确返回"未配置签名密钥"，显示为离线。
         if (ProtectedModeClient.TryConfigureSigner(out var fingerprint, out var authError))
         {
-            LocalLog.Info($"受保护模式：已加载签名密钥（指纹 {fingerprint?[..16]}…）。");
+            LocalLog.Info(LocalLog.Pick($"受保护模式：已加载签名密钥（指纹 {fingerprint?[..16]}…）。", $"Protected mode: signing key loaded (fingerprint {fingerprint?[..16]}...)."));
         }
         else
         {
-            LocalLog.Warning($"受保护模式：无法加载签名密钥（{authError}）。");
+            LocalLog.Warning(LocalLog.Pick($"受保护模式：无法加载签名密钥（{authError}）。", "Protected mode: could not load the signing key."));
         }
 
         // 4.6) 3.2：按上次保存的语言初始化 GUI（auto 时跟随系统）。
-        Localizer.Initialize(UiState.Load().Language);
+        //      入口处已经初始化过一次；这里保留是为了兼容后续可能新增的启动路径。
 
         // 5) 启动界面。
         ApplicationConfiguration.Initialize();
@@ -150,7 +152,7 @@ internal static class Program
 
     private static void OnUiThreadException(object sender, ThreadExceptionEventArgs e)
     {
-        LocalLog.Error("界面线程发生未处理的异常", e.Exception);
+        LocalLog.Error(LocalLog.Pick("界面线程发生未处理的异常", "Unhandled exception on the UI thread."), e.Exception);
 
         UiMessageBox.Show(
             $"WinAppGuard 遇到了一个未预期的问题，程序会继续运行。\n\n" +
@@ -167,8 +169,9 @@ internal static class Program
     /// </summary>
     private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
-        LocalLog.Error(
+        LocalLog.Error(LocalLog.Pick(
             $"发生无法恢复的未处理异常（进程即将结束，IsTerminating={e.IsTerminating}）",
+            $"Unrecoverable unhandled exception (process is terminating, IsTerminating={e.IsTerminating})."),
             e.ExceptionObject as Exception);
     }
 }

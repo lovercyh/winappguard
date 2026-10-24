@@ -383,6 +383,7 @@ public partial class MainForm : Form
         SyncAppliedLanguage();
 
         Localizer.Initialize(_uiState.Language);
+        LocalLog.English = Localizer.IsEnglish;
         ControlLocalizer.Apply(this);
         SetupLanguageSwitch();
 
@@ -1043,7 +1044,7 @@ public partial class MainForm : Form
             {
                 // 服务不可用：规则页只读（3.0-b 起唯一写入路径是服务）。
                 _serviceAvailable = false;
-                LocalLog.Warning($"读取规则失败（服务不可用）：{error ?? response?.Error}");
+                LocalLog.Warning(LocalLog.Pick($"读取规则失败（服务不可用）：{error ?? response?.Error}", "Failed to read rules (service unavailable)."));
 
                 // 3.0-c：服务每次写入后都会留一份权威副本（rules.json）。
                 // 离线时读它，让用户至少能看到"上次已知状态"，而不是一片空白。
@@ -1159,7 +1160,7 @@ public partial class MainForm : Form
             _rulesSummaryLabel.Text = Localizer.T("读取规则失败");
             _whitelistSummaryLabel.Text = Localizer.T("读取规则失败");
 
-            ShowError("读取规则失败", ex);
+            ShowError("读取规则失败", ex, "Failed to read rules");
         }
     }
 
@@ -1250,12 +1251,12 @@ public partial class MainForm : Form
 
         if (response is null && string.Equals(error, ElevatedClient.CancelledMessage, StringComparison.Ordinal))
         {
-            LocalLog.Info($"{actionName}：用户取消了管理员授权。");
+            LocalLog.Info(LocalLog.Pick($"{actionName}：用户取消了管理员授权。", $"User cancelled the elevation prompt (command={command})."));
             return null;
         }
 
         var reason = response?.Error ?? error ?? "防护服务没有响应。";
-        LocalLog.Warning($"{actionName}失败：{reason}");
+        LocalLog.Warning(LocalLog.Pick($"{actionName}失败：{reason}", $"Service request failed (command={command})."));
 
         UiMessageBox.Show(
             this,
@@ -1340,7 +1341,7 @@ public partial class MainForm : Form
             if (response is not { Ok: true })
             {
                 // 服务不可用：保留上一次的缓存（不要清空 —— 清空会让所有程序都显示"未放行"）。
-                LocalLog.Warning($"读取放行状态失败（保留上次缓存）：{response?.Error ?? error}");
+                LocalLog.Warning(LocalLog.Pick($"读取放行状态失败（保留上次缓存）：{response?.Error ?? error}", "Failed to read the allow state; keeping the previous cache."));
                 return;
             }
 
@@ -1354,15 +1355,13 @@ public partial class MainForm : Form
 
             // 耗时写进日志：这条路径的开销是本功能唯一的性能风险点，
             // 真机上一旦变慢，日志里就能直接看到。
-            LocalLog.Info(
-                $"放行状态：本工具白名单 {_whitelistedPaths.Count} 个程序、" +
-                $"系统/其它软件放行 {_otherAllowPaths.Count} 个程序、" +
-                $"不限程序的允许规则 {_programlessAllowRuleCount} 条、" +
-                $"耗时 {Environment.TickCount64 - started}ms");
+            LocalLog.Info(LocalLog.Pick(
+                $"放行状态：本工具白名单 {_whitelistedPaths.Count} 个程序、系统/其它软件放行 {_otherAllowPaths.Count} 个程序、不限程序的允许规则 {_programlessAllowRuleCount} 条、耗时 {Environment.TickCount64 - started}ms",
+                $"Allow state: our whitelist {_whitelistedPaths.Count} programs, system/other allow rules {_otherAllowPaths.Count} programs, programless allow rules {_programlessAllowRuleCount}, took {Environment.TickCount64 - started}ms."));
         }
         catch (Exception ex)
         {
-            LocalLog.Error("读取放行状态失败", ex);
+            LocalLog.Error(LocalLog.Pick("读取放行状态失败", "Failed to read the allow state."), ex);
         }
     }
 
@@ -2048,12 +2047,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"加入白名单：{path}（范围 {scope.Describe()}）");
+            LocalLog.Operation(LocalLog.Pick($"加入白名单：{path}（范围 {scope.Describe()}）", $"Add to allowlist: {path} (scope {DescribeScopeEnglish(scope)})."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("加入白名单失败", ex);
+            ShowError("加入白名单失败", ex, "Failed to add to the allowlist");
         }
     }
 
@@ -2109,12 +2108,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"移出白名单：{rule.ApplicationPath}（规则 {rule.Name}）");
+            LocalLog.Operation(LocalLog.Pick($"移出白名单：{rule.ApplicationPath}（规则 {rule.Name}）", $"Remove from allowlist: {rule.ApplicationPath} (rule {rule.Name})."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("移出白名单失败", ex);
+            ShowError("移出白名单失败", ex, "Failed to remove from the allowlist");
         }
     }
 
@@ -2177,12 +2176,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"清空白名单：实际删除 {response.Affected} 条允许规则");
+            LocalLog.Operation(LocalLog.Pick($"清空白名单：实际删除 {response.Affected} 条允许规则", $"Clear allowlist: {response.Affected} allow rules deleted."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("清空白名单失败", ex);
+            ShowError("清空白名单失败", ex, "Failed to clear the allowlist");
         }
     }
 
@@ -2228,7 +2227,7 @@ public partial class MainForm : Form
             return;
         }
 
-        LocalLog.Operation($"规则分组：{rule.Name} → {(group.Length == 0 ? "未分组" : group)}");
+        LocalLog.Operation(LocalLog.Pick($"规则分组：{rule.Name} → {(group.Length == 0 ? "未分组" : group)}", $"Rule group: {rule.Name} -> {(group.Length == 0 ? "(none)" : group)}."));
 
         RefreshRulesFromFirewall();
     }
@@ -2244,6 +2243,7 @@ public partial class MainForm : Form
     private void ExportRules(FirewallAction scope)
     {
         var pageName = scope == FirewallAction.Block ? "黑名单" : "白名单";
+        var pageNameEn = scope == FirewallAction.Block ? "blocklist" : "whitelist";
         var fileTag = scope == FirewallAction.Block ? "blacklist" : "whitelist";
         var count = _appGuardRules.Count(rule => rule.Action == scope);
 
@@ -2277,7 +2277,7 @@ public partial class MainForm : Form
             var json = RuleExport.Serialize(document);
 
             File.WriteAllText(dialog.FileName, json, new UTF8Encoding(false));
-            LocalLog.Operation($"导出{pageName}：{document.Rules.Count} 条 → {dialog.FileName}");
+            LocalLog.Operation(LocalLog.Pick($"导出{pageName}：{document.Rules.Count} 条 → {dialog.FileName}", $"Export {pageNameEn}: {document.Rules.Count} rules -> {dialog.FileName}."));
 
             UiMessageBox.Show(
                 this,
@@ -2289,7 +2289,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            ShowError($"导出{pageName}失败", ex);
+            ShowError($"导出{pageName}失败", ex, $"Failed to export {pageNameEn}");
         }
     }
 
@@ -2325,7 +2325,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            ShowError("读取规则文件失败", ex);
+            ShowError("读取规则文件失败", ex, "Failed to read the rules file");
             return;
         }
 
@@ -2439,7 +2439,7 @@ public partial class MainForm : Form
             lines.Add(response.Error);
         }
 
-        LocalLog.Operation($"导入规则：{string.Join("，", lines)}");
+        LocalLog.Operation(LocalLog.Pick($"导入规则：{string.Join("，", lines)}", $"Import rules: created {response.Affected}, hasErrors={!string.IsNullOrWhiteSpace(response.Error)}."));
 
         UiMessageBox.Show(
             this,
@@ -2722,7 +2722,7 @@ public partial class MainForm : Form
             // 关掉自动刷新，否则会每隔 3 秒弹一次错误框，把界面顶死。
             _autoRefreshCheckBox.Checked = false;
 
-            ShowError("扫描 TCP 连接失败", ex);
+            ShowError("扫描 TCP 连接失败", ex, "Failed to scan TCP connections");
         }
         finally
         {
@@ -2792,7 +2792,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            LocalLog.Error("检查数字签名失败", ex);
+            LocalLog.Error(LocalLog.Pick("检查数字签名失败", "Failed to check the digital signature."), ex);
         }
         finally
         {
@@ -2815,8 +2815,12 @@ public partial class MainForm : Form
         DigitalSignature.ClearCache();
 
         LocalLog.Info(_revocationMode == RevocationMode.Online
-            ? "已开启证书吊销检查：Windows 证书服务会联网查询 CA 服务器。"
-            : "已关闭证书吊销检查：只读本地缓存，本程序完全不留网络流量。");
+            ? LocalLog.Pick(
+                "已开启证书吊销检查：Windows 证书服务会联网查询 CA 服务器。",
+                "Certificate revocation checking enabled: Windows Certificate Services will contact CA servers.")
+            : LocalLog.Pick(
+                "已关闭证书吊销检查：只读本地缓存，本程序完全不留网络流量。",
+                "Certificate revocation checking disabled: local cache only; this app generates no network traffic."));
 
         _ = CheckSignaturesAsync();
     }
@@ -2963,8 +2967,12 @@ public partial class MainForm : Form
         _ipOwnershipService.IsEnabled = enabled;
 
         LocalLog.Info(enabled
-            ? $"已开启 IP 归属查询：会把远程 IP 发送到 {AppConstants.OwnershipLookupHost}:{AppConstants.OwnershipLookupPort} 查询归属。"
-            : "已关闭 IP 归属查询：此后不再产生任何相关网络请求。");
+            ? LocalLog.Pick(
+                $"已开启 IP 归属查询：会把远程 IP 发送到 {AppConstants.OwnershipLookupHost}:{AppConstants.OwnershipLookupPort} 查询归属。",
+                $"IP ownership lookup enabled: remote IPs are sent to {AppConstants.OwnershipLookupHost}:{AppConstants.OwnershipLookupPort}.")
+            : LocalLog.Pick(
+                "已关闭 IP 归属查询：此后不再产生任何相关网络请求。",
+                "IP ownership lookup disabled: no related network requests will be made."));
 
         ApplyOwnership();
         RefreshOwnershipTooltips();
@@ -3089,14 +3097,15 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation(
-                $"阻止联网：{item.ProcessPath}（时长：{chosenExpiry.DescribeSchedule()}）");
+            LocalLog.Operation(LocalLog.Pick(
+                $"阻止联网：{item.ProcessPath}（时长：{chosenExpiry.DescribeSchedule()}）",
+                $"Block network access: {item.ProcessPath} (duration: {DescribeScheduleEnglish(chosenExpiry)})."));
 
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("阻止失败", ex);
+            ShowError("阻止失败", ex, "Failed to block");
         }
     }
 
@@ -3199,12 +3208,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"加入黑名单：{path}（范围 {scope.Describe()}）");
+            LocalLog.Operation(LocalLog.Pick($"加入黑名单：{path}（范围 {scope.Describe()}）", $"Add to blocklist: {path} (scope {DescribeScopeEnglish(scope)})."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("加入黑名单失败", ex);
+            ShowError("加入黑名单失败", ex, "Failed to add to the blocklist");
         }
     }
 
@@ -3277,13 +3286,13 @@ public partial class MainForm : Form
                 return false;
             }
 
-            LocalLog.Operation($"允许联网：{programPath}（删除 {response.Affected} 条规则）");
+            LocalLog.Operation(LocalLog.Pick($"允许联网：{programPath}（删除 {response.Affected} 条规则）", $"Allow network access: {programPath} ({response.Affected} rules deleted)."));
             AfterRulesChanged();
             return true;
         }
         catch (Exception ex)
         {
-            ShowError("允许失败", ex);
+            ShowError("允许失败", ex, "Failed to allow");
             return false;
         }
     }
@@ -3397,12 +3406,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"加入白名单：{programPath}");
+            LocalLog.Operation(LocalLog.Pick($"加入白名单：{programPath}", $"Add to allowlist: {programPath}."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("加入白名单失败", ex);
+            ShowError("加入白名单失败", ex, "Failed to add to the allowlist");
         }
     }
 
@@ -3465,12 +3474,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"移出白名单：{programPath}（规则 {ruleName}）");
+            LocalLog.Operation(LocalLog.Pick($"移出白名单：{programPath}（规则 {ruleName}）", $"Remove from allowlist: {programPath} (rule {ruleName})."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("移出白名单失败", ex);
+            ShowError("移出白名单失败", ex, "Failed to remove from the allowlist");
         }
     }
 
@@ -3525,12 +3534,12 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"删除规则：{rule.Name}（程序 {rule.ApplicationPath}）");
+            LocalLog.Operation(LocalLog.Pick($"删除规则：{rule.Name}（程序 {rule.ApplicationPath}）", $"Delete rule: {rule.Name} (program {rule.ApplicationPath})."));
             AfterRulesChanged();
         }
         catch (Exception ex)
         {
-            ShowError("删除规则失败", ex);
+            ShowError("删除规则失败", ex, "Failed to delete the rule");
         }
     }
 
@@ -3620,7 +3629,7 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation($"清空黑名单：实际删除 {response.Affected} 条阻止规则");
+            LocalLog.Operation(LocalLog.Pick($"清空黑名单：实际删除 {response.Affected} 条阻止规则", $"Clear blocklist: {response.Affected} block rules deleted."));
             AfterRulesChanged();
 
             UiMessageBox.Show(
@@ -3633,7 +3642,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            ShowError("清空黑名单失败", ex);
+            ShowError("清空黑名单失败", ex, "Failed to clear the blocklist");
         }
     }
 
@@ -4042,7 +4051,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            LocalLog.Error("读取开机自启状态失败", ex);
+            LocalLog.Error(LocalLog.Pick("读取开机自启状态失败", "Failed to read the auto-start status."), ex);
             _autostartStatusLabel.Text = Localizer.T("当前状态：读取失败");
             _autostartStatusLabel.ForeColor = Color.Firebrick;
             _autostartDetailLabel.Text = ex.Message;
@@ -4168,7 +4177,7 @@ public partial class MainForm : Form
                 throw new InvalidOperationException("已取消管理员授权，开机自启未开启。");
             }
 
-            LocalLog.Operation($"开启开机自启：任务名 {AppConstants.ScheduledTaskName}，执行的程序 {exePath}");
+            LocalLog.Operation(LocalLog.Pick($"开启开机自启：任务名 {AppConstants.ScheduledTaskName}，执行的程序 {exePath}", $"Enable auto-start: task {AppConstants.ScheduledTaskName}, command {exePath}."));
             RefreshAutoStartStatus();
 
             UiMessageBox.Show(
@@ -4184,7 +4193,7 @@ public partial class MainForm : Form
         {
             RefreshAutoStartStatus();
 
-            ShowError("开启开机自启失败", ex);
+            ShowError("开启开机自启失败", ex, "Failed to enable auto-start");
         }
     }
 
@@ -4233,7 +4242,7 @@ public partial class MainForm : Form
                 deleted = true;
             }
 
-            LocalLog.Operation($"关闭开机自启：删除任务 {AppConstants.ScheduledTaskName}，实际删除={(deleted ? "是" : "任务本来就不存在")}");
+            LocalLog.Operation(LocalLog.Pick($"关闭开机自启：删除任务 {AppConstants.ScheduledTaskName}，实际删除={(deleted ? "是" : "任务本来就不存在")}", $"Disable auto-start: task {AppConstants.ScheduledTaskName}, deleted={deleted}."));
             RefreshAutoStartStatus();
 
             UiMessageBox.Show(
@@ -4247,7 +4256,7 @@ public partial class MainForm : Form
         {
             RefreshAutoStartStatus();
 
-            ShowError("关闭开机自启失败", ex);
+            ShowError("关闭开机自启失败", ex, "Failed to disable auto-start");
         }
     }
 
@@ -4291,7 +4300,7 @@ public partial class MainForm : Form
     {
         if (SingleInstance.ShowWindowMessage != 0 && (uint)m.Msg == SingleInstance.ShowWindowMessage)
         {
-            LocalLog.Info("收到另一个实例的请求，把主窗口显示出来。");
+            LocalLog.Info(LocalLog.Pick("收到另一个实例的请求，把主窗口显示出来。", "Another instance asked to show the main window."));
             ShowMainWindow();
             return;
         }
@@ -4368,7 +4377,7 @@ public partial class MainForm : Form
             return;
         }
 
-        LocalLog.Info($"用户从托盘退出程序。退出时被阻止的程序数={blockedCount}，规则依然生效。");
+        LocalLog.Info(LocalLog.Pick($"用户从托盘退出程序。退出时被阻止的程序数={blockedCount}，规则依然生效。", $"User exited from the tray. Blocked programs at exit={blockedCount}; rules remain active."));
         _reallyExit = true;
         Close();
     }
@@ -4383,9 +4392,23 @@ public partial class MainForm : Form
     /// 收成一处的好处：以后新增操作时不会再有人忘记写日志，
     /// 而且日志里的记录和用户看到的提示永远是同一句话。
     /// </summary>
-    private void ShowError(string what, Exception ex)
+    /// <summary>3.3：日志用的英文范围描述（中文仍走 RuleScope.Describe）。</summary>
+    private static string DescribeScopeEnglish(RuleScope scope)
+        => scope.IsAny ? "any" : scope.Encode();
+
+    /// <summary>3.3：日志用的英文到期描述（绝对时间，便于追溯）。</summary>
+    private static string DescribeScheduleEnglish(RuleExpiry expiry)
+        => expiry.Kind switch
+        {
+            RuleExpiryKind.AtTime when expiry.ExpiresAtUtc is { } at =>
+                $"until {at.ToLocalTime():yyyy-MM-dd HH:mm}",
+            RuleExpiryKind.OnNextBoot => "until next restart",
+            _ => "permanent",
+        };
+
+    private void ShowError(string what, Exception ex, string? whatEnglish = null)
     {
-        LocalLog.Error(what, ex);
+        LocalLog.Error(LocalLog.Pick(what, whatEnglish ?? "Operation failed."), ex);
 
         UiMessageBox.Show(
             this,
@@ -4513,7 +4536,7 @@ public partial class MainForm : Form
             return;
         }
 
-        LocalLog.Info("服务未运行：界面以管理员运行，尝试自动启动。");
+        LocalLog.Info(LocalLog.Pick("服务未运行：界面以管理员运行，尝试自动启动。", "Service is not running: the UI has admin rights and will try to start it."));
         _ = Task.Run(() => TryStartService(interactive: false));
     }
 
@@ -4561,7 +4584,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            LocalLog.Warning($"提权修改开机自启失败：{ex.Message}");
+            LocalLog.Warning(LocalLog.Pick($"提权修改开机自启失败：{ex.Message}", "Failed to change auto-start with elevation."));
             return false;
         }
     }
@@ -4623,13 +4646,13 @@ public partial class MainForm : Form
                 return false;
             }
 
-            LocalLog.Info($"自动启动服务：退出码 {process.ExitCode}");
+            LocalLog.Info(LocalLog.Pick($"自动启动服务：退出码 {process.ExitCode}", $"Auto-start service: exit code {process.ExitCode}."));
             return process.ExitCode == 0;
         }
         catch (Exception ex)
         {
             // 用户在 UAC 里点"否"也走这里（Win32 1223）；不打扰，记日志即可。
-            LocalLog.Warning($"启动服务失败：{ex.Message}");
+            LocalLog.Warning(LocalLog.Pick($"启动服务失败：{ex.Message}", "Failed to start the service."));
             return false;
         }
     }
@@ -4825,7 +4848,7 @@ public partial class MainForm : Form
         {
             var rebuilt = status.TamperRebuiltCount - _lastTamperRebuilt;
 
-            LocalLog.Warning($"检测到规则被外部删除：服务已自动重建 {rebuilt} 条。");
+            LocalLog.Warning(LocalLog.Pick($"检测到规则被外部删除：服务已自动重建 {rebuilt} 条。", $"Rules were deleted externally; the service rebuilt {rebuilt}."));
             ShowTrayBalloon(
                 "规则被外部删除，已自动重建",
                 $"检测到 {rebuilt} 条规则被人从系统里删掉，已按权威副本恢复。\n" +
@@ -4850,7 +4873,7 @@ public partial class MainForm : Form
                     ? $"「{programs[0]}」的临时阻断已到期，已自动解除，它现在可以重新联网了。"
                     : $"{programs.Count} 个程序的临时阻断已到期，已自动解除：{string.Join("、", programs.Take(8))}";
 
-            LocalLog.Operation($"临时阻断到期，服务已自动解除：{text}");
+            LocalLog.Operation(LocalLog.Pick($"临时阻断到期，服务已自动解除：{text}", $"Temporary block expired and was lifted automatically: {(programs.Count == 0 ? "unknown program" : string.Join(", ", programs.Take(8)))}."));
             ShowTrayBalloon(Localizer.T("临时阻断已自动解除"), text);
             RefreshRulesFromFirewall();
         }
@@ -4997,7 +5020,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            LocalLog.Error("刷新严格模式状态失败", ex);
+            LocalLog.Error(LocalLog.Pick("刷新严格模式状态失败", "Failed to refresh the strict-mode status."), ex);
             _strictModeStatusLabel.Text = Localizer.T("当前状态：读取失败（详见日志）");
         }
     }
@@ -5055,7 +5078,7 @@ public partial class MainForm : Form
             _strictModeEnabled = false;
             _strictModePermittedCount = 0;
 
-            LocalLog.Operation($"严格模式已关闭：{response.Message}");
+            LocalLog.Operation(LocalLog.Pick($"严格模式已关闭：{response.Message}", $"Strict mode disabled (ok={response.Ok})."));
 
             AfterRulesChanged();
             RefreshStrictModeStatus();
@@ -5064,7 +5087,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            ShowError("关闭严格模式失败", ex);
+            ShowError("关闭严格模式失败", ex, "Failed to disable strict mode");
             RefreshStrictModeStatus();
         }
     }
@@ -5171,7 +5194,7 @@ public partial class MainForm : Form
             _strictModeEnabled = response.Status?.StrictModeActive ?? true;
             _strictModePermittedCount = response.Status?.StrictModePermittedCount ?? 0;
 
-            LocalLog.Operation($"严格模式已开启：{response.Message}");
+            LocalLog.Operation(LocalLog.Pick($"严格模式已开启：{response.Message}", $"Strict mode enabled (ok={response.Ok})."));
 
             // 严格模式不改规则，只建立了会话；状态文字要立刻更新。
             RefreshStrictModeStatus();
@@ -5183,7 +5206,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            ShowError("开启严格模式失败", ex);
+            ShowError("开启严格模式失败", ex, "Failed to enable strict mode");
             RefreshStrictModeStatus();
         }
     }

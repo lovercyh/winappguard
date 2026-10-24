@@ -145,6 +145,8 @@ internal static class Program
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-language-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--cli-language-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
@@ -350,6 +352,14 @@ internal static class Program
             else if (args.Contains("--ui-language-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunUiLanguageTest();
+            }
+            else if (args.Contains("--cli-language-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunCliLanguageTest();
+            }
+            else if (args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceLogFormatTest();
             }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -8507,6 +8517,233 @@ internal static class Program
         {
             return ex.Code == WfpNativeMethods.FWP_E_SUBLAYER_NOT_FOUND;
         }
+    }
+
+    /// <summary>
+    /// CLI 语言（3.3，离线）：--lang 优先级、ui-state.json 读取、英文文案与数据行契约。
+    /// </summary>
+    private static void RunCliLanguageTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previous = Localizer.Current;
+
+        W("################################################################");
+        W("#   CLI 语言（--lang 优先级 / GUI 已生效语言 / 英文输出契约）    #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            // ---------------- 1. 优先级 ----------------
+            W("===== 1. 语言优先级 =====");
+
+            CheckAssertion(results, "--lang 覆盖 GUI 已生效语言",
+                CliLanguage.TryResolve("en", "zh", out var byOption) && byOption == "en");
+            CheckAssertion(results, "没有 --lang 时跟随 GUI",
+                CliLanguage.TryResolve(null, "en", out var byGui) && byGui == "en");
+            CheckAssertion(results, "两者都没有时 auto",
+                CliLanguage.TryResolve(null, null, out var bySystem) && bySystem == "auto");
+            CheckAssertion(results, "--lang 非法值被拒绝",
+                !CliLanguage.TryResolve("fr", "en", out _));
+
+            // ---------------- 2. ui-state.json ----------------
+            W();
+            W("===== 2. 读取 GUI 已生效语言 =====");
+
+            var directory = Path.Combine(
+                Path.GetTempPath(), "wag-cli-lang-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                var file = Path.Combine(directory, "ui-state.json");
+
+                File.WriteAllText(
+                    file, "{\"Language\":\"zh\",\"AppliedLanguage\":\"en\"}");
+                CheckAssertion(results, "优先读 AppliedLanguage（哪怕 Language 还没重启）",
+                    UiLanguageStore.ReadAppliedLanguage(file) == "en");
+
+                File.WriteAllText(file, "{\"Language\":\"zh\"}");
+                CheckAssertion(results, "3.2 旧文件没有 AppliedLanguage 时回退 Language",
+                    UiLanguageStore.ReadAppliedLanguage(file) == "zh");
+
+                File.WriteAllText(file, "{\"Language\":\"fr\"}");
+                CheckAssertion(results, "非法语言返回 null（视为跟随系统）",
+                    UiLanguageStore.ReadAppliedLanguage(file) is null);
+
+                CheckAssertion(results, "文件不存在返回 null",
+                    UiLanguageStore.ReadAppliedLanguage(
+                        Path.Combine(directory, "missing.json")) is null);
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+                catch (Exception)
+                {
+                    // 临时目录删不掉不影响结论。
+                }
+            }
+
+            // ---------------- 3. 英文输出 ----------------
+            W();
+            W("===== 3. 英文文案与数据行 =====");
+
+            Localizer.Initialize("en");
+
+            CheckAssertion(results, "英文帮助包含 --lang",
+                CliText.Usage.Contains("--lang", StringComparison.Ordinal));
+            CheckAssertion(results, "英文帮助不含中文",
+                !System.Text.RegularExpressions.Regex.IsMatch(
+                    CliText.Usage, "[\u4e00-\u9fff]"));
+
+            var rule = new RuleDto
+            {
+                Name = "AppGuard_Block_a.exe_1a2b3c4d",
+                Value = @"C:\Tools\a.exe",
+                Expiry = string.Empty,
+            };
+
+            var englishLine = CliText.FormatRuleLine(rule);
+            W($"    英文数据行 = {englishLine}");
+            CheckAssertion(results, "英文数据行仍是三段 Tab",
+                englishLine.Split('\t').Length == 3);
+            CheckAssertion(results, "英文数据行不带中文（脚本契约不变）",
+                !System.Text.RegularExpressions.Regex.IsMatch(
+                    englishLine, "[\u4e00-\u9fff]"));
+
+            var englishList = CliText.BuildListBlockedOutput(
+                new[] { rule }, 2, "3.3.0");
+            CheckAssertion(results, "英文表头",
+                englishList.Contains(
+                    "# rule name\tprogram path\texpiry", StringComparison.Ordinal));
+            CheckAssertion(results, "英文列表整体不含中文",
+                !System.Text.RegularExpressions.Regex.IsMatch(
+                    englishList, "[\u4e00-\u9fff]"));
+
+            // ---------------- 4. 中文回退 ----------------
+            W();
+            W("===== 4. 中文输出 =====");
+
+            Localizer.Initialize("zh");
+
+            CheckAssertion(results, "中文帮助含中文",
+                System.Text.RegularExpressions.Regex.IsMatch(
+                    CliText.Usage, "[\u4e00-\u9fff]"));
+
+            var chineseLine = CliText.FormatRuleLine(rule);
+            W($"    中文数据行 = {chineseLine}");
+            CheckAssertion(results, "中文数据行仍是三段 Tab",
+                chineseLine.Split('\t').Length == 3);
+            CheckAssertion(results, "中英文数据行前两段完全一致",
+                chineseLine.Split('\t')[0] == englishLine.Split('\t')[0]
+                && chineseLine.Split('\t')[1] == englishLine.Split('\t')[1]);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "CLI 语言检查执行完成", false);
+        }
+        finally
+        {
+            Localizer.Initialize(previous switch
+            {
+                Localizer.LanguageMode.English => "en",
+                Localizer.LanguageMode.Chinese => "zh",
+                _ => "auto",
+            });
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 日志格式（3.3，离线）：服务模式英文级别、事件码保留、异常不写本地化 Message。
+    /// </summary>
+    private static void RunServiceLogFormatTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previousEnglish = LocalLog.English;
+        var previousDirectory = LocalLog.LogDirectory;
+
+        W("################################################################");
+        W("#   日志格式（英文级别 / 事件码 / 异常不写本地化 Message）      #");
+        W("################################################################");
+        W();
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), "wag-log-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            LocalLog.UseDirectory(directory);
+            LocalLog.English = true;
+
+            LocalLog.Info("[WAG-SVC-002] Service started.");
+            LocalLog.Warning("[WAG-RULE-913] Tamper protection check.");
+            LocalLog.Operation("[WAG-RULE-001] Rule block.");
+            LocalLog.Error(
+                "[WAG-IPC-003] IPC failed.",
+                new InvalidOperationException("这是一条中文异常消息"));
+
+            var file = Directory.GetFiles(directory, "winappguard-*.log").Single();
+            var text = File.ReadAllText(file);
+
+            W($"    日志文件 = {file}");
+            W($"    行数 = {text.Split(Environment.NewLine).Length - 1}");
+
+            CheckAssertion(results, "信息 → [INFO]",
+                text.Contains("[INFO] [WAG-SVC-002]", StringComparison.Ordinal));
+            CheckAssertion(results, "警告 → [WARN]",
+                text.Contains("[WARN] [WAG-RULE-913]", StringComparison.Ordinal));
+            CheckAssertion(results, "操作 → [OP]",
+                text.Contains("[OP] [WAG-RULE-001]", StringComparison.Ordinal));
+            CheckAssertion(results, "错误 → [ERROR]",
+                text.Contains("[ERROR] [WAG-IPC-003]", StringComparison.Ordinal));
+            CheckAssertion(results, "不再出现中文级别名",
+                !text.Contains("[信息]", StringComparison.Ordinal)
+                && !text.Contains("[警告]", StringComparison.Ordinal)
+                && !text.Contains("[错误]", StringComparison.Ordinal)
+                && !text.Contains("[操作]", StringComparison.Ordinal));
+
+            CheckAssertion(results, "异常记录了类型",
+                text.Contains("exception=System.InvalidOperationException", StringComparison.Ordinal));
+            CheckAssertion(results, "异常记录了 HResult",
+                text.Contains("hresult=0x", StringComparison.Ordinal));
+            CheckAssertion(results, "异常没有写入本地化 Message",
+                !text.Contains("这是一条中文异常消息", StringComparison.Ordinal));
+
+            // 界面/CLI 日志不受服务英文开关影响。
+            LocalLog.English = false;
+            LocalLog.Info("界面日志仍用中文级别");
+            var updated = File.ReadAllText(file);
+            CheckAssertion(results, "关掉英文模式后恢复中文级别",
+                updated.Contains("[信息] 界面日志仍用中文级别", StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "日志格式检查执行完成", false);
+        }
+        finally
+        {
+            LocalLog.English = previousEnglish;
+            LocalLog.UseDirectory(previousDirectory);
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
     }
 
     private static void RunCliTest()

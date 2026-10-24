@@ -77,12 +77,12 @@ public static class CliText
             : expiry.Describe(DateTime.UtcNow);
 
     public static string FormatRuleLine(FirewallRuleItem rule)
-        => $"{rule.Name}\t{rule.ApplicationPath}\t{rule.ExpiryText}";
+        => $"{rule.Name}\t{rule.ApplicationPath}\t{DescribeExpiry(rule.Expiry)}";
 
     /// <summary>3.1：服务返回的 DTO 版本（CLI 不再直接读 WFP）。</summary>
     public static string FormatRuleLine(RuleDto rule)
     {
-        var expiry = RuleExpiry.Parse(rule.Expiry).Describe(DateTime.UtcNow);
+        var expiry = DescribeExpiry(RuleExpiry.Parse(rule.Expiry));
         return $"{rule.Name}\t{rule.Value}\t{expiry}";
     }
 

@@ -81,6 +81,11 @@ and finish with *"blocked."*
 - **Shortcuts** — `F5` refresh, `Ctrl+F` search, `Esc` clear, `Delete` remove the selected entry.
 - **Interface language** — switch between Follow system / 简体中文 / English from the status bar;
   non-Chinese systems default to English, and a restart applies the change.
+- **Installer / uninstaller are always bilingual (Chinese + English)** — no language switch there.
+  **The CLI follows the language the UI is actually running in**, and `--lang zh|en|auto` overrides
+  it for one invocation.
+- **Service logs are always English with stable event codes** (for example `WAG-RULE-913`) — they do
+  not follow the UI language, which makes them searchable and safe to paste into a bug report.
 - **Remembers window size and column widths** — sizes only, no private data. The Records page
   also lets you right-click to copy a remote address, program path, or domain.
 - **Optional auto-start at logon**, straight to the system tray.
@@ -155,8 +160,11 @@ WinAppGuard.exe --unblock-all --yes        # actually delete
 WinAppGuard.exe --migrate                  # migrate 1.x rules and print a report
 WinAppGuard.exe --recover                  # remove this tool's WFP objects and 1.x leftovers
 WinAppGuard.exe --help                     # usage
+WinAppGuard.exe --list-blocked --lang en   # English for this run (default: follow the UI)
 ```
 
+- **Language**: follows the language the UI is actually running in; `--lang zh|en|auto` affects only
+  this invocation and writes no settings.
 - **Exit codes**: `0` success / `1` bad arguments or not confirmed / `2` failed / `3` not elevated.
 - `--list-blocked` prints **one rule per line**, tab-separated, with `#` comment lines — easy to parse.
 - Since 3.1, `--block`, `--list-blocked` and `--unblock-all` go through **signed IPC** to the
@@ -396,7 +404,9 @@ to manage them — that tab is driven by your rules, not by live traffic.
 ### Where is the log?
 
 UI logs: `%LOCALAPPDATA%\WinAppGuard\logs\`, one file per day, last 7 days kept.
-Service logs: `%ProgramData%\WinAppGuard\logs\`.
+Service logs: `%ProgramData%\WinAppGuard\logs\`, **always English with stable event codes**
+(for example `[WAG-SVC-002] Service started.`). They never follow the UI language; exception lines
+record only the type, HResult, Win32 error code and stack trace, never a localised system message.
 Both are local only — nothing is ever uploaded. The Settings tab shows the UI path and has a
 button to open it.
 

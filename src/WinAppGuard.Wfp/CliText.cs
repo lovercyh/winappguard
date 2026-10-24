@@ -1,5 +1,6 @@
 using System.Text;
 using WinAppGuard.Contracts;
+using WinAppGuard.Localization;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
@@ -16,8 +17,10 @@ namespace WinAppGuard.Core;
 /// </summary>
 public static class CliText
 {
-    /// <summary>用法说明。</summary>
-    public static string Usage { get; } = string.Join(Environment.NewLine, new[]
+    /// <summary>用法说明（按 CLI 当前语言选择）。</summary>
+    public static string Usage => Localizer.IsEnglish ? UsageEn : UsageZh;
+
+    private static string UsageZh { get; } = string.Join(Environment.NewLine, new[]
     {
         "WinAppGuard —— Windows 程序联网控制工具（命令行模式）",
         "",
@@ -28,6 +31,7 @@ public static class CliText
         "  WinAppGuard.exe --migrate                   把 1.x 的规则迁到 2.0（启动时也会自动做）",
         "  WinAppGuard.exe --recover                   清掉本程序留下的一切（出问题时的救命命令）",
         "  WinAppGuard.exe --help                       显示这段帮助",
+        "  WinAppGuard.exe --lang zh|en|auto            本次 CLI 语言（不写则跟随 GUI）",
         "",
         "说明：",
         "  - 所有命令都需要管理员权限（包括 --help）：程序的清单要求提权，",
@@ -38,9 +42,40 @@ public static class CliText
         "",
     });
 
+    private static string UsageEn { get; } = string.Join(Environment.NewLine, new[]
+    {
+        "WinAppGuard — Windows program network control (command line)",
+        "",
+        "  WinAppGuard.exe                              start the GUI",
+        "  WinAppGuard.exe --block \"C:\\Tools\\a.exe\"     block a program (idempotent)",
+        "  WinAppGuard.exe --list-blocked               list all block rules",
+        "  WinAppGuard.exe --unblock-all [--yes]        delete all rules created by this tool",
+        "  WinAppGuard.exe --migrate                   migrate 1.x rules (also runs at startup)",
+        "  WinAppGuard.exe --recover                   remove everything this tool left behind",
+        "  WinAppGuard.exe --help                       show this help",
+        "  WinAppGuard.exe --lang zh|en|auto            CLI language for this invocation (default: GUI)",
+        "",
+        "Notes:",
+        "  - All commands require administrator rights (including --help).",
+        "  - The command line is an explicit instruction, so these commands never prompt;",
+        "    GUI actions still ask for confirmation.",
+        "  - Exit codes: 0 success / 1 bad arguments or not confirmed / 2 failed / 3 not elevated.",
+        "",
+    });
+
     /// <summary>
     /// 一行规则：<c>规则名 \t 程序路径 \t 自动解除方式</c>。
     /// </summary>
+    private static string DescribeExpiry(RuleExpiry expiry)
+        => Localizer.IsEnglish
+            ? expiry.Kind switch
+            {
+                RuleExpiryKind.Never => "Permanent",
+                RuleExpiryKind.OnNextBoot => "Until next restart",
+                _ => "Timed",
+            }
+            : expiry.Describe(DateTime.UtcNow);
+
     public static string FormatRuleLine(FirewallRuleItem rule)
         => $"{rule.Name}\t{rule.ApplicationPath}\t{rule.ExpiryText}";
 
@@ -67,12 +102,16 @@ public static class CliText
     {
         var builder = new StringBuilder();
 
-        builder.AppendLine($"# WinAppGuard {version} —— 已阻止的程序：{blockedRules.Count} 条");
-        builder.AppendLine("# 规则名\t程序路径\t自动解除");
+        builder.AppendLine(Localizer.IsEnglish
+            ? $"# WinAppGuard {version} — blocked programs: {blockedRules.Count}"
+            : $"# WinAppGuard {version} —— 已阻止的程序：{blockedRules.Count} 条");
+        builder.AppendLine(Localizer.IsEnglish
+            ? "# rule name\tprogram path\texpiry"
+            : "# 规则名\t程序路径\t自动解除");
 
         if (blockedRules.Count == 0)
         {
-            builder.AppendLine("# （没有阻止规则）");
+            builder.AppendLine(Localizer.IsEnglish ? "# (no block rules)" : "# （没有阻止规则）");
         }
         else
         {
@@ -84,9 +123,10 @@ public static class CliText
 
         if (allowRuleCount > 0)
         {
-            builder.AppendLine(
-                $"# 另有 {allowRuleCount} 条「允许」规则（白名单），本命令不列出；" +
-                "要管理它们在图形界面的「规则」页里看。");
+            builder.AppendLine(Localizer.IsEnglish
+                ? $"# There are also {allowRuleCount} allow (whitelist) rules; this command does not list them. Manage them on the Rules page."
+                : $"# 另有 {allowRuleCount} 条「允许」规则（白名单），本命令不列出；" +
+                  "要管理它们在图形界面的「规则」页里看。");
         }
 
         return builder.ToString();
@@ -98,12 +138,16 @@ public static class CliText
     {
         var builder = new StringBuilder();
 
-        builder.AppendLine($"# WinAppGuard {version} —— 已阻止的程序：{blockedRules.Count} 条");
-        builder.AppendLine("# 规则名\t程序路径\t自动解除");
+        builder.AppendLine(Localizer.IsEnglish
+            ? $"# WinAppGuard {version} — blocked programs: {blockedRules.Count}"
+            : $"# WinAppGuard {version} —— 已阻止的程序：{blockedRules.Count} 条");
+        builder.AppendLine(Localizer.IsEnglish
+            ? "# rule name\tprogram path\texpiry"
+            : "# 规则名\t程序路径\t自动解除");
 
         if (blockedRules.Count == 0)
         {
-            builder.AppendLine("# （没有阻止规则）");
+            builder.AppendLine(Localizer.IsEnglish ? "# (no block rules)" : "# （没有阻止规则）");
         }
         else
         {
@@ -115,9 +159,10 @@ public static class CliText
 
         if (allowRuleCount > 0)
         {
-            builder.AppendLine(
-                $"# 另有 {allowRuleCount} 条「允许」规则（白名单），本命令不列出；"
-                + "要管理它们在图形界面的「规则」页里看。");
+            builder.AppendLine(Localizer.IsEnglish
+                ? $"# There are also {allowRuleCount} allow (whitelist) rules; this command does not list them. Manage them on the Rules page."
+                : $"# 另有 {allowRuleCount} 条「允许」规则（白名单），本命令不列出；"
+                  + "要管理它们在图形界面的「规则」页里看。");
         }
 
         return builder.ToString();
@@ -128,7 +173,9 @@ public static class CliText
     {
         var builder = new StringBuilder();
 
-        builder.AppendLine($"# 将要删除这 {rules.Count} 条 AppGuard 规则：");
+        builder.AppendLine(Localizer.IsEnglish
+            ? $"# This will delete {rules.Count} AppGuard rules:"
+            : $"# 将要删除这 {rules.Count} 条 AppGuard 规则：");
         foreach (var rule in rules)
         {
             builder.AppendLine(FormatRuleLine(rule));
@@ -142,7 +189,9 @@ public static class CliText
     {
         var builder = new StringBuilder();
 
-        builder.AppendLine($"# 将要删除这 {rules.Count} 条 AppGuard 规则：");
+        builder.AppendLine(Localizer.IsEnglish
+            ? $"# This will delete {rules.Count} AppGuard rules:"
+            : $"# 将要删除这 {rules.Count} 条 AppGuard 规则：");
         foreach (var rule in rules)
         {
             builder.AppendLine(FormatRuleLine(rule));

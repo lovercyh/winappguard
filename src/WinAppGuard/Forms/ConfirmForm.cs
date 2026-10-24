@@ -283,7 +283,7 @@ public sealed class ConfirmForm : Form
         CancelButton = cancelButton;
         ActiveControl = _confirmButton;
 
-        Localizer.Apply(this);
+        ControlLocalizer.Apply(this);
     }
 
     /// <summary>

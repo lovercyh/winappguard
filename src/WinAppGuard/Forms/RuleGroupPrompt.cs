@@ -93,7 +93,7 @@ internal sealed class RuleGroupPrompt : Form
         AcceptButton = okButton;
         CancelButton = cancelButton;
 
-        Localizer.Apply(this);
+        ControlLocalizer.Apply(this);
     }
 
     /// <summary>

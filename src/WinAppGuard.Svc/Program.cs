@@ -1,5 +1,6 @@
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Localization;
 
 namespace WinAppGuard.Service;
 
@@ -22,10 +23,45 @@ internal static class Program
         // 用法：WinAppGuardSvc.exe --cli <原命令行参数…>
         if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase)))
         {
-            var cliArgs = args
-                .Where(a => !a.Equals("--cli", StringComparison.OrdinalIgnoreCase))
-                .ToArray();
+            var cliArgs = new List<string>();
+            string? requestedLanguage = null;
 
+            for (var i = 0; i < args.Length; i++)
+            {
+                if (args[i].Equals("--cli", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (args[i].Equals("--lang", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        requestedLanguage = "invalid";
+                        break;
+                    }
+
+                    requestedLanguage = args[++i];
+                    continue;
+                }
+
+                cliArgs.Add(args[i]);
+            }
+
+            // 优先级：--lang > GUI 已生效语言 > 系统。
+            var language = requestedLanguage
+                           ?? UiLanguageStore.ReadAppliedLanguage()
+                           ?? "auto";
+
+            if (language is not ("auto" or "zh" or "en"))
+            {
+                Console.Error.WriteLine(
+                    "参数错误：--lang 只能是 zh / en / auto。\n" +
+                    "Bad argument: --lang must be zh, en or auto.");
+                return 1;
+            }
+
+            Localizer.Initialize(language);
             return CliRunner.Run(CommandLine.Parse(cliArgs));
         }
 

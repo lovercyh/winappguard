@@ -39,6 +39,12 @@ internal sealed class UiState
     /// </summary>
     public string Language { get; set; } = "auto";
 
+    /// <summary>
+    /// 当前 GUI 真正生效的语言。CLI 默认读这个值，避免"用户切了但还没重启"时
+    /// GUI 和 CLI 语言不一致。
+    /// </summary>
+    public string AppliedLanguage { get; set; } = "auto";
+
     /// <summary>列宽：键是「表格名.列名」，值是像素宽。</summary>
     public Dictionary<string, int> ColumnWidths { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
@@ -68,6 +74,12 @@ internal sealed class UiState
             if (state.Language is not ("auto" or "zh" or "en"))
             {
                 state.Language = "auto";
+            }
+
+            if (state.AppliedLanguage is not ("auto" or "zh" or "en"))
+            {
+                // 3.2 的旧文件没有 AppliedLanguage：先按用户选择回退。
+                state.AppliedLanguage = state.Language;
             }
 
             return state;

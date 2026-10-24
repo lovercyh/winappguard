@@ -6,10 +6,10 @@ using System.Text.RegularExpressions;
 namespace WinAppGuard.Localization;
 
 /// <summary>
-/// 界面语言切换（3.2）。
+/// 共享的界面/CLI 文案翻译（3.2 起 GUI，3.3 起 CLI）。
 ///
-/// 只影响 GUI：服务、CLI、日志、协议都不变。
-/// 语言在启动时确定；切换后保存设置并提示重启，避免运行中重排整个窗体。
+/// 这里刻意**不引用 WinForms**：服务、CLI、安装器都可以用；
+/// 控件树的应用逻辑在 UI 程序集的 ControlLocalizer 里。
 /// </summary>
 public static class Localizer
 {
@@ -71,6 +71,23 @@ public static class Localizer
     public static string F(string format, params object?[] args)
         => string.Format(CultureInfo.CurrentCulture, T(format), args);
 
+    /// <summary>控件名优先，其次按当前中文文案；都没有返回 fallback。</summary>
+    public static string TranslateControl(string? name, string fallback)
+    {
+        if (!IsEnglish)
+        {
+            return fallback;
+        }
+
+        if (!string.IsNullOrEmpty(name)
+            && English.Controls.TryGetValue(name, out var byName))
+        {
+            return byName;
+        }
+
+        return string.IsNullOrEmpty(fallback) ? fallback : T(fallback);
+    }
+
     private static readonly (Regex Pattern, string Replacement)[] DynamicPatterns =
     {
         (new Regex(@"^确定要把「(.+)」加入白名单吗？$"), "Add “$1” to the whitelist?"),
@@ -102,76 +119,6 @@ public static class Localizer
         return null;
     }
 
-    /// <summary>
-    /// 把英文应用到整棵控件树。只在窗体初始化后调用一次；
-    /// 动态状态由对应的刷新方法重新设置，避免把动态值改成静态英文。
-    /// </summary>
-    public static void Apply(Control root)
-    {
-        if (!IsEnglish)
-        {
-            return;
-        }
-
-        ApplyControl(root);
-
-        if (root is ToolStrip strip)
-        {
-            ApplyToolStripItems(strip.Items);
-        }
-    }
-
-    private static void ApplyControl(Control control)
-    {
-        if (!string.IsNullOrEmpty(control.Name)
-            && English.Controls.TryGetValue(control.Name, out var byName))
-        {
-            control.Text = byName;
-        }
-        else if (!string.IsNullOrEmpty(control.Text)
-                 && English.Texts.TryGetValue(control.Text, out var byText))
-        {
-            control.Text = byText;
-        }
-
-        if (control is DataGridView grid)
-        {
-            foreach (DataGridViewColumn column in grid.Columns)
-            {
-                if (English.Texts.TryGetValue(column.HeaderText, out var header))
-                {
-                    column.HeaderText = header;
-                }
-            }
-        }
-
-        foreach (Control child in control.Controls)
-        {
-            ApplyControl(child);
-        }
-
-        if (control is ToolStrip childStrip)
-        {
-            ApplyToolStripItems(childStrip.Items);
-        }
-    }
-
-    private static void ApplyToolStripItems(ToolStripItemCollection items)
-    {
-        foreach (ToolStripItem item in items)
-        {
-            if (English.Texts.TryGetValue(item.Text ?? string.Empty, out var text))
-            {
-                item.Text = text;
-            }
-
-            if (item is ToolStripDropDownItem dropDown)
-            {
-                ApplyToolStripItems(dropDown.DropDownItems);
-            }
-        }
-    }
-
     private static Resource LoadEnglish()
     {
         try
@@ -191,7 +138,7 @@ public static class Localizer
         }
         catch (Exception)
         {
-            // 语言包坏了就回退中文；绝不让界面起不来。
+            // 语言包坏了就回退中文；绝不让界面/CLI 起不来。
             return new Resource();
         }
     }

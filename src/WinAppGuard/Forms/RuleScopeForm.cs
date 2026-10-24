@@ -141,7 +141,7 @@ internal sealed class RuleScopeForm : Form
         CancelButton = cancelButton;
         Result = null;
 
-        Localizer.Apply(this);
+        ControlLocalizer.Apply(this);
     }
 
     /// <summary>确定时返回用户选的范围；取消返回 null。</summary>

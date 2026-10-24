@@ -323,7 +323,7 @@ public partial class MainForm : Form
         InitializeAuditPage();
 
         // 3.2：把 Designer 里的中文静态文案换成英文（如果当前语言是英文）。
-        Localizer.Apply(this);
+        ControlLocalizer.Apply(this);
 
         // 列宽用「预览线」拖动（自带的实时拖动在慢机器上会卡，见 GridColumnResizer）。
         _columnResizer = new GridColumnResizer(_connectionGrid);
@@ -373,8 +373,18 @@ public partial class MainForm : Form
 
         // 先恢复上次的窗口大小/列宽，再初始化运行期（首屏就是用户熟悉的样子）。
         RestoreUiState();
+
+        // 3.3：记录“现在真正生效”的语言，CLI 会读这个值。
+        if (!string.Equals(
+                _uiState.AppliedLanguage, _uiState.Language,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _uiState.AppliedLanguage = _uiState.Language;
+            _uiState.Save();
+        }
+
         Localizer.Initialize(_uiState.Language);
-        Localizer.Apply(this);
+        ControlLocalizer.Apply(this);
         SetupLanguageSwitch();
 
         InitializeRuntime();

@@ -1,5 +1,6 @@
 using WinAppGuard.Contracts;
 using WinAppGuard.Core.ProtectedMode;
+using WinAppGuard.Localization;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
@@ -51,7 +52,9 @@ internal static class CliRunner
                 // 读/改防火墙都要管理员权限。
                 if (!AdminHelper.IsRunningAsAdmin())
                 {
-                    Console.Error.WriteLine("需要管理员权限：请从「以管理员身份运行」的终端里执行本命令。");
+                    Console.Error.WriteLine(Localizer.IsEnglish
+                ? "Administrator rights required: run this from an elevated terminal."
+                : "需要管理员权限：请从「以管理员身份运行」的终端里执行本命令。");
                     return ExitNotAdmin;
                 }
 
@@ -86,7 +89,9 @@ internal static class CliRunner
                 catch (Exception ex)
                 {
                     // 命令行模式绝不能把异常抛给 Windows 的崩溃框 —— 无人值守时会卡住。
-                    Console.Error.WriteLine($"执行失败：{ex.Message}");
+                    Console.Error.WriteLine(Localizer.IsEnglish
+                ? $"Execution failed: {ex.Message}"
+                : $"执行失败：{ex.Message}");
                     LocalLog.Error($"命令行模式执行失败（{options.Kind}）", ex);
                     return ExitFailed;
                 }
@@ -105,7 +110,9 @@ internal static class CliRunner
 
         if (before is null)
         {
-            Console.Error.WriteLine($"读取规则失败：{queryError}");
+            Console.Error.WriteLine(Localizer.IsEnglish
+            ? $"Failed to read rules: {queryError}"
+            : $"读取规则失败：{queryError}");
             return ExitFailed;
         }
 
@@ -125,7 +132,9 @@ internal static class CliRunner
 
         if (response is not { Ok: true })
         {
-            Console.Error.WriteLine($"阻止失败：{response?.Error ?? error}");
+            Console.Error.WriteLine(Localizer.IsEnglish
+            ? $"Block failed: {response?.Error ?? error}"
+            : $"阻止失败：{response?.Error ?? error}");
             return ExitFailed;
         }
 
@@ -141,7 +150,9 @@ internal static class CliRunner
             ? $"该程序已经在阻止列表中：{fullPath}"
             : $"已阻止：{fullPath}");
 
-        Console.WriteLine($"  规则名：{ruleName}");
+        Console.WriteLine(Localizer.IsEnglish
+            ? $"  Rule name: {ruleName}"
+            : $"  规则名：{ruleName}");
 
         LocalLog.Operation($"命令行：阻止联网 {fullPath}（规则 {ruleName}）");
         return ExitOk;
@@ -153,7 +164,9 @@ internal static class CliRunner
 
         if (all is null)
         {
-            Console.Error.WriteLine($"读取规则失败：{error}");
+            Console.Error.WriteLine(Localizer.IsEnglish
+            ? $"Failed to read rules: {error}"
+            : $"读取规则失败：{error}");
             return ExitFailed;
         }
 
@@ -178,13 +191,17 @@ internal static class CliRunner
 
         if (rules is null)
         {
-            Console.Error.WriteLine($"读取规则失败：{error}");
+            Console.Error.WriteLine(Localizer.IsEnglish
+            ? $"Failed to read rules: {error}"
+            : $"读取规则失败：{error}");
             return ExitFailed;
         }
 
         if (rules.Count == 0)
         {
-            Console.WriteLine("当前没有任何 AppGuard 规则，无需清理。");
+            Console.WriteLine(Localizer.IsEnglish
+            ? "There are no AppGuard rules to clean up."
+            : "当前没有任何 AppGuard 规则，无需清理。");
 
             if (recovery.WasLeftOn)
             {
@@ -199,7 +216,9 @@ internal static class CliRunner
         if (!confirmed)
         {
             Console.WriteLine();
-            Console.WriteLine("没有删除任何东西。确认要删就再加一个 --yes：");
+            Console.WriteLine(Localizer.IsEnglish
+            ? "Nothing was deleted. Add --yes to confirm:"
+            : "没有删除任何东西。确认要删就再加一个 --yes：");
             Console.WriteLine("  WinAppGuard.exe --unblock-all --yes");
             return ExitUsage;
         }
@@ -211,14 +230,18 @@ internal static class CliRunner
 
         if (response is not { Ok: true })
         {
-            Console.Error.WriteLine($"删除失败：{response?.Error ?? deleteError}");
+            Console.Error.WriteLine(Localizer.IsEnglish
+            ? $"Delete failed: {response?.Error ?? deleteError}"
+            : $"删除失败：{response?.Error ?? deleteError}");
             return ExitFailed;
         }
 
         var deleted = response.Affected;
 
         Console.WriteLine();
-        Console.WriteLine($"已删除 {deleted} 条规则。");
+        Console.WriteLine(Localizer.IsEnglish
+            ? $"Deleted {deleted} rules."
+            : $"已删除 {deleted} 条规则。");
         Console.WriteLine("# 其他软件的规则、以及本工具在 WFP 里创建的过滤器之外的东西都没有受到影响。");
 
         if (recovery.WasLeftOn)

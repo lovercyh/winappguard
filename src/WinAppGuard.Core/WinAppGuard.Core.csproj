@@ -27,6 +27,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 3.2/3.3：GUI 与 CLI 共用的英文资源。 -->
+    <EmbeddedResource Include="Localization\en.json"
+                      LogicalName="WinAppGuard.Localization.en.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       这些类型是 internal（不对外暴露）：
         - WinAppGuard（界面程序集）要用它们；

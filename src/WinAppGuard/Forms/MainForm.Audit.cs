@@ -652,16 +652,34 @@ public sealed partial class MainForm
             var withDomain = events.Count(item => !string.IsNullOrEmpty(item.Domain));
             var total = events.Count;
 
-            _auditStatusLabel.Text =
-                $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
-                $" · 保留 {_settings.AuditRetentionDays} 天 · " +
-                (!_serviceAvailable
-                    ? "服务未运行，记录已停止"
+            if (Localizer.IsEnglish)
+            {
+                var state = !_serviceAvailable
+                    ? "service is not running; recording stopped"
                     : _auditCollecting
-                        ? "记录中"
+                        ? "recording"
                         : _settings.AuditEnabled
-                            ? "记录未启动（详见日志）"
-                            : "记录未开启");
+                            ? "recording is not running (see logs)"
+                            : "recording is off";
+
+                _auditStatusLabel.Text =
+                    $"Showing {rows.Count} entries ({blocked} blocked) · " +
+                    $"{withDomain} of the latest {total} have a domain · " +
+                    $"retention {_settings.AuditRetentionDays} days · {state}";
+            }
+            else
+            {
+                _auditStatusLabel.Text =
+                    $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
+                    $" · 保留 {_settings.AuditRetentionDays} 天 · " +
+                    (!_serviceAvailable
+                        ? "服务未运行，记录已停止"
+                        : _auditCollecting
+                            ? "记录中"
+                            : _settings.AuditEnabled
+                                ? "记录未启动（详见日志）"
+                                : "记录未开启");
+            }
 
             _auditLastSignature = signature;
             UpdateAuditDetail();
@@ -702,7 +720,7 @@ public sealed partial class MainForm
 
         if (string.IsNullOrWhiteSpace(value))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 emptyMessage,
                 AppConstants.AppName,
@@ -792,7 +810,7 @@ public sealed partial class MainForm
         if (remaining > 0)
         {
             LocalLog.Warning($"记录：清空后仍有 {remaining} 个文件删不掉");
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"有 {remaining} 个记录文件删不掉（可能正被其它程序占用）。\n" +
                 $"已删除 {response.Affected} 个。\n\n" +
@@ -825,7 +843,7 @@ public sealed partial class MainForm
     {
         if (_auditGrid.SelectedRows.Count == 0 || _auditGrid.SelectedRows[0].Tag is not AuditRow row)
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "先在上面选中一行记录，再点「拦截此 IP…」。",
                 AppConstants.AppName,
@@ -836,7 +854,7 @@ public sealed partial class MainForm
 
         if (string.IsNullOrWhiteSpace(row.RemoteAddress))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "这条记录没有可用的远端 IP。",
                 AppConstants.AppName,
@@ -873,7 +891,7 @@ public sealed partial class MainForm
     {
         if (!System.Net.IPAddress.TryParse(ipText, out var address))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"不是合法的 IP 地址：{ipText}",
                 AppConstants.AppName,

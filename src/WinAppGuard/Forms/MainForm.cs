@@ -591,7 +591,7 @@ public partial class MainForm : Form
             ? "The language will take effect after WinAppGuard restarts.\n\nRestart now?"
             : "界面语言将在重启 WinAppGuard 后生效。\n\n现在重启吗？";
 
-        var result = MessageBox.Show(
+        var result = UiMessageBox.Show(
             prompt,
             AppConstants.AppName,
             MessageBoxButtons.YesNo,
@@ -609,7 +609,7 @@ public partial class MainForm : Form
 
         if (string.IsNullOrEmpty(exe))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 Localizer.IsEnglish
                     ? "Could not determine the executable path. Please restart manually."
                     : "无法确定程序路径，请手动重启。",
@@ -629,7 +629,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 (Localizer.IsEnglish
                     ? "Restart failed: "
                     : "重启失败：") + ex.Message,
@@ -1233,7 +1233,7 @@ public partial class MainForm : Form
         var reason = response?.Error ?? error ?? "防护服务没有响应。";
         LocalLog.Warning($"{actionName}失败：{reason}");
 
-        MessageBox.Show(
+        UiMessageBox.Show(
             this,
             $"{actionName}失败：\n\n{reason}\n\n" +
             (response is null
@@ -2102,7 +2102,7 @@ public partial class MainForm : Form
         if (rules.Count == 0)
         {
             AfterRulesChanged();
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "当前白名单是空的，无需清理。",
                 AppConstants.AppName,
@@ -2225,7 +2225,7 @@ public partial class MainForm : Form
 
         if (count == 0)
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"当前{pageName}没有规则可导出。",
                 AppConstants.AppName,
@@ -2255,7 +2255,7 @@ public partial class MainForm : Form
             File.WriteAllText(dialog.FileName, json, new UTF8Encoding(false));
             LocalLog.Operation($"导出{pageName}：{document.Rules.Count} 条 → {dialog.FileName}");
 
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"已导出 {document.Rules.Count} 条{pageName}规则（含分组）。\n\n{dialog.FileName}\n\n" +
                 "注意：文件里包含程序完整路径，发给别人等于公开你在用哪些软件。",
@@ -2307,7 +2307,7 @@ public partial class MainForm : Form
 
         if (!RuleExport.TryParse(json, out var document, out var error) || document is null)
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"不能导入这个文件：\n\n{error}",
                 AppConstants.AppName,
@@ -2319,7 +2319,7 @@ public partial class MainForm : Form
         // 不能把黑名单文件导进白名单页（反之亦然）—— 否则会悄悄创建另一类规则。
         if (!RuleExport.TryMatchScope(document, scope, out var scopeError))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"不能在这个页面导入：\n\n{scopeError}",
                 AppConstants.AppName,
@@ -2330,7 +2330,7 @@ public partial class MainForm : Form
 
         if (document.Rules.Count == 0)
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "文件里没有任何规则。",
                 AppConstants.AppName,
@@ -2417,7 +2417,7 @@ public partial class MainForm : Form
 
         LocalLog.Operation($"导入规则：{string.Join("，", lines)}");
 
-        MessageBox.Show(
+        UiMessageBox.Show(
             this,
             "导入完成：\n\n" + string.Join(Environment.NewLine, lines.Select(line => "· " + line)) +
             "\n\n已存在的同名规则会自动跳过；受保护程序也会跳过。",
@@ -2972,7 +2972,7 @@ public partial class MainForm : Form
         _settings.IpOwnershipNoticeShown = true;
         _settings.Save();
 
-        MessageBox.Show(
+        UiMessageBox.Show(
             DialogOwner,
             BuildIpOwnershipNoticeText(),
             AppConstants.AppName,
@@ -3011,7 +3011,7 @@ public partial class MainForm : Form
         // 真正的安全边界在 FirewallManager.ValidateProgramPath 里，不在这里。
         if (ProtectedProcesses.IsProtected(item.ProcessPath, out var reason))
         {
-            MessageBox.Show(this, reason, AppConstants.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            UiMessageBox.Show(this, reason, AppConstants.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -3114,7 +3114,7 @@ public partial class MainForm : Form
 
         if (ProtectedProcesses.IsProtected(path, out var reason))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"不能阻止「{name}」：{reason}。",
                 AppConstants.AppName,
@@ -3203,7 +3203,7 @@ public partial class MainForm : Form
             // 可能是规则被人在 wf.msc 里删掉了，缓存过期。同步一次再说。
             AfterRulesChanged();
 
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"「{programName}」当前没有被 WinAppGuard 阻止，不需要允许。\n\n" +
                 "已重新同步防火墙规则状态。",
@@ -3522,7 +3522,7 @@ public partial class MainForm : Form
         if (rules.Count == 0)
         {
             AfterRulesChanged();
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "黑名单是空的，无需清理。",
                 AppConstants.AppName,
@@ -3599,7 +3599,7 @@ public partial class MainForm : Form
             LocalLog.Operation($"清空黑名单：实际删除 {response.Affected} 条阻止规则");
             AfterRulesChanged();
 
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"已清空黑名单，删除 {response.Affected} 条阻止规则。\n\n" +
                 "这些程序现在可以重新联网；白名单和其它软件的规则没有受到影响。",
@@ -4066,7 +4066,7 @@ public partial class MainForm : Form
         var exePath = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exePath))
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "拿不到当前程序的完整路径，无法设置开机自启。",
                 AppConstants.AppName,
@@ -4117,7 +4117,7 @@ public partial class MainForm : Form
             LocalLog.Operation($"开启开机自启：任务名 {AppConstants.ScheduledTaskName}，执行的程序 {exePath}");
             RefreshAutoStartStatus();
 
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "开机自启已开启。\n\n" +
                 $"任务名：{AppConstants.ScheduledTaskName}\n" +
@@ -4182,7 +4182,7 @@ public partial class MainForm : Form
             LocalLog.Operation($"关闭开机自启：删除任务 {AppConstants.ScheduledTaskName}，实际删除={(deleted ? "是" : "任务本来就不存在")}");
             RefreshAutoStartStatus();
 
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 deleted ? "开机自启已关闭，任务已从任务计划程序里删除。" : "系统里本来就没有这个任务，无需删除。",
                 AppConstants.AppName,
@@ -4270,7 +4270,8 @@ public partial class MainForm : Form
 
     private void ShowTrayBalloon(string title, string text, ToolTipIcon icon)
     {
-        _trayIcon.ShowBalloonTip(5000, title, text, icon);
+        _trayIcon.ShowBalloonTip(
+            5000, Localizer.T(title), Localizer.T(text), icon);
     }
 
     private void OnTrayShowClick(object? sender, EventArgs e)
@@ -4332,7 +4333,7 @@ public partial class MainForm : Form
     {
         LocalLog.Error(what, ex);
 
-        MessageBox.Show(
+        UiMessageBox.Show(
             this,
             $"{what}：\n\n{ex.Message}",
             AppConstants.AppName,
@@ -4391,7 +4392,7 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             // 打不开浏览器不是致命问题，但要让用户知道可以自己复制地址。
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"打不开浏览器。可以手动访问：\n{ProjectUrl}\n\n（{ex.Message}）",
                 AppConstants.AppName,
@@ -4410,7 +4411,7 @@ public partial class MainForm : Form
 
         if (!ServiceIsInstalled())
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "防护服务还没有安装。\n\n请运行安装目录里的 WinAppGuardSetup.exe --install。",
                 AppConstants.AppName,
@@ -4421,7 +4422,7 @@ public partial class MainForm : Form
 
         if (FindSetupPath() is null)
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 "找不到 WinAppGuardSetup.exe，无法启动服务。\n\n" +
                 "请重新运行安装器（--repair）。",
@@ -5141,7 +5142,7 @@ public partial class MainForm : Form
     {
         if (!LocalLog.OpenLogDirectory())
         {
-            MessageBox.Show(
+            UiMessageBox.Show(
                 this,
                 $"打不开日志目录，你可以手动复制下面这个路径：\n\n{LocalLog.LogDirectory}",
                 AppConstants.AppName,

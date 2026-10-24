@@ -335,7 +335,9 @@ public sealed class ConfirmForm : Form
 
         if (expiry.IsPermanent)
         {
-            _durationHint.Text = "永久：这条规则一直生效，直到你自己在「规则」页解除。";
+            _durationHint.Text = Localizer.IsEnglish
+                ? "Permanent: this rule stays in effect until you remove it on the Rules page."
+                : "永久：这条规则一直生效，直到你自己在「规则」页解除。";
             return;
         }
 
@@ -393,7 +395,20 @@ public sealed class ConfirmForm : Form
         bool offerDuration,
         out RuleExpiry chosenExpiry)
     {
-        using var form = new ConfirmForm(title, question, details, warnings, confirmText, offerDuration);
+        var localizedDetails = details
+            .Select(pair => new KeyValuePair<string, string>(
+                Localizer.T(pair.Key), Localizer.T(pair.Value)))
+            .ToList();
+
+        var localizedWarnings = warnings.Select(Localizer.T).ToList();
+
+        using var form = new ConfirmForm(
+            Localizer.T(title),
+            Localizer.T(question),
+            localizedDetails,
+            localizedWarnings,
+            Localizer.T(confirmText),
+            offerDuration);
 
         var confirmed = form.ShowDialog(owner) == DialogResult.OK;
         chosenExpiry = confirmed ? form.ChosenExpiry : RuleExpiry.Never;

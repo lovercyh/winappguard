@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace WinAppGuard.Localization;
 
@@ -58,14 +59,48 @@ public static class Localizer
             return text;
         }
 
-        return English.Texts.TryGetValue(text, out var translated)
-            ? translated
-            : text;
+        if (English.Texts.TryGetValue(text, out var translated))
+        {
+            return translated;
+        }
+
+        return TranslatePattern(text) ?? text;
     }
 
     /// <summary>翻译带占位符的格式串，再格式化。</summary>
     public static string F(string format, params object?[] args)
         => string.Format(CultureInfo.CurrentCulture, T(format), args);
+
+    private static readonly (Regex Pattern, string Replacement)[] DynamicPatterns =
+    {
+        (new Regex(@"^确定要把「(.+)」加入白名单吗？$"), "Add “$1” to the whitelist?"),
+        (new Regex(@"^确定要把「(.+)」移出白名单吗？$"), "Remove “$1” from the whitelist?"),
+        (new Regex(@"^确定要移除全部 (\d+) 个白名单程序吗？$"), "Remove all $1 whitelist programs?"),
+        (new Regex(@"^确定要阻止「(.+)」联网吗？$"), "Block network access for “$1”?"),
+        (new Regex(@"^确定要解除对「(.+)」的阻止吗？$"), "Unblock “$1”?"),
+        (new Regex(@"^确定要清空黑名单吗？（共 (\d+) 条阻止规则）$"), "Clear the blocklist? ($1 block rules)"),
+        (new Regex(@"^确定要把这 (\d+) 条规则导入(.+)吗？$"), "Import $1 rules into $2?"),
+        (new Regex(@"^确定要删除全部记录吗？$"), "Delete all records?"),
+        (new Regex(@"^确定要封禁 IP「(.+)」吗？$"), "Block IP “$1”?"),
+        (new Regex(@"^确定要让 WinAppGuard 随 Windows 开机自动启动吗？$"), "Start WinAppGuard automatically at Windows logon?"),
+        (new Regex(@"^确定要删除开机自启任务吗？$"), "Delete the auto-start task?"),
+        (new Regex(@"^确定要退出 WinAppGuard 吗？$"), "Exit WinAppGuard?"),
+        (new Regex(@"^确定要关闭严格模式吗？$"), "Disable strict mode?"),
+        (new Regex(@"^确定要继续吗？$"), "Continue?"),
+    };
+
+    private static string? TranslatePattern(string text)
+    {
+        foreach (var (pattern, replacement) in DynamicPatterns)
+        {
+            if (pattern.IsMatch(text))
+            {
+                return pattern.Replace(text, replacement);
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// 把英文应用到整棵控件树。只在窗体初始化后调用一次；

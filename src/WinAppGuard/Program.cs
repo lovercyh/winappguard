@@ -152,7 +152,7 @@ internal static class Program
     {
         LocalLog.Error("界面线程发生未处理的异常", e.Exception);
 
-        MessageBox.Show(
+        UiMessageBox.Show(
             $"WinAppGuard 遇到了一个未预期的问题，程序会继续运行。\n\n" +
             $"出错信息：{e.Exception?.Message}\n\n" +
             $"详细信息已记录在本机日志里：\n{LocalLog.LogDirectory}",

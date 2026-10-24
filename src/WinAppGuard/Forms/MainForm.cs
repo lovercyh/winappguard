@@ -324,6 +324,7 @@ public partial class MainForm : Form
 
         // 3.2：把 Designer 里的中文静态文案换成英文（如果当前语言是英文）。
         ControlLocalizer.Apply(this);
+        ControlLocalizer.ApplyTray(_trayMenu, _trayIcon);
 
         // 列宽用「预览线」拖动（自带的实时拖动在慢机器上会卡，见 GridColumnResizer）。
         _columnResizer = new GridColumnResizer(_connectionGrid);
@@ -385,6 +386,7 @@ public partial class MainForm : Form
         Localizer.Initialize(_uiState.Language);
         LocalLog.English = Localizer.IsEnglish;
         ControlLocalizer.Apply(this);
+        ControlLocalizer.ApplyTray(_trayMenu, _trayIcon);
         SetupLanguageSwitch();
 
         InitializeRuntime();

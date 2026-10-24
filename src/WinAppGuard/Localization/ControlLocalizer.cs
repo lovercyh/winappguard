@@ -22,6 +22,27 @@ internal static class ControlLocalizer
         }
     }
 
+    /// <summary>
+    /// 托盘菜单与托盘图标不在窗体的控件树里，必须单独应用一次。
+    /// </summary>
+    internal static void ApplyTray(ContextMenuStrip? menu, NotifyIcon? icon)
+    {
+        if (!Localizer.IsEnglish)
+        {
+            return;
+        }
+
+        if (menu is not null)
+        {
+            ApplyToolStripItems(menu.Items);
+        }
+
+        if (icon is not null)
+        {
+            icon.Text = Localizer.TranslateControl("_trayIcon", icon.Text);
+        }
+    }
+
     private static void ApplyControl(Control control)
     {
         control.Text = Localizer.TranslateControl(control.Name, control.Text);

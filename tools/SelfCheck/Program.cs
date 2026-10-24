@@ -3913,6 +3913,26 @@ internal static class Program
                             && comboItems.All(item => !HasCjk(item)));
                     }
 
+                    if (TryGetField<ContextMenuStrip>(form, "_trayMenu", out var trayMenu))
+                    {
+                        var trayItems = trayMenu.Items
+                            .OfType<ToolStripMenuItem>()
+                            .Select(item => item.Text)
+                            .ToList();
+
+                        W("    托盘菜单 = " + string.Join(" | ", trayItems));
+                        CheckAssertion(results, "英文：托盘菜单无中文",
+                            trayItems.Count > 0
+                            && trayItems.All(text => !HasCjk(text)));
+                    }
+
+                    if (TryGetField<NotifyIcon>(form, "_trayIcon", out var trayIcon))
+                    {
+                        W($"    托盘提示 = {trayIcon.Text}");
+                        CheckAssertion(results, "英文：托盘提示无中文",
+                            !HasCjk(trayIcon.Text));
+                    }
+
                     CheckAssertion(results, "英文：确认框标题与标签",
                         Localizer.T("加入黑名单") == "Add to blocklist"
                         && Localizer.T("生效范围") == "Scope"

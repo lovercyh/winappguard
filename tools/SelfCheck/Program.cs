@@ -3891,6 +3891,28 @@ internal static class Program
                             !HasCjk(rulesSearch.PlaceholderText));
                     }
 
+                    // 分组下拉是运行时重建的：直接调用一次，防止「全部分组」漏翻。
+                    var rebuildCombo = typeof(MainForm).GetMethod(
+                        "RebuildGroupCombo",
+                        System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Instance);
+
+                    if (rebuildCombo is not null)
+                    {
+                        var combo = new ComboBox();
+                        rebuildCombo.Invoke(
+                            form, new object?[] { combo, null, Array.Empty<string>() });
+
+                        var comboItems = combo.Items.Cast<object>()
+                            .Select(item => item.ToString())
+                            .ToList();
+
+                        W("    分组下拉 = " + string.Join(" | ", comboItems));
+                        CheckAssertion(results, "英文：分组下拉无中文",
+                            comboItems.Count >= 2
+                            && comboItems.All(item => !HasCjk(item)));
+                    }
+
                     CheckAssertion(results, "英文：确认框标题与标签",
                         Localizer.T("加入黑名单") == "Add to blocklist"
                         && Localizer.T("生效范围") == "Scope"

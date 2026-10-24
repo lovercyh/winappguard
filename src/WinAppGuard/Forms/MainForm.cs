@@ -1693,8 +1693,8 @@ public partial class MainForm : Form
         try
         {
             combo.Items.Clear();
-            combo.Items.Add("全部分组");
-            combo.Items.Add("未分组");
+            combo.Items.Add(Localizer.T("全部分组"));
+            combo.Items.Add(Localizer.T("未分组"));
 
             foreach (var group in groups)
             {

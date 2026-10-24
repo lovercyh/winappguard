@@ -23,34 +23,15 @@ internal static class Program
         // 用法：WinAppGuardSvc.exe --cli <原命令行参数…>
         if (args.Any(a => a.Equals("--cli", StringComparison.OrdinalIgnoreCase)))
         {
-            var cliArgs = new List<string>();
-            string? requestedLanguage = null;
+            var cliArgs = args
+                .Where(a => !a.Equals("--cli", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
 
-            for (var i = 0; i < args.Length; i++)
-            {
-                if (args[i].Equals("--cli", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (args[i].Equals("--lang", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (i + 1 >= args.Length)
-                    {
-                        requestedLanguage = "invalid";
-                        break;
-                    }
-
-                    requestedLanguage = args[++i];
-                    continue;
-                }
-
-                cliArgs.Add(args[i]);
-            }
+            var options = CommandLine.Parse(cliArgs);
 
             // 优先级：--lang > GUI 已生效语言 > 系统。
             if (!CliLanguage.TryResolve(
-                    requestedLanguage,
+                    options.Language,
                     UiLanguageStore.ReadAppliedLanguage(),
                     out var language))
             {
@@ -61,7 +42,7 @@ internal static class Program
             }
 
             Localizer.Initialize(language);
-            return CliRunner.Run(CommandLine.Parse(cliArgs));
+            return CliRunner.Run(options);
         }
 
         ServiceLog.Initialize();

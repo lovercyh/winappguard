@@ -39,7 +39,9 @@ internal static class CliRunner
                 return ExitOk;
 
             case CommandKind.Invalid:
-                Console.Error.WriteLine($"参数错误：{options.Error}");
+                Console.Error.WriteLine(Localizer.IsEnglish
+                    ? $"Bad argument: {options.Error}"
+                    : $"参数错误：{options.Error}");
                 Console.Error.WriteLine();
                 Console.Error.Write(CliText.Usage);
                 return ExitUsage;
@@ -53,8 +55,8 @@ internal static class CliRunner
                 if (!AdminHelper.IsRunningAsAdmin())
                 {
                     Console.Error.WriteLine(Localizer.IsEnglish
-                ? "Administrator rights required: run this from an elevated terminal."
-                : "需要管理员权限：请从「以管理员身份运行」的终端里执行本命令。");
+                        ? "Administrator rights required: run this from an elevated terminal."
+                        : "需要管理员权限：请从「以管理员身份运行」的终端里执行本命令。");
                     return ExitNotAdmin;
                 }
 

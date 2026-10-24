@@ -34,12 +34,14 @@ public enum CommandKind
 /// <param name="Confirmed">是否带了 <c>--yes</c>（只有 <c>--unblock-all</c> 用）。</param>
 /// <param name="IsAutostart">是否由「开机自启」计划任务拉起（命令行含 <c>--autostart</c>）。</param>
 /// <param name="Error">参数错误时的说明；没错时为 null。</param>
+/// <param name="Language"><c>--lang</c> 的值（zh / en / auto）；没传时为 null。</param>
 public sealed record CommandLineOptions(
     CommandKind Kind,
     string? ProgramPath,
     bool Confirmed,
     bool IsAutostart,
-    string? Error);
+    string? Error,
+    string? Language = null);
 
 /// <summary>
 /// 命令行参数解析。
@@ -64,6 +66,7 @@ public static class CommandLine
     public const string YesSwitch = "--yes";
     public const string HelpSwitch = "--help";
     public const string AutostartSwitch = "--autostart";
+    public const string LanguageSwitch = "--lang";
 
     /// <summary>解析命令行。</summary>
     /// <param name="args">命令行参数（不含程序名本身）。</param>
@@ -71,18 +74,70 @@ public static class CommandLine
     {
         var isAutostart = args.Any(arg => Is(arg, AutostartSwitch));
 
-        // --help 优先级最高：给了就问用法，不管后面还写了什么。
-        if (args.Any(arg => Is(arg, HelpSwitch) || Is(arg, "-h") || Is(arg, "/?")))
+        // 3.3：先摘出 --lang。它只影响本次输出语言，不参与命令判定，
+        // 所以可以出现在命令前后的任意位置（--lang en 或 --lang=en 都认）。
+        var language = (string?)null;
+        var remaining = new List<string>();
+
+        for (var i = 0; i < args.Count; i++)
         {
-            return new CommandLineOptions(CommandKind.Help, null, false, isAutostart, null);
+            var arg = args[i];
+
+            if (Is(arg, LanguageSwitch))
+            {
+                if (i + 1 >= args.Count)
+                {
+                    return Invalid(isAutostart, true,
+                        $"{LanguageSwitch} 后面要跟 zh / en / auto",
+                        $"{LanguageSwitch} must be followed by zh, en or auto");
+                }
+
+                language = args[++i];
+                continue;
+            }
+
+            if (arg.StartsWith(LanguageSwitch + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                language = arg[(LanguageSwitch.Length + 1)..];
+                continue;
+            }
+
+            remaining.Add(arg);
+        }
+
+        // 语言非法时不猜：直接报错，避免脚本以为换了语言其实没换。
+        language = language?.ToLowerInvariant();
+
+        if (language is not null && language is not ("auto" or "zh" or "en"))
+        {
+            return Invalid(isAutostart, true,
+                $"{LanguageSwitch} 只能是 zh / en / auto。",
+                $"{LanguageSwitch} must be zh, en or auto.",
+                language);
+        }
+
+        var english = language switch
+        {
+            "en" => true,
+            "zh" => false,
+            _ => !System.Globalization.CultureInfo.CurrentUICulture
+                .TwoLetterISOLanguageName.Equals("zh", StringComparison.OrdinalIgnoreCase),
+        };
+
+        // --help 优先级最高：给了就问用法，不管后面还写了什么。
+        if (remaining.Any(arg => Is(arg, HelpSwitch) || Is(arg, "-h") || Is(arg, "/?")))
+        {
+            return new CommandLineOptions(
+                CommandKind.Help, null, false, isAutostart, null, language);
         }
 
         // 除了 --autostart 之外的，才是真正的指令。
-        var tokens = args.Where(arg => !Is(arg, AutostartSwitch)).ToList();
+        var tokens = remaining.Where(arg => !Is(arg, AutostartSwitch)).ToList();
 
         if (tokens.Count == 0)
         {
-            return new CommandLineOptions(CommandKind.None, null, false, isAutostart, null);
+            return new CommandLineOptions(
+                CommandKind.None, null, false, isAutostart, null, language);
         }
 
         switch (tokens[0].ToLowerInvariant())
@@ -90,18 +145,28 @@ public static class CommandLine
             case BlockSwitch:
                 if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
                 {
-                    return Invalid(isAutostart,
-                        $"{BlockSwitch} 后面要跟程序的完整路径，例如：--block \"C:\\Tools\\a.exe\"");
+                    return Invalid(isAutostart, english,
+                        $"{BlockSwitch} 后面要跟程序的完整路径，例如：--block \"C:\\Tools\\a.exe\"",
+                        $"{BlockSwitch} must be followed by the full path, e.g. --block \"C:\\Tools\\a.exe\"",
+                        language);
                 }
 
                 return tokens.Count > 2
-                    ? Invalid(isAutostart, $"多余的参数：{tokens[2]}")
-                    : new CommandLineOptions(CommandKind.Block, tokens[1], false, isAutostart, null);
+                    ? Invalid(isAutostart, english,
+                        $"多余的参数：{tokens[2]}",
+                        $"Unexpected argument: {tokens[2]}",
+                        language)
+                    : new CommandLineOptions(
+                        CommandKind.Block, tokens[1], false, isAutostart, null, language);
 
             case ListBlockedSwitch:
                 return tokens.Count > 1
-                    ? Invalid(isAutostart, $"多余的参数：{tokens[1]}")
-                    : new CommandLineOptions(CommandKind.ListBlocked, null, false, isAutostart, null);
+                    ? Invalid(isAutostart, english,
+                        $"多余的参数：{tokens[1]}",
+                        $"Unexpected argument: {tokens[1]}",
+                        language)
+                    : new CommandLineOptions(
+                        CommandKind.ListBlocked, null, false, isAutostart, null, language);
 
             case UnblockAllSwitch:
                 // --yes 是"我确认要删"，可以放在命令后面任意位置。
@@ -109,26 +174,45 @@ public static class CommandLine
                 var extras = tokens.Skip(1).Where(arg => !Is(arg, YesSwitch)).ToList();
 
                 return extras.Count > 0
-                    ? Invalid(isAutostart, $"无法识别的参数：{extras[0]}")
-                    : new CommandLineOptions(CommandKind.UnblockAll, null, confirmed, isAutostart, null);
+                    ? Invalid(isAutostart, english,
+                        $"无法识别的参数：{extras[0]}",
+                        $"Unknown argument: {extras[0]}",
+                        language)
+                    : new CommandLineOptions(
+                        CommandKind.UnblockAll, null, confirmed, isAutostart, null, language);
 
             case MigrateSwitch:
                 return tokens.Count > 1
-                    ? Invalid(isAutostart, $"多余的参数：{tokens[1]}")
-                    : new CommandLineOptions(CommandKind.Migrate, null, false, isAutostart, null);
+                    ? Invalid(isAutostart, english,
+                        $"多余的参数：{tokens[1]}",
+                        $"Unexpected argument: {tokens[1]}",
+                        language)
+                    : new CommandLineOptions(
+                        CommandKind.Migrate, null, false, isAutostart, null, language);
 
             case RecoverSwitch:
                 return tokens.Count > 1
-                    ? Invalid(isAutostart, $"多余的参数：{tokens[1]}")
-                    : new CommandLineOptions(CommandKind.Recover, null, false, isAutostart, null);
+                    ? Invalid(isAutostart, english,
+                        $"多余的参数：{tokens[1]}",
+                        $"Unexpected argument: {tokens[1]}",
+                        language)
+                    : new CommandLineOptions(
+                        CommandKind.Recover, null, false, isAutostart, null, language);
 
             default:
-                return Invalid(isAutostart, $"无法识别的参数：{tokens[0]}");
+                return Invalid(isAutostart, english,
+                    $"无法识别的参数：{tokens[0]}",
+                    $"Unknown argument: {tokens[0]}",
+                    language);
         }
     }
 
-    private static CommandLineOptions Invalid(bool isAutostart, string error)
-        => new(CommandKind.Invalid, null, false, isAutostart, error);
+    private static CommandLineOptions Invalid(
+        bool isAutostart, bool english, string chinese, string englishText,
+        string? language = null)
+        => new(
+            CommandKind.Invalid, null, false, isAutostart,
+            english ? englishText : chinese, language);
 
     private static bool Is(string arg, string expected)
         => string.Equals(arg, expected, StringComparison.OrdinalIgnoreCase);

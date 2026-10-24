@@ -8546,6 +8546,52 @@ internal static class Program
             CheckAssertion(results, "--lang 非法值被拒绝",
                 !CliLanguage.TryResolve("fr", "en", out _));
 
+            // ---------------- 1.1 --lang 参与参数解析 ----------------
+            W();
+            W("===== 1.1 --lang 与命令解析 =====");
+
+            var listWithLang = CommandLine.Parse(
+                new[] { "--list-blocked", "--lang", "en" });
+            CheckAssertion(results, "--list-blocked --lang en 仍是有效的列表命令",
+                listWithLang.Kind == CommandKind.ListBlocked
+                && listWithLang.Language == "en");
+
+            var blockWithLang = CommandLine.Parse(
+                new[] { "--block", @"C:\Program Files\A B\c.exe", "--lang", "en" });
+            CheckAssertion(results, "--block 的路径不受 --lang 影响",
+                blockWithLang.Kind == CommandKind.Block
+                && blockWithLang.ProgramPath == @"C:\Program Files\A B\c.exe"
+                && blockWithLang.Language == "en");
+
+            var equalsLang = CommandLine.Parse(
+                new[] { "--lang=zh", "--list-blocked" });
+            CheckAssertion(results, "--lang=zh 的形式也认",
+                equalsLang.Kind == CommandKind.ListBlocked
+                && equalsLang.Language == "zh");
+
+            CheckAssertion(results, "--lang 大小写不敏感（--LANG EN）",
+                CommandLine.Parse(new[] { "--lang", "EN", "--list-blocked" }).Language == "en");
+
+            var helpWithLang = CommandLine.Parse(
+                new[] { "--help", "--lang", "en" });
+            CheckAssertion(results, "--help 也带出 --lang",
+                helpWithLang.Kind == CommandKind.Help
+                && helpWithLang.Language == "en");
+
+            CheckAssertion(results, "--lang 缺值 → 参数错误",
+                CommandLine.Parse(new[] { "--list-blocked", "--lang" }).Kind
+                    == CommandKind.Invalid);
+            CheckAssertion(results, "非法 --lang → 参数错误",
+                CommandLine.Parse(new[] { "--list-blocked", "--lang", "fr" }).Kind
+                    == CommandKind.Invalid);
+
+            var englishError = CommandLine.Parse(
+                new[] { "--list-blocked", "x", "--lang", "en" });
+            CheckAssertion(results, "英文模式的参数错误也是英文",
+                englishError.Kind == CommandKind.Invalid
+                && !System.Text.RegularExpressions.Regex.IsMatch(
+                    englishError.Error ?? string.Empty, "[\u4e00-\u9fff]"));
+
             // ---------------- 2. ui-state.json ----------------
             W();
             W("===== 2. 读取 GUI 已生效语言 =====");

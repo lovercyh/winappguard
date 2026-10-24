@@ -1106,8 +1106,8 @@ public partial class MainForm : Form
                 _serviceStatusLabel.IsLink = false;
             }
 
-            _rulesSummaryBase = $"黑名单共 {_rules.Count} 条";
-            _whitelistSummaryBase = $"白名单共 {_whitelistRules.Count} 个程序";
+            _rulesSummaryBase = Localizer.F("黑名单共 {0} 条", _rules.Count);
+            _whitelistSummaryBase = Localizer.F("白名单共 {0} 个程序", _whitelistRules.Count);
 
             UpdateRulesSummaryText();
             UpdateWhitelistSummaryText();
@@ -1131,7 +1131,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            _statusRulesLabel.Text = "读取规则失败";
+            _statusRulesLabel.Text = Localizer.T("读取规则失败");
             _rulesSummaryLabel.Text = Localizer.T("读取规则失败");
             _whitelistSummaryLabel.Text = Localizer.T("读取规则失败");
 
@@ -1383,8 +1383,8 @@ public partial class MainForm : Form
         var time = _lastScanTime == DateTime.MinValue ? "--:--:--" : _lastScanTime.ToString("HH:mm:ss");
 
         _summaryLabel.Text = shown == total
-            ? $"最后刷新：{time}    共 {total} 条"
-            : $"最后刷新：{time}    显示 {shown} / 共 {total} 条";
+            ? Localizer.F("最后刷新：{0}    共 {1} 条", time, total)
+            : Localizer.F("最后刷新：{0}    显示 {1} / 共 {2} 条", time, shown, total);
     }
 
     /// <summary>
@@ -1628,7 +1628,7 @@ public partial class MainForm : Form
     private void UpdateRulesSummaryText()
         => _rulesSummaryLabel.Text = _rulesKeyword.Trim().Length == 0
             ? _rulesSummaryBase
-            : $"{_rulesSummaryBase} ｜ 筛选出 {_rulesView.Count} 条";
+            : Localizer.F("{0} ｜ 筛选出 {1} 条", _rulesSummaryBase, _rulesView.Count);
 
     private void OnRulesSearchTextChanged(object? sender, EventArgs e)
     {
@@ -1842,7 +1842,7 @@ public partial class MainForm : Form
     private void UpdateWhitelistSummaryText()
         => _whitelistSummaryLabel.Text = _whitelistKeyword.Trim().Length == 0
             ? _whitelistSummaryBase
-            : $"{_whitelistSummaryBase} ｜ 筛选出 {_whitelistView.Count} 个";
+            : Localizer.F("{0} ｜ 筛选出 {1} 个", _whitelistSummaryBase, _whitelistView.Count);
 
     private void OnWhitelistSearchTextChanged(object? sender, EventArgs e)
     {
@@ -1910,8 +1910,8 @@ public partial class MainForm : Form
         // 空状态/长文本交给表格自己的 EmptyText 和分组列，这里只留最短的选中提示，
         // 否则在最小窗口宽度下这行会被截断。
         _whitelistHintLabel.Text = rule is null
-            ? "未选中任何程序"
-            : $"已选中 {rule.ApplicationNameText}";
+            ? Localizer.T("未选中任何程序")
+            : Localizer.F("已选中 {0}", rule.ApplicationNameText);
     }
 
     private void OnWhitelistGridCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
@@ -2565,8 +2565,8 @@ public partial class MainForm : Form
         if (rule is null)
         {
             _rulesHintLabel.Text = _rules.Count == 0
-                ? "黑名单是空的"
-                : "点击一条规则来选择要操作的程序 / IP";
+                ? Localizer.T("黑名单是空的")
+                : Localizer.T("点击一条规则来选择要操作的程序 / IP");
             return;
         }
 
@@ -2574,7 +2574,7 @@ public partial class MainForm : Form
             ? rule.ApplicationNameText
             : $"IP {rule.IpAddress}";
 
-        _rulesHintLabel.Text = $"已选中 {what}";
+        _rulesHintLabel.Text = Localizer.F("已选中 {0}", what);
     }
 
     /// <summary>构造「已选中 xxx —— ……」这行说明，让用户知道按钮为什么灰着。</summary>

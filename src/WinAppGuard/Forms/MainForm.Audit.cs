@@ -1,5 +1,6 @@
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Localization;
 using WinAppGuard.Core.Audit;
 
 namespace WinAppGuard.Forms;
@@ -122,7 +123,11 @@ public sealed partial class MainForm
             DropDownStyle = ComboBoxStyle.DropDownList,
             Name = "_auditRetentionCombo",
         };
-        _auditRetentionCombo.Items.AddRange(new object[] { "1 天", "3 天", "7 天", "30 天" });
+        _auditRetentionCombo.Items.AddRange(new object[]
+        {
+            Localizer.T("1 天"), Localizer.T("3 天"),
+            Localizer.T("7 天"), Localizer.T("30 天"),
+        });
         _auditRetentionCombo.SelectedIndex = 2;
         _auditRetentionCombo.SelectedIndexChanged += OnAuditRetentionChanged;
 
@@ -191,20 +196,20 @@ public sealed partial class MainForm
         _auditGrid.CellFormatting += OnAuditCellFormatting;
         _auditGrid.CellMouseDown += OnAuditGridCellMouseDown;
         _auditGrid.EmptyText =
-            "还没有记录。\r\n打开「记录连接」后，新的连接会出现在这里。";
+            Localizer.T("还没有记录。\r\n打开「记录连接」后，新的连接会出现在这里。");
 
         // 右键复制：记录页里最常想拿走的两个值（远端地址、程序路径），
         // 以前只能手抄 —— 尤其是 IPv6，手抄基本不现实。
         _auditMenu = new ContextMenuStrip();
-        var copyRemoteItem = new ToolStripMenuItem("复制远端地址");
+        var copyRemoteItem = new ToolStripMenuItem(Localizer.T("复制远端地址"));
         copyRemoteItem.Click += (_, _) => CopyFromSelectedAuditRow(
             row => row.Remote, "这一行没有远端地址。");
 
-        var copyPathItem = new ToolStripMenuItem("复制程序路径");
+        var copyPathItem = new ToolStripMenuItem(Localizer.T("复制程序路径"));
         copyPathItem.Click += (_, _) => CopyFromSelectedAuditRow(
             row => row.ProcessPath, "这一行没有程序路径（可能是无归属进程）。");
 
-        var copyDomainItem = new ToolStripMenuItem("复制域名");
+        var copyDomainItem = new ToolStripMenuItem(Localizer.T("复制域名"));
         copyDomainItem.Click += (_, _) => CopyFromSelectedAuditRow(
             row => row.Domain, "这一行没有推测出域名。");
 
@@ -232,7 +237,7 @@ public sealed partial class MainForm
         _auditDetailLabel = new Label
         {
             Dock = DockStyle.Fill,
-            Text = "选中一行查看完整路径与命中规则。",
+            Text = Localizer.T("选中一行查看完整路径与命中规则。"),
             ForeColor = SystemColors.GrayText,
         };
         bottom.Controls.Add(_auditDetailLabel);
@@ -664,7 +669,7 @@ public sealed partial class MainForm
         catch (Exception ex)
         {
             LocalLog.Error("刷新审计列表失败", ex);
-            _auditStatusLabel.Text = "读取审计记录失败（详见日志）";
+            _auditStatusLabel.Text = Localizer.T("读取审计记录失败（详见日志）");
         }
     }
 
@@ -722,7 +727,7 @@ public sealed partial class MainForm
         if (_auditGrid.SelectedRows.Count == 0
             || _auditGrid.SelectedRows[0].Tag is not AuditRow row)
         {
-            _auditDetailLabel.Text = "选中一行查看完整路径与命中规则。";
+            _auditDetailLabel.Text = Localizer.T("选中一行查看完整路径与命中规则。");
             return;
         }
 

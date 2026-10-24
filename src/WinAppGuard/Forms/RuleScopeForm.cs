@@ -48,7 +48,7 @@ internal sealed class RuleScopeForm : Form
             DropDownStyle = ComboBoxStyle.DropDownList,
             Dock = DockStyle.Top,
         };
-        _protocol.Items.AddRange(new object[] { "任意协议", "TCP", "UDP" });
+        _protocol.Items.AddRange(new object[] { Localizer.T("任意协议"), "TCP", "UDP" });
         _protocol.SelectedIndex = current.Protocol switch
         {
             RuleProtocol.Tcp => 1,
@@ -60,7 +60,7 @@ internal sealed class RuleScopeForm : Form
         _ports = new TextBox
         {
             Dock = DockStyle.Top,
-            PlaceholderText = "留空 = 不限；单个 443，或范围 8000-8100",
+            PlaceholderText = Localizer.T("留空 = 不限；单个 443，或范围 8000-8100"),
         };
         _ports.Text = !current.HasPort
             ? string.Empty

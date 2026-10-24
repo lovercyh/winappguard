@@ -42,8 +42,11 @@ internal sealed class UiState
     /// <summary>
     /// 当前 GUI 真正生效的语言。CLI 默认读这个值，避免"用户切了但还没重启"时
     /// GUI 和 CLI 语言不一致。
+    ///
+    /// 默认是 null（而不是 "auto"）：null 表示"3.2 的旧文件没有这个字段"，
+    /// 读取时回填 <see cref="Language"/>；否则缺字段会被误当成"跟随系统"。
     /// </summary>
-    public string AppliedLanguage { get; set; } = "auto";
+    public string? AppliedLanguage { get; set; }
 
     /// <summary>列宽：键是「表格名.列名」，值是像素宽。</summary>
     public Dictionary<string, int> ColumnWidths { get; set; } =

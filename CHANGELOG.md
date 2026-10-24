@@ -26,7 +26,7 @@
   CLI 与界面对不上；旧文件自动回退 `Language`。
 - 服务日志固定英文 + 稳定事件码（`WAG-SVC-*` / `WAG-IPC-*` / `WAG-AUTH-*` / `WAG-RULE-*` /
   `WAG-STRICT-*` / `WAG-AUDIT-*` / `WAG-WFP-*` / `WAG-DATA-*`）。
-- 新增 `--cli-language-test`（25 项）与 `--log-format-test`（9 项）。
+- 新增 `--cli-language-test`（27 项）与 `--log-format-test`（9 项）。
 
 ### 变更
 

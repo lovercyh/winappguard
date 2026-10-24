@@ -359,6 +359,12 @@ public partial class MainForm : Form
             }
 
             base.SetVisibleCore(false);
+
+            // 开机自启不会走 OnLoad：这里也要读一次状态并同步 AppliedLanguage，
+            // 否则「自启后从未打开过窗口」时，CLI 永远读不到 GUI 已生效的语言。
+            _uiState = UiState.Load();
+            SyncAppliedLanguage();
+
             InitializeRuntime();
             return;
         }
@@ -374,7 +380,21 @@ public partial class MainForm : Form
         // 先恢复上次的窗口大小/列宽，再初始化运行期（首屏就是用户熟悉的样子）。
         RestoreUiState();
 
-        // 3.3：记录“现在真正生效”的语言，CLI 会读这个值。
+        SyncAppliedLanguage();
+
+        Localizer.Initialize(_uiState.Language);
+        ControlLocalizer.Apply(this);
+        SetupLanguageSwitch();
+
+        InitializeRuntime();
+    }
+
+    /// <summary>
+    /// 3.3：把用户选择的语言记为「本次真正生效」，CLI 默认读这个值。
+    /// 放在 OnLoad 与自启隐藏路径都会经过的地方，保证两种启动方式行为一致。
+    /// </summary>
+    private void SyncAppliedLanguage()
+    {
         if (!string.Equals(
                 _uiState.AppliedLanguage, _uiState.Language,
                 StringComparison.OrdinalIgnoreCase))
@@ -382,12 +402,6 @@ public partial class MainForm : Form
             _uiState.AppliedLanguage = _uiState.Language;
             _uiState.Save();
         }
-
-        Localizer.Initialize(_uiState.Language);
-        ControlLocalizer.Apply(this);
-        SetupLanguageSwitch();
-
-        InitializeRuntime();
     }
 
     /// <summary>

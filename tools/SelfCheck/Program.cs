@@ -8613,6 +8613,15 @@ internal static class Program
                 CheckAssertion(results, "3.2 旧文件没有 AppliedLanguage 时回退 Language",
                     UiLanguageStore.ReadAppliedLanguage(file) == "zh");
 
+                var loaded = UiState.Load(file);
+                CheckAssertion(results, "旧文件加载后 AppliedLanguage 回填 Language",
+                    loaded.AppliedLanguage == "zh"
+                    && loaded.Language == "zh");
+
+                new UiState { Language = "en", AppliedLanguage = "zh" }.Save(file);
+                CheckAssertion(results, "GUI 写出的 AppliedLanguage 能被 CLI 读到",
+                    UiLanguageStore.ReadAppliedLanguage(file) == "zh");
+
                 File.WriteAllText(file, "{\"Language\":\"fr\"}");
                 CheckAssertion(results, "非法语言返回 null（视为跟随系统）",
                     UiLanguageStore.ReadAppliedLanguage(file) is null);

@@ -128,6 +128,6 @@ jobs:
             dist/WinAppGuardSetup.exe
             dist/WinAppGuardUninstall.exe
           body_path: release-notes.md
-          # 负责人已批准 3.0 发布：直接正式发布（草稿仍可通过 workflow_dispatch 手动建）。
-          draft: false
+          # 3.3 起先建草稿：由维护者审核资产与说明后，在 GitHub 上手动 Publish。
+          draft: true
           generate_release_notes: false

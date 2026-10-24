@@ -79,6 +79,8 @@ and finish with *"blocked."*
   whole, and a file exported from the other list is refused instead of silently creating the
   wrong rules.
 - **Shortcuts** — `F5` refresh, `Ctrl+F` search, `Esc` clear, `Delete` remove the selected entry.
+- **Interface language** — switch between Follow system / 简体中文 / English from the status bar;
+  non-Chinese systems default to English, and a restart applies the change.
 - **Remembers window size and column widths** — sizes only, no private data. The Records page
   also lets you right-click to copy a remote address, program path, or domain.
 - **Optional auto-start at logon**, straight to the system tray.

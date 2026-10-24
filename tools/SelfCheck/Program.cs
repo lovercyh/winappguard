@@ -135,6 +135,7 @@ internal static class Program
                          && !args.Contains("--audit-service-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ui-language-dpi-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--rules-io-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--rule-scope-test", StringComparer.OrdinalIgnoreCase)
@@ -257,6 +258,10 @@ internal static class Program
             else if (args.Contains("--ui-dpi-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunUiDpiTest();
+            }
+            else if (args.Contains("--ui-language-dpi-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunUiDpiTest(english: true);
             }
             else if (args.Contains("--ui-polish-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -6212,8 +6217,11 @@ internal static class Program
     /// **创建窗口时**按当时的默认字体缩放一次；窗口建好以后再改 <c>Font</c> 不会重新缩放，
     /// 那样测出来的"没问题"是假的。所以这里必须在 new MainForm **之前**设默认字体。
     /// </summary>
-    private static void RunUiDpiTest()
+    private static void RunUiDpiTest(bool english = false)
     {
+        var previousLanguage = Localizer.Current;
+        if (english) { Localizer.Initialize("en"); }
+
         // 9pt × 150% ≈ 13.5pt，对应 Windows「150% 缩放」下的默认字号。
         Application.SetDefaultFont(new Font("Microsoft YaHei UI", 13.5F));
 
@@ -6314,6 +6322,16 @@ internal static class Program
         }
 
         PrintSummary(results, showFirewallResidue: false);
+
+        if (english)
+        {
+            Localizer.Initialize(previousLanguage switch
+            {
+                Localizer.LanguageMode.English => "en",
+                Localizer.LanguageMode.Chinese => "zh",
+                _ => "auto",
+            });
+        }
     }
 
     /// <summary>

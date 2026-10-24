@@ -4031,6 +4031,36 @@ public partial class MainForm : Form
     /// <summary>把任务详情拼成给用户看的多行文本。</summary>
     private static string BuildAutoStartDetail(AutoStartStatus status)
     {
+        if (Localizer.IsEnglish)
+        {
+            if (!status.Exists)
+            {
+                return "This task does not exist. Click Enable auto-start to create it.";
+            }
+
+            var level = string.Equals(status.RunLevel, "HighestAvailable", StringComparison.OrdinalIgnoreCase)
+                ? "Highest privileges (no UAC prompt at logon)"
+                : status.RunLevel;
+
+            var english = new List<string>
+            {
+                $"Task name: {AppConstants.ScheduledTaskName}",
+                $"Executable: {status.ExecutablePath}",
+                $"Arguments: {status.Arguments}",
+                $"Run level: {level}",
+                $"Trigger: {status.Trigger}",
+                $"Task state: {status.TaskState}",
+            };
+
+            if (status.State == AutoStartState.Misconfigured)
+            {
+                english.Add($"Current executable: {Environment.ProcessPath}");
+                english.Add("The paths differ — the app was probably moved. Click Enable auto-start again to fix it.");
+            }
+
+            return string.Join(Environment.NewLine, english);
+        }
+
         if (!status.Exists)
         {
             return "系统里没有这个任务。点「开启开机自启」会创建它。";
@@ -4858,6 +4888,35 @@ public partial class MainForm : Form
     /// <param name="enabled">严格模式当前是否生效。</param>
     private string BuildStrictModeDetailText(bool enabled)
     {
+        if (Localizer.IsEnglish)
+        {
+            var english = new List<string>();
+
+            if (enabled)
+            {
+                english.Add($"Now: only {_strictModePermittedCount} programs are allowed; new connections from everything else are blocked.");
+                english.Add("This is a session-only restriction: turning strict mode off, or stopping/crashing the protection service, removes it immediately.");
+            }
+            else
+            {
+                english.Add("When enabled: programs not on the whitelist cannot reach the network; only whitelisted programs are allowed.");
+                english.Add("Whitelist = this tool's allow rules + this app + required system programs (DNS, time sync, Windows Update, etc.).");
+                english.Add("Since 2.0 this is a true whitelist: allow rules created by Windows or other software no longer pass automatically.");
+                english.Add("The restriction exists only for the current service session; stopping or crashing the service removes it automatically.");
+                english.Add("It does not change any Windows Firewall setting.");
+            }
+
+            english.Add(string.Empty);
+            english.Add($"WinAppGuard whitelist: {_whitelistedPaths.Count} programs" +
+                        (SelfIsWhitelisted() ? " (including this app)" : " (this app is allowed automatically)"));
+            english.Add($"Required system programs: {SystemAllowList.GetPaths().Count} (built-in list for DNS/update and other basics)");
+            english.Add($"Allow rules for specific programs from Windows/other software: {_otherAllowPaths.Count} programs" +
+                        " (not allowed automatically under strict mode — the biggest difference from 1.x)");
+            english.Add($"There are also {_programlessAllowRuleCount} allow rules without a program (also inactive under strict mode; shown for reference)");
+
+            return string.Join(Environment.NewLine, english);
+        }
+
         var lines = new List<string>();
 
         if (enabled)
@@ -4898,10 +4957,12 @@ public partial class MainForm : Form
             var enabled = _strictModeEnabled && _serviceAvailable;
 
             _strictModeStatusLabel.Text = !_serviceAvailable
-                ? "当前状态：服务未运行，严格模式不可用"
+                ? (Localizer.IsEnglish ? "Status: service is not running; strict mode unavailable" : "当前状态：服务未运行，严格模式不可用")
                 : enabled
-                    ? $"当前状态：严格模式生效中（放行 {_strictModePermittedCount} 个程序）"
-                    : "当前状态：未开启，默认放行";
+                    ? (Localizer.IsEnglish
+                        ? $"Status: strict mode active ({_strictModePermittedCount} programs allowed)"
+                        : $"当前状态：严格模式生效中（放行 {_strictModePermittedCount} 个程序）")
+                    : (Localizer.IsEnglish ? "Status: off; everything is allowed by default" : "当前状态：未开启，默认放行");
 
             _strictModeToggleButton.Text = enabled ? Localizer.T("关闭严格模式") : Localizer.T("开启严格模式…");
 

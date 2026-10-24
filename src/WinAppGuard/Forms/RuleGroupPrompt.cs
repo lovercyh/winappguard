@@ -1,3 +1,5 @@
+using WinAppGuard.Localization;
+
 namespace WinAppGuard.Forms;
 
 /// <summary>
@@ -90,6 +92,8 @@ internal sealed class RuleGroupPrompt : Form
         Controls.Add(layout);
         AcceptButton = okButton;
         CancelButton = cancelButton;
+
+        Localizer.Apply(this);
     }
 
     /// <summary>

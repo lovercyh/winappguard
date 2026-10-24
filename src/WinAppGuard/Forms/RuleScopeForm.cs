@@ -1,4 +1,5 @@
 using System.Globalization;
+using WinAppGuard.Localization;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Forms;
@@ -139,6 +140,8 @@ internal sealed class RuleScopeForm : Form
         AcceptButton = okButton;
         CancelButton = cancelButton;
         Result = null;
+
+        Localizer.Apply(this);
     }
 
     /// <summary>确定时返回用户选的范围；取消返回 null。</summary>

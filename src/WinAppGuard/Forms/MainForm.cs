@@ -3,6 +3,7 @@ using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.ProtectedMode;
+using WinAppGuard.Localization;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Forms;
@@ -246,6 +247,9 @@ public partial class MainForm : Form
     /// </summary>
     private bool _reallyExit;
 
+    private ToolStripStatusLabel? _languageStatusLabel;
+    private ContextMenuStrip? _languageMenu;
+
     /// <summary>
     /// 弹对话框时用的父窗口。
     ///
@@ -318,6 +322,9 @@ public partial class MainForm : Form
         SetupWhitelistGrid();
         InitializeAuditPage();
 
+        // 3.2：把 Designer 里的中文静态文案换成英文（如果当前语言是英文）。
+        Localizer.Apply(this);
+
         // 列宽用「预览线」拖动（自带的实时拖动在慢机器上会卡，见 GridColumnResizer）。
         _columnResizer = new GridColumnResizer(_connectionGrid);
 
@@ -366,6 +373,9 @@ public partial class MainForm : Form
 
         // 先恢复上次的窗口大小/列宽，再初始化运行期（首屏就是用户熟悉的样子）。
         RestoreUiState();
+        Localizer.Initialize(_uiState.Language);
+        Localizer.Apply(this);
+        SetupLanguageSwitch();
 
         InitializeRuntime();
     }
@@ -498,6 +508,136 @@ public partial class MainForm : Form
     // ==================================================================
     // 界面状态（窗口大小/位置、列宽）与快捷键
     // ==================================================================
+
+    /// <summary>3.2：状态栏语言入口。切换保存后提示重启，避免运行中重排所有控件。</summary>
+    private void SetupLanguageSwitch()
+    {
+        _languageStatusLabel = new ToolStripStatusLabel
+        {
+            IsLink = true,
+            Margin = new Padding(8, 3, 0, 2),
+        };
+
+        _languageStatusLabel.Click += (_, _) => ShowLanguageMenu();
+        _statusStrip.Items.Add(_languageStatusLabel);
+        UpdateLanguageStatusLabel();
+    }
+
+    private void UpdateLanguageStatusLabel()
+    {
+        if (_languageStatusLabel is null)
+        {
+            return;
+        }
+
+        _languageStatusLabel.Text = Localizer.IsEnglish
+            ? "Language: English"
+            : "语言：简体中文";
+
+        _languageStatusLabel.ToolTipText = Localizer.IsEnglish
+            ? "Switch the GUI language (restart required)."
+            : "切换界面语言（需要重启）。";
+    }
+
+    private void ShowLanguageMenu()
+    {
+        _languageMenu?.Dispose();
+        _languageMenu = new ContextMenuStrip();
+
+        var follow = new ToolStripMenuItem(
+            Localizer.IsEnglish ? "Follow system" : "跟随系统")
+        {
+            Tag = "auto",
+            Checked = _uiState.Language == "auto",
+        };
+
+        var chinese = new ToolStripMenuItem("简体中文")
+        {
+            Tag = "zh",
+            Checked = _uiState.Language == "zh",
+        };
+
+        var english = new ToolStripMenuItem("English")
+        {
+            Tag = "en",
+            Checked = _uiState.Language == "en",
+        };
+
+        foreach (var item in new[] { follow, chinese, english })
+        {
+            item.Click += (_, _) => SelectLanguage((string)item.Tag!);
+            _languageMenu.Items.Add(item);
+        }
+
+        _languageMenu.Show(_statusStrip, new Point(
+            Math.Max(0, _languageStatusLabel?.Bounds.Left ?? 0), -8));
+    }
+
+    private void SelectLanguage(string language)
+    {
+        if (_uiState.Language == language)
+        {
+            return;
+        }
+
+        _uiState.Language = language;
+        _uiState.Save();
+
+        // 立即按新语言更新“重启提示”的语言；其它控件等重启后再刷新。
+        Localizer.Initialize(language);
+        UpdateLanguageStatusLabel();
+
+        var prompt = Localizer.IsEnglish
+            ? "The language will take effect after WinAppGuard restarts.\n\nRestart now?"
+            : "界面语言将在重启 WinAppGuard 后生效。\n\n现在重启吗？";
+
+        var result = MessageBox.Show(
+            prompt,
+            AppConstants.AppName,
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (result == DialogResult.Yes)
+        {
+            RestartForLanguage();
+        }
+    }
+
+    private void RestartForLanguage()
+    {
+        var exe = Environment.ProcessPath;
+
+        if (string.IsNullOrEmpty(exe))
+        {
+            MessageBox.Show(
+                Localizer.IsEnglish
+                    ? "Could not determine the executable path. Please restart manually."
+                    : "无法确定程序路径，请手动重启。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            // 必须先释放单实例互斥体，否则新进程会被旧进程挡掉。
+            SingleInstance.Release();
+            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+            _reallyExit = true;
+            Application.Exit();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                (Localizer.IsEnglish
+                    ? "Restart failed: "
+                    : "重启失败：") + ex.Message,
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
 
     /// <summary>恢复上次的窗口位置/大小与列宽；没有记录或记录不可用就保持默认。</summary>
     private void RestoreUiState()
@@ -813,16 +953,16 @@ public partial class MainForm : Form
     /// <summary>把运行期才能确定的信息填到界面上。</summary>
     private void ShowRuntimeStatus()
     {
-        _versionLabel.Text = $"版本 v{BuildVersionText()}";
+        _versionLabel.Text = Localizer.F("版本 v{0}", BuildVersionText());
 
         _startModeLabel.Text = _isAutostart
-            ? $"启动模式：开机自启（{AppConstants.AutostartArgument}）"
-            : "启动模式：手动启动";
+            ? Localizer.F("启动模式：开机自启（{0}）", AppConstants.AutostartArgument)
+            : Localizer.T("启动模式：手动启动");
 
         var isAdmin = AdminHelper.IsRunningAsAdmin();
         _adminStatusLabel.Text = isAdmin
-            ? "管理员权限：已获得"
-            : "管理员权限：按需提权（修改规则 / 严格模式时弹一次 UAC）";
+            ? Localizer.T("管理员权限：已获得")
+            : Localizer.T("管理员权限：按需提权（修改规则 / 严格模式时弹一次 UAC）");
         _adminStatusLabel.ForeColor = isAdmin ? Color.FromArgb(0, 120, 0) : Color.Firebrick;
     }
 
@@ -887,9 +1027,9 @@ public partial class MainForm : Form
 
                 if (snapshot is null || snapshot.Rules.Count == 0)
                 {
-                    _statusRulesLabel.Text = "防护服务未运行（规则只读）";
-                    _rulesSummaryLabel.Text = "读取规则失败：服务不可用";
-                    _whitelistSummaryLabel.Text = "读取规则失败：服务不可用";
+                    _statusRulesLabel.Text = Localizer.T("防护服务未运行（规则只读）");
+                    _rulesSummaryLabel.Text = Localizer.T("读取规则失败：服务不可用");
+                    _whitelistSummaryLabel.Text = Localizer.T("读取规则失败：服务不可用");
                     MarkRulesReadOnly("防护服务未运行");
                     return;
                 }
@@ -944,8 +1084,8 @@ public partial class MainForm : Form
             ApplyWhitelistFilter(selectedWhitelistName);
 
             // 页签上挂数量：用户不用点进去就知道每一类有多少条。
-            _tabRules.Text = $"黑名单（{_rules.Count}）";
-            _tabWhitelist.Text = $"严格模式下白名单（{_whitelistRules.Count}）";
+            _tabRules.Text = Localizer.F("黑名单（{0}）", _rules.Count);
+            _tabWhitelist.Text = Localizer.F("严格模式下白名单（{0}）", _whitelistRules.Count);
 
             _statusRulesLabel.Text = fromSnapshot
                 ? $"已阻止程序：{_blockedPaths.Count} 个（上次已知）"
@@ -961,7 +1101,7 @@ public partial class MainForm : Form
             else
             {
                 // 状态栏的规则条数也要跟着走：以前只在启动时探一次，新建规则后一直显示旧数字。
-                _serviceStatusLabel.Text = $"服务：运行中 · {_appGuardRules.Count} 条规则";
+                _serviceStatusLabel.Text = Localizer.F("服务：运行中 · {0} 条规则", _appGuardRules.Count);
                 _serviceStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
                 _serviceStatusLabel.IsLink = false;
             }
@@ -992,8 +1132,8 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             _statusRulesLabel.Text = "读取规则失败";
-            _rulesSummaryLabel.Text = "读取规则失败";
-            _whitelistSummaryLabel.Text = "读取规则失败";
+            _rulesSummaryLabel.Text = Localizer.T("读取规则失败");
+            _whitelistSummaryLabel.Text = Localizer.T("读取规则失败");
 
             ShowError("读取规则失败", ex);
         }
@@ -1029,8 +1169,9 @@ public partial class MainForm : Form
     /// </summary>
     private void MarkRulesReadOnly(string reason)
     {
-        _rulesNoticeLabel.Text =
-            $"⚠ {reason}\r\n规则页面只读；启动或修复防护服务后即可恢复编辑，导出仍可使用。";
+        _rulesNoticeLabel.Text = Localizer.IsEnglish
+            ? $"⚠ {Localizer.T(reason)}\r\nRules are read-only; start or repair the protection service to edit them. Export still works."
+            : $"⚠ {reason}\r\n规则页面只读；启动或修复防护服务后即可恢复编辑，导出仍可使用。";
 
         _rulesAddButton.Enabled = false;
         _rulesGroupButton.Enabled = false;
@@ -1043,8 +1184,8 @@ public partial class MainForm : Form
         _whitelistRemoveButton.Enabled = false;
         _whitelistClearButton.Enabled = false;
 
-        _rulesHintLabel.Text = "服务未运行：规则只读";
-        _whitelistHintLabel.Text = "服务未运行：规则只读";
+        _rulesHintLabel.Text = Localizer.T("服务未运行：规则只读");
+        _whitelistHintLabel.Text = Localizer.T("服务未运行：规则只读");
     }
 
     /// <summary>服务恢复后，把规则页的提示与按钮恢复（选中相关的状态由 Update*ActionState 负责）。</summary>
@@ -1756,7 +1897,7 @@ public partial class MainForm : Form
             _whitelistRemoveButton.Enabled = false;
             _whitelistGroupButton.Enabled = false;
             _whitelistClearButton.Enabled = false;
-            _whitelistHintLabel.Text = "服务未运行：规则只读";
+            _whitelistHintLabel.Text = Localizer.T("服务未运行：规则只读");
             return;
         }
 
@@ -2408,7 +2549,7 @@ public partial class MainForm : Form
             _rulesDeleteButton.Enabled = false;
             _rulesGroupButton.Enabled = false;
             _rulesDeleteAllButton.Enabled = false;
-            _rulesHintLabel.Text = "服务未运行：规则只读";
+            _rulesHintLabel.Text = Localizer.T("服务未运行：规则只读");
             return;
         }
 
@@ -2552,7 +2693,7 @@ public partial class MainForm : Form
                 return;
             }
 
-            _summaryLabel.Text = "扫描失败";
+            _summaryLabel.Text = Localizer.T("扫描失败");
 
             // 关掉自动刷新，否则会每隔 3 秒弹一次错误框，把界面顶死。
             _autoRefreshCheckBox.Checked = false;
@@ -3851,17 +3992,17 @@ public partial class MainForm : Form
             switch (status.State)
             {
                 case AutoStartState.Enabled:
-                    _autostartStatusLabel.Text = "当前状态：已开启";
+                    _autostartStatusLabel.Text = Localizer.T("当前状态：已开启");
                     _autostartStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
                     break;
 
                 case AutoStartState.Misconfigured:
-                    _autostartStatusLabel.Text = "当前状态：已开启，但任务指向的不是当前程序";
+                    _autostartStatusLabel.Text = Localizer.T("当前状态：已开启，但任务指向的不是当前程序");
                     _autostartStatusLabel.ForeColor = Color.FromArgb(191, 87, 0);
                     break;
 
                 default:
-                    _autostartStatusLabel.Text = "当前状态：未开启";
+                    _autostartStatusLabel.Text = Localizer.T("当前状态：未开启");
                     _autostartStatusLabel.ForeColor = SystemColors.ControlText;
                     break;
             }
@@ -3878,7 +4019,7 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             LocalLog.Error("读取开机自启状态失败", ex);
-            _autostartStatusLabel.Text = "当前状态：读取失败";
+            _autostartStatusLabel.Text = Localizer.T("当前状态：读取失败");
             _autostartStatusLabel.ForeColor = Color.Firebrick;
             _autostartDetailLabel.Text = ex.Message;
             _taskXmlBox.Text = string.Empty;
@@ -4292,7 +4433,7 @@ public partial class MainForm : Form
 
         if (TryStartService(interactive: true))
         {
-            ShowTrayBalloon("正在启动防护服务…", "启动成功后界面会自动恢复可编辑状态。");
+            ShowTrayBalloon(Localizer.T("正在启动防护服务…"), Localizer.T("启动成功后界面会自动恢复可编辑状态。"));
         }
     }
 
@@ -4587,7 +4728,7 @@ public partial class MainForm : Form
 
             // 服务停了要**立刻**反映到规则页，不能等用户去点刷新。
             _serviceAvailable = false;
-            _statusRulesLabel.Text = "防护服务未运行（规则只读）";
+            _statusRulesLabel.Text = Localizer.T("防护服务未运行（规则只读）");
             MarkRulesReadOnly("防护服务未运行");
             UpdateRulesActionState();
             UpdateWhitelistActionState();
@@ -4655,7 +4796,7 @@ public partial class MainForm : Form
                     : $"{programs.Count} 个程序的临时阻断已到期，已自动解除：{string.Join("、", programs.Take(8))}";
 
             LocalLog.Operation($"临时阻断到期，服务已自动解除：{text}");
-            ShowTrayBalloon("临时阻断已自动解除", text);
+            ShowTrayBalloon(Localizer.T("临时阻断已自动解除"), text);
             RefreshRulesFromFirewall();
         }
 
@@ -4761,7 +4902,7 @@ public partial class MainForm : Form
                     ? $"当前状态：严格模式生效中（放行 {_strictModePermittedCount} 个程序）"
                     : "当前状态：未开启，默认放行";
 
-            _strictModeToggleButton.Text = enabled ? "关闭严格模式" : "开启严格模式…";
+            _strictModeToggleButton.Text = enabled ? Localizer.T("关闭严格模式") : Localizer.T("开启严格模式…");
 
             // 会话归服务：服务不在就没有会话，按钮必须灰掉（不能假装还能开）。
             _strictModeToggleButton.Enabled = _serviceAvailable;
@@ -4771,7 +4912,7 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             LocalLog.Error("刷新严格模式状态失败", ex);
-            _strictModeStatusLabel.Text = "当前状态：读取失败（详见日志）";
+            _strictModeStatusLabel.Text = Localizer.T("当前状态：读取失败（详见日志）");
         }
     }
 
@@ -4833,7 +4974,7 @@ public partial class MainForm : Form
             AfterRulesChanged();
             RefreshStrictModeStatus();
 
-            ShowTrayBalloon("严格模式已关闭", "限制已撤销，所有程序恢复联网。");
+            ShowTrayBalloon(Localizer.T("严格模式已关闭"), Localizer.T("限制已撤销，所有程序恢复联网。"));
         }
         catch (Exception ex)
         {

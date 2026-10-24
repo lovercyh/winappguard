@@ -18,6 +18,7 @@ using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
+using WinAppGuard.Localization;
 using WinAppGuard.Interop;
 using WinAppGuard.Models;
 
@@ -142,6 +143,7 @@ internal static class Program
                          && !args.Contains("--service-ui-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-offline-rules-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-ui-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ui-language-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
@@ -339,6 +341,10 @@ internal static class Program
             else if (args.Contains("--protected-mode-ui-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunProtectedModeUiTest();
+            }
+            else if (args.Contains("--ui-language-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunUiLanguageTest();
             }
             else if (args.Contains("--wfp-scope-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3735,6 +3741,152 @@ internal static class Program
         {
             W($"    ！{ex.GetType().Name}: {ex.Message}");
             CheckAssertion(results, "签名封套测试执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 3.2 界面语言（离线）：Auto 解析、英文静态文案、切回中文、设置持久化。
+    /// 只检查构造后的控件树，不显示窗口。
+    /// </summary>
+    private static void RunUiLanguageTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previous = Localizer.Current;
+
+        W("################################################################");
+        W("#   界面语言（英文静态文案 / 中文回退 / auto 解析 / 持久化）      #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Localizer.Initialize("en");
+            MainForm.SuppressBackgroundServices = true;
+
+            using (var form = new MainForm(isAutostart: false))
+            {
+                TrySetField(form, "_runtimeInitialized", true);
+
+                if (!TryGetField<TabPage>(form, "_tabConnections", out var connections)
+                    || !TryGetField<Button>(form, "_refreshButton", out var refresh)
+                    || !TryGetField<Label>(form, "_safetyNoticeLabel", out var safety))
+                {
+                    CheckAssertion(results, "找得到英文界面控件", false);
+                }
+                else
+                {
+                    W($"    Connections tab = {connections.Text}");
+                    CheckAssertion(results, "英文：联网连接页签",
+                        connections.Text == "Connections");
+                    CheckAssertion(results, "英文：刷新按钮",
+                        refresh.Text == "Refresh");
+
+                    var measured = TextRenderer.MeasureText(
+                        safety.Text, safety.Font).Width;
+                    W($"    顶部安全横幅：需要 {measured}px / 实宽 {safety.Width}px");
+                    CheckAssertion(results, "英文：顶部安全横幅放得下",
+                        measured <= safety.Width);
+                    CheckAssertion(results, "英文：安全横幅不是中文",
+                        !System.Text.RegularExpressions.Regex.IsMatch(
+                            safety.Text ?? string.Empty, "[\u4e00-\u9fff]"));
+
+                    form.PerformLayout();
+
+                    if (TryGetField<Label>(form, "_settingsNoticeLabel", out var settingsNotice)
+                        && TryGetField<GroupBox>(form, "_autostartPanel", out var autostart))
+                    {
+                        W($"    设置页提示底部={settingsNotice.Bottom}，" +
+                          $"自启面板顶部={autostart.Top}");
+                        CheckAssertion(results, "英文：设置页提示不压住自启面板",
+                            settingsNotice.Bottom <= autostart.Top);
+                    }
+
+                    if (TryGetField<Button>(form, "_rulesDeleteButton", out var deleteRule)
+                        && TryGetField<Button>(form, "_whitelistClearButton", out var clearWhite))
+                    {
+                        var deleteWidth = TextRenderer.MeasureText(
+                            deleteRule.Text, deleteRule.Font).Width + 16;
+                        var clearWidth = TextRenderer.MeasureText(
+                            clearWhite.Text, clearWhite.Font).Width + 16;
+
+                        W($"    删除规则按钮：需要 {deleteWidth}px / 实宽 {deleteRule.Width}px");
+                        W($"    清空白名单按钮：需要 {clearWidth}px / 实宽 {clearWhite.Width}px");
+                        CheckAssertion(results, "英文：删除规则按钮不截断",
+                            deleteWidth <= deleteRule.Width);
+                        CheckAssertion(results, "英文：清空白名单按钮不截断",
+                            clearWidth <= clearWhite.Width);
+                    }
+                }
+            }
+
+            Localizer.Initialize("zh");
+
+            using (var form = new MainForm(isAutostart: false))
+            {
+                TrySetField(form, "_runtimeInitialized", true);
+
+                if (TryGetField<TabPage>(form, "_tabConnections", out var connections))
+                {
+                    W($"    中文页签 = {connections.Text}");
+                    CheckAssertion(results, "中文：联网连接页签回退正确",
+                        connections.Text == "联网连接");
+                }
+                else
+                {
+                    CheckAssertion(results, "找得到中文界面控件", false);
+                }
+            }
+
+            var originalCulture = System.Globalization.CultureInfo.CurrentUICulture;
+
+            try
+            {
+                System.Globalization.CultureInfo.CurrentUICulture =
+                    new System.Globalization.CultureInfo("en-US");
+                Localizer.Initialize("auto");
+                CheckAssertion(results, "auto + en-US → English", Localizer.IsEnglish);
+
+                System.Globalization.CultureInfo.CurrentUICulture =
+                    new System.Globalization.CultureInfo("zh-CN");
+                Localizer.Initialize("auto");
+                CheckAssertion(results, "auto + zh-CN → 中文", !Localizer.IsEnglish);
+            }
+            finally
+            {
+                System.Globalization.CultureInfo.CurrentUICulture = originalCulture;
+            }
+
+            var temp = Path.Combine(
+                Path.GetTempPath(), $"wag-language-{Guid.NewGuid():N}.json");
+
+            try
+            {
+                var state = new UiState { Language = "en" };
+                state.Save(temp);
+
+                var loaded = UiState.Load(temp);
+                CheckAssertion(results, "语言设置能持久化", loaded.Language == "en");
+            }
+            finally
+            {
+                try { File.Delete(temp); } catch (Exception) { }
+            }
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "界面语言测试执行完成", false);
+        }
+        finally
+        {
+            Localizer.Initialize(previous switch
+            {
+                Localizer.LanguageMode.English => "en",
+                Localizer.LanguageMode.Chinese => "zh",
+                _ => "auto",
+            });
         }
 
         PrintSummary(results, showFirewallResidue: false);

@@ -10,7 +10,8 @@ namespace WinAppGuard.Core;
 /// `settings.json` 的约定是**只存布尔值**（README、安全说明、自检都按这条写死），
 /// 而窗口尺寸/列宽是数值型的历史数据，混进去会直接破坏那条约定。
 ///
-/// 隐私：里面只有窗口尺寸、屏幕坐标和列宽 —— **没有任何程序名、路径、IP 或时间戳**。
+/// 隐私：里面只有窗口尺寸、屏幕坐标、列宽和界面语言 ——
+/// **没有任何程序名、路径、IP 或时间戳**。
 ///
 /// 健壮性：文件缺失、读不出、字段非法、坐标跑到屏幕外 —— 一律回落到「不恢复」，
 /// 绝不能让一个记错的窗口位置把界面卡在屏幕外面打不开。
@@ -31,6 +32,12 @@ internal sealed class UiState
 
     /// <summary>上次退出时是否最大化。</summary>
     public bool Maximized { get; set; }
+
+    /// <summary>
+    /// 界面语言：auto / zh / en。只影响 UI，不影响服务或规则。
+    /// auto = 系统 UI 是中文就中文，其它语言一律英文。
+    /// </summary>
+    public string Language { get; set; } = "auto";
 
     /// <summary>列宽：键是「表格名.列名」，值是像素宽。</summary>
     public Dictionary<string, int> ColumnWidths { get; set; } =
@@ -57,6 +64,12 @@ internal sealed class UiState
             var state = JsonSerializer.Deserialize<UiState>(json) ?? new UiState();
 
             state.ColumnWidths ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            if (state.Language is not ("auto" or "zh" or "en"))
+            {
+                state.Language = "auto";
+            }
+
             return state;
         }
         catch (Exception)

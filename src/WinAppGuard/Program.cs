@@ -3,6 +3,7 @@ using WinAppGuard.Core;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Forms;
 using WinAppGuard.Interop;
+using WinAppGuard.Localization;
 
 namespace WinAppGuard;
 
@@ -86,6 +87,9 @@ internal static class Program
         {
             LocalLog.Warning($"受保护模式：无法加载签名密钥（{authError}）。");
         }
+
+        // 4.6) 3.2：按上次保存的语言初始化 GUI（auto 时跟随系统）。
+        Localizer.Initialize(UiState.Load().Language);
 
         // 5) 启动界面。
         ApplicationConfiguration.Initialize();

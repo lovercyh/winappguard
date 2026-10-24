@@ -1,4 +1,5 @@
 using WinAppGuard.Core;
+using WinAppGuard.Localization;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Forms;
@@ -281,6 +282,8 @@ public sealed class ConfirmForm : Form
         // 因为焦点在确认按钮上，回车会被当成对该按钮的点击。详见类注释里的说明。
         CancelButton = cancelButton;
         ActiveControl = _confirmButton;
+
+        Localizer.Apply(this);
     }
 
     /// <summary>

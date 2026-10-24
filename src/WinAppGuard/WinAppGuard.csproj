@@ -80,6 +80,10 @@
       指定 LogicalName 是为了不依赖编译器推断出的资源名（那样改目录结构就容易悄悄失效）。
     -->
     <EmbeddedResource Include="Resources\app.ico" LogicalName="WinAppGuard.AppIcon.ico" />
+
+    <!-- 3.2 英文界面资源；中文是源码默认语言，英文缺失时回退。 -->
+    <EmbeddedResource Include="Localization\en.json"
+                      LogicalName="WinAppGuard.Localization.en.json" />
   </ItemGroup>
 
   <ItemGroup>

@@ -74,6 +74,27 @@ public static class SingleInstance
     }
 
     /// <summary>
+    /// 释放单实例互斥体（3.2 语言切换重启时用）：
+    /// 必须先释放，否则新进程会被旧进程的互斥体挡掉。
+    /// </summary>
+    public static void Release()
+    {
+        try
+        {
+            _mutex?.ReleaseMutex();
+        }
+        catch (Exception)
+        {
+            // 没持有互斥体时 ReleaseMutex 会抛；这不影响重启。
+        }
+        finally
+        {
+            _mutex?.Dispose();
+            _mutex = null;
+        }
+    }
+
+    /// <summary>
     /// 广播一条消息，请求已有的那个实例把主窗口显示出来。
     /// </summary>
     public static void RequestShowMainWindow()

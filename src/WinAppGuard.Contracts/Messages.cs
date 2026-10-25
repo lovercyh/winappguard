@@ -94,6 +94,42 @@ public sealed class ServiceResponse
 
     /// <summary>3.5：会话中 PID 对应的路径。</summary>
     public List<ProcessPathDto>? ProcessPaths { get; set; }
+
+    /// <summary>3.5：每程序流量快照（按本次运行累计）。</summary>
+    public List<TrafficDto>? Traffic { get; set; }
+}
+
+/// <summary>
+/// 3.5：一个程序（或一个拿不到路径的 PID）本次服务运行以来的 TCP 流量。
+///
+/// 只统计 TCP，且是「服务看到连接之后」的字节数：短连接、UDP、已被系统
+/// 回收的连接都可能漏计。界面必须把这条限制写出来，不能把它当精确账单。
+/// </summary>
+public sealed class TrafficDto
+{
+    /// <summary>聚合键：程序完整路径（小写），或 <c>pid:123</c>。</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>程序完整路径；拿不到时为 null。</summary>
+    public string? Path { get; set; }
+
+    /// <summary>显示名（文件名或「PID 123」）。</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>路径是否真的解析到了（false 表示这是 PID 兜底项）。</summary>
+    public bool IsPathKnown { get; set; }
+
+    /// <summary>这些字节属于哪些 PID（界面按 PID 匹配当前连接）。</summary>
+    public List<int>? Pids { get; set; }
+
+    /// <summary>下载字节数（TCP 数据字节）。</summary>
+    public long BytesIn { get; set; }
+
+    /// <summary>上传字节数（TCP 数据字节）。</summary>
+    public long BytesOut { get; set; }
+
+    /// <summary>最后一次统计到流量的时间（UTC）。</summary>
+    public DateTime LastSeenUtc { get; set; }
 }
 
 /// <summary>一条规则的 IPC 表示（与界面表格字段对应）。</summary>
@@ -176,6 +212,9 @@ public sealed class ServiceStatus
 
     /// <summary>审计采集是否真的在跑（服务实际状态）。</summary>
     public bool AuditCollecting { get; set; }
+
+    /// <summary>3.5：流量采集是否在跑（TCP 扩展统计不可用时为 false）。</summary>
+    public bool TrafficCollecting { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

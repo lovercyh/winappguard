@@ -139,6 +139,9 @@ internal sealed class ControlServer : IDisposable
         ServiceLog.Info("WAG-AUDIT-002", "Startup: starting audit capture.");
         AuditHost.StartIfEnabled();
 
+        // 3.5：流量采集与服务同生命周期（内存累计，不落盘）。
+        TrafficHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -169,6 +172,8 @@ internal sealed class ControlServer : IDisposable
 
         // 审计采集也停掉（记录文件先刷盘再关闭）。
         AuditHost.Stop();
+
+        TrafficHost.Stop();
 
         _thread?.Join(3000);
         _thread = null;
@@ -481,6 +486,14 @@ internal sealed class ControlServer : IDisposable
                 Status = BuildStatus(),
             },
 
+            // 3.5：流量快照是只读数据，不碰 WFP，也不要求提权。
+            ServiceProtocol.Commands.QueryTraffic => new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = true,
+                Traffic = TrafficHost.Snapshot(),
+            },
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -550,6 +563,7 @@ internal sealed class ControlServer : IDisposable
         status.AuditRetentionDays = audit.RetentionDays;
         status.AuditCollecting = AuditHost.Collecting;
         status.AuditEventsWritten = AuditHost.EventsWritten;
+        status.TrafficCollecting = TrafficHost.Collecting;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

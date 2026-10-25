@@ -75,6 +75,19 @@ public partial class MainForm : Form
     /// </summary>
     private readonly List<TcpConnectionItem> _scannedConnections = new();
 
+    /// <summary>3.5：服务端流量快照，按完整路径索引（程序已知时优先用这个）。</summary>
+    private readonly Dictionary<string, TrafficDto> _trafficByPath =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>3.5：服务端流量快照，按 PID 索引（只装拿不到路径的程序）。</summary>
+    private readonly Dictionary<int, TrafficDto> _trafficByPid = new();
+
+    /// <summary>3.5：服务是否支持 query.traffic（旧服务返回“未知命令”时隐藏三列）。</summary>
+    private bool _trafficSupported = true;
+
+    /// <summary>3.5：列可见性是否已经按服务能力设置过（避免每次刷新都碰控件）。</summary>
+    private bool _trafficColumnVisibilityApplied;
+
     /// <summary>当前搜索关键词。空字符串表示不过滤。</summary>
     private string _searchKeyword = string.Empty;
 
@@ -862,7 +875,7 @@ public partial class MainForm : Form
     /// </summary>
     private void SetupConnectionGrid()
     {
-        // 列变多了（加了「数字签名」），所以每一列都适当收窄了一点，
+        // 列变多了（3.5 加了「上传 / 下载 / 总计」），每一列都适当收窄了一点，
         // 否则 1180 宽的窗口里会出现横向滚动条。
         //
         // 末尾的 sortable: true 表示「允许点击表头排序」。只给排序真正有意义、
@@ -873,17 +886,41 @@ public partial class MainForm : Form
         //    Fill 列的宽度是自动算出来的，**它右边那条分隔线天生不可拖**。
         //    放在中间就会出现「别的线都能拖、唯独那条拖不动」的怪现象
         //    （用户实际报过这个 bug）。放在最后一列只影响表格最右边缘，没人会去拖那里。
-        AddConnectionColumn("程序名", nameof(TcpConnectionItem.ProcessName), 115, sortable: true);
-        AddConnectionColumn("程序路径", nameof(TcpConnectionItem.ProcessPathText), 135);
-        AddConnectionColumn("PID", nameof(TcpConnectionItem.Pid), 60, sortable: true);
-        AddConnectionColumn("本地端口", nameof(TcpConnectionItem.LocalPortText), 80, sortable: true);
-        AddConnectionColumn("远程 IP", nameof(TcpConnectionItem.RemoteAddressText), 130, sortable: true);
-        AddConnectionColumn("远程端口", nameof(TcpConnectionItem.RemotePortText), 80, sortable: true);
-        AddConnectionColumn("状态", nameof(TcpConnectionItem.StateText), 90, sortable: true);
-        AddConnectionColumn("协议", nameof(TcpConnectionItem.Protocol), 60);
-        AddConnectionColumn("阻止状态", nameof(TcpConnectionItem.BlockStateText), 80);
-        AddConnectionColumn("放行", nameof(TcpConnectionItem.WhitelistText), 140);
-        AddConnectionColumn("数字签名", nameof(TcpConnectionItem.SignatureText), 130, fill: true, minWidth: 80);
+        // 3.5：加了「上传 / 下载 / 总计」三列，其它列再收窄一点，
+        // 保证 1180 宽的默认窗口仍然放得下（流量是本次运行的近似值，列头保持短）。
+        AddConnectionColumn("程序名", nameof(TcpConnectionItem.ProcessName), 110, sortable: true);
+        AddConnectionColumn("程序路径", nameof(TcpConnectionItem.ProcessPathText), 110);
+        AddConnectionColumn("PID", nameof(TcpConnectionItem.Pid), 55, sortable: true);
+        AddConnectionColumn("本地端口", nameof(TcpConnectionItem.LocalPortText), 70, sortable: true);
+        AddConnectionColumn("远程 IP", nameof(TcpConnectionItem.RemoteAddressText), 120, sortable: true);
+        AddConnectionColumn("远程端口", nameof(TcpConnectionItem.RemotePortText), 70, sortable: true);
+        AddConnectionColumn("状态", nameof(TcpConnectionItem.StateText), 80, sortable: true);
+        AddConnectionColumn("协议", nameof(TcpConnectionItem.Protocol), 55);
+        AddConnectionColumn("上传", nameof(TcpConnectionItem.TrafficOutText), 65, sortable: true);
+        AddConnectionColumn("下载", nameof(TcpConnectionItem.TrafficInText), 65, sortable: true);
+        AddConnectionColumn("总计", nameof(TcpConnectionItem.TrafficTotalText), 70, sortable: true);
+        AddConnectionColumn("阻止状态", nameof(TcpConnectionItem.BlockStateText), 75);
+        AddConnectionColumn("放行", nameof(TcpConnectionItem.WhitelistText), 120);
+        AddConnectionColumn("数字签名", nameof(TcpConnectionItem.SignatureText), 70, fill: true, minWidth: 70);
+
+        // 流量列的悬停提示：必须写明「仅 TCP / 近似值」，不能让人当精确账单。
+        var trafficTip = Localizer.T("本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。");
+
+        foreach (var columnName in new[]
+                 {
+                     nameof(TcpConnectionItem.TrafficOutText),
+                     nameof(TcpConnectionItem.TrafficInText),
+                     nameof(TcpConnectionItem.TrafficTotalText),
+                 })
+        {
+            if (_connectionGrid.Columns[columnName] is { } column)
+            {
+                column.ToolTipText = trafficTip;
+            }
+        }
+
+        // 状态栏也挂一条：用户没注意到列头悬停时，至少还有一个地方能看到这个边界。
+        _summaryLabel.ToolTipText = trafficTip;
 
         _connectionSource.DataSource = _connections;
         _connectionGrid.DataSource = _connectionSource;
@@ -1457,6 +1494,7 @@ public partial class MainForm : Form
             if (active.Contains(item) && paths.TryGetValue(item.Pid, out var path))
             {
                 item.ApplyResolvedPath(path);
+                ApplyTrafficTo(item);
                 changed = true;
             }
         }
@@ -2765,7 +2803,13 @@ public partial class MainForm : Form
                 HideLoopback = _hideLoopbackCheckBox.Checked,
             };
 
-            var connections = await Task.Run(() => ConnectionScanner.Scan(options));
+            var scanTask = Task.Run(() => ConnectionScanner.Scan(options));
+
+            // 3.5：流量快照和连接扫描并行取，避免小请求把首屏拖慢。
+            var trafficTask = Task.Run(QueryTrafficSnapshot);
+
+            var connections = await scanTask;
+            var traffic = await trafficTask;
 
             // 扫描期间窗口可能已经被关闭，此时再碰控件会抛 ObjectDisposedException。
             if (IsDisposed || Disposing)
@@ -2783,6 +2827,8 @@ public partial class MainForm : Form
                     ? byName
                     : string.Compare(a.RemoteAddressText, b.RemoteAddressText, StringComparison.OrdinalIgnoreCase);
             });
+
+            ApplyTrafficSnapshot(connections, traffic.Traffic, traffic.Supported);
 
             // 关键顺序：先在旧数据还在的时候抓取选中项，再替换列表。
             // 反过来的话，列表一旦变短就会越界崩溃。
@@ -2827,6 +2873,130 @@ public partial class MainForm : Form
         {
             _isScanning = false;
             _refreshButton.Enabled = true;
+        }
+    }
+
+    // ==================================================================
+    // 3.5：每程序流量
+    // ==================================================================
+
+    /// <summary>
+    /// 向服务要一份流量快照。
+    /// 服务没运行 → 保持上次结论（界面显示破折号）；
+    /// 旧服务返回“未知命令” → Supported=false，隐藏流量列，不显示一堆假的 0。
+    /// </summary>
+    private TrafficQueryResult QueryTrafficSnapshot()
+    {
+        try
+        {
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
+                TimeSpan.FromSeconds(2),
+                out _);
+
+            if (response is null)
+            {
+                return new TrafficQueryResult(null, _trafficSupported);
+            }
+
+            return response is { Ok: true, Traffic: not null }
+                ? new TrafficQueryResult(response.Traffic, true)
+                : new TrafficQueryResult(null, false);
+        }
+        catch (Exception)
+        {
+            return new TrafficQueryResult(null, _trafficSupported);
+        }
+    }
+
+    private readonly record struct TrafficQueryResult(List<TrafficDto>? Traffic, bool Supported);
+
+    /// <summary>
+    /// 把服务聚合好的流量按「路径优先、PID 兜底」贴到每一行。
+    ///
+    /// 为什么路径优先：服务按路径合并同一程序的多个实例；PID 会复用，
+    /// 拿 PID 当主键会把上一个程序的流量算到新程序头上。
+    /// 只有服务也拿不到路径时，才用 PID 兜底。
+    /// </summary>
+    private void ApplyTrafficSnapshot(
+        IReadOnlyList<TcpConnectionItem> connections,
+        List<TrafficDto>? traffic,
+        bool supported)
+    {
+        if (!_trafficColumnVisibilityApplied || _trafficSupported != supported)
+        {
+            _trafficColumnVisibilityApplied = true;
+            _trafficSupported = supported;
+            SetTrafficColumnsVisible(supported);
+        }
+
+        _trafficByPath.Clear();
+        _trafficByPid.Clear();
+
+        if (traffic is not null)
+        {
+            foreach (var item in traffic)
+            {
+                if (item.IsPathKnown && !string.IsNullOrEmpty(item.Path))
+                {
+                    _trafficByPath[item.Path] = item;
+                }
+                else if (item.Pids is { Count: > 0 })
+                {
+                    foreach (var pid in item.Pids)
+                    {
+                        _trafficByPid[pid] = item;
+                    }
+                }
+            }
+        }
+
+        foreach (var connection in connections)
+        {
+            ApplyTrafficTo(connection);
+        }
+    }
+
+    /// <summary>给单行贴流量（路径优先，PID 兜底）。</summary>
+    private void ApplyTrafficTo(TcpConnectionItem item)
+    {
+        if (!string.IsNullOrEmpty(item.ProcessPath)
+            && _trafficByPath.TryGetValue(item.ProcessPath, out var byPath))
+        {
+            item.ApplyTraffic(byPath.BytesOut, byPath.BytesIn);
+            return;
+        }
+
+        if (_trafficByPid.TryGetValue(item.Pid, out var byPid))
+        {
+            item.ApplyTraffic(byPid.BytesOut, byPid.BytesIn);
+        }
+    }
+
+    /// <summary>旧服务不支持 query.traffic 时隐藏三列，而不是让用户看着一列破折号猜。</summary>
+    private void SetTrafficColumnsVisible(bool visible)
+    {
+        foreach (var name in new[]
+                 {
+                     nameof(TcpConnectionItem.TrafficOutText),
+                     nameof(TcpConnectionItem.TrafficInText),
+                     nameof(TcpConnectionItem.TrafficTotalText),
+                 })
+        {
+            if (_connectionGrid.Columns[name] is { } column)
+            {
+                column.Visible = visible;
+            }
+        }
+
+        if (!visible
+            && _sortColumn is ConnectionSortColumn.TrafficOut
+                or ConnectionSortColumn.TrafficIn
+                or ConnectionSortColumn.TrafficTotal)
+        {
+            _sortColumn = ConnectionSortColumn.None;
+            _sortAscending = true;
+            UpdateSortGlyphs();
         }
     }
 
@@ -3911,6 +4081,9 @@ public partial class MainForm : Form
         nameof(TcpConnectionItem.RemoteAddressText) => ConnectionSortColumn.RemoteAddress,
         nameof(TcpConnectionItem.RemotePortText) => ConnectionSortColumn.RemotePort,
         nameof(TcpConnectionItem.StateText) => ConnectionSortColumn.State,
+        nameof(TcpConnectionItem.TrafficOutText) => ConnectionSortColumn.TrafficOut,
+        nameof(TcpConnectionItem.TrafficInText) => ConnectionSortColumn.TrafficIn,
+        nameof(TcpConnectionItem.TrafficTotalText) => ConnectionSortColumn.TrafficTotal,
         _ => ConnectionSortColumn.None,
     };
 
@@ -3923,6 +4096,9 @@ public partial class MainForm : Form
         ConnectionSortColumn.RemoteAddress => nameof(TcpConnectionItem.RemoteAddressText),
         ConnectionSortColumn.RemotePort => nameof(TcpConnectionItem.RemotePortText),
         ConnectionSortColumn.State => nameof(TcpConnectionItem.StateText),
+        ConnectionSortColumn.TrafficOut => nameof(TcpConnectionItem.TrafficOutText),
+        ConnectionSortColumn.TrafficIn => nameof(TcpConnectionItem.TrafficInText),
+        ConnectionSortColumn.TrafficTotal => nameof(TcpConnectionItem.TrafficTotalText),
         _ => null,
     };
 

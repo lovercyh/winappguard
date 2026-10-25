@@ -106,6 +106,9 @@ public static class ServiceProtocol
         /// <summary>3.5：批量查询 PID 对应的可执行文件路径（服务以 SYSTEM 运行，能读到界面读不到的进程）。</summary>
         public const string QueryProcessPaths = "query.process.paths";
 
+        /// <summary>3.5：每程序流量快照（本次服务运行以来，仅 TCP）。</summary>
+        public const string QueryTraffic = "query.traffic";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

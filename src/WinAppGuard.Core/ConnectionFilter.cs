@@ -32,6 +32,15 @@ public enum ConnectionSortColumn
 
     /// <summary>按连接状态（枚举值）。</summary>
     State,
+
+    /// <summary>3.5：按本程序本次运行的上传字节数。</summary>
+    TrafficOut,
+
+    /// <summary>3.5：按本程序本次运行的下载字节数。</summary>
+    TrafficIn,
+
+    /// <summary>3.5：按本程序本次运行的总流量。</summary>
+    TrafficTotal,
 }
 
 /// <summary>
@@ -137,6 +146,10 @@ public static class ConnectionFilter
             ConnectionSortColumn.RemoteAddress => CompareAddress(a.RemoteAddress, b.RemoteAddress),
             ConnectionSortColumn.RemotePort => a.RemotePort.CompareTo(b.RemotePort),
             ConnectionSortColumn.State => ((int)a.State).CompareTo((int)b.State),
+            ConnectionSortColumn.TrafficOut => a.TrafficBytesOut.CompareTo(b.TrafficBytesOut),
+            ConnectionSortColumn.TrafficIn => a.TrafficBytesIn.CompareTo(b.TrafficBytesIn),
+            ConnectionSortColumn.TrafficTotal =>
+                (a.TrafficBytesOut + a.TrafficBytesIn).CompareTo(b.TrafficBytesOut + b.TrafficBytesIn),
             _ => 0,
         };
 

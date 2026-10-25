@@ -93,13 +93,75 @@ public sealed class TcpConnectionItem
         string.IsNullOrEmpty(ProcessPath) ? "—" : Localizer.T(IsBlocked ? "已阻止" : "未阻止");
 
     /// <summary>
-    /// <summary>3.5：服务代查到路径后回填名称与路径。</summary>
+    /// 3.5：服务代查到路径后回填名称与路径。
+    /// </summary>
     public void ApplyResolvedPath(string path)
     {
         ProcessPath = path;
         ProcessName = Path.GetFileName(path);
     }
 
+    // ------------------------------------------------------------------
+    // 3.5：每程序流量（服务端按程序聚合，界面按 PID 匹配到每一行）
+    // ------------------------------------------------------------------
+
+    /// <summary>本次服务运行以来的 TCP 上传字节数（近似值）。</summary>
+    public long TrafficBytesOut { get; private set; }
+
+    /// <summary>本次服务运行以来的 TCP 下载字节数（近似值）。</summary>
+    public long TrafficBytesIn { get; private set; }
+
+    /// <summary>是否拿到了该程序的流量数据（拿不到时显示破折号，不显示 0）。</summary>
+    public bool HasTrafficData { get; private set; }
+
+    /// <summary>上传列的显示文本。</summary>
+    public string TrafficOutText => HasTrafficData ? FormatTrafficBytes(TrafficBytesOut) : "—";
+
+    /// <summary>下载列的显示文本。</summary>
+    public string TrafficInText => HasTrafficData ? FormatTrafficBytes(TrafficBytesIn) : "—";
+
+    /// <summary>总计列的显示文本。</summary>
+    public string TrafficTotalText =>
+        HasTrafficData ? FormatTrafficBytes(TrafficBytesOut + TrafficBytesIn) : "—";
+
+    /// <summary>流量列的悬停提示：把「近似值」的限制写清楚。</summary>
+    public string TrafficTooltip => Localizer.T("本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。");
+
+    /// <summary>3.5：把服务返回的该程序累计流量填到这一行。</summary>
+    public void ApplyTraffic(long bytesOut, long bytesIn)
+    {
+        TrafficBytesOut = Math.Max(0, bytesOut);
+        TrafficBytesIn = Math.Max(0, bytesIn);
+        HasTrafficData = true;
+    }
+
+    /// <summary>
+    /// 字节数 → 人话。**纯函数**，自检直接断言边界（1023 B / 1024 B / 1.5 MB）。
+    /// 小于 1 KB 显示整数 B；更大的单位保留一位小数，避免列宽被长小数撑爆。
+    /// </summary>
+    public static string FormatTrafficBytes(long bytes)
+    {
+        if (bytes <= 0)
+        {
+            return "0 B";
+        }
+
+        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        var value = (double)bytes;
+        var unit = 0;
+
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return unit == 0
+            ? $"{bytes} B"
+            : $"{value:0.#} {units[unit]}";
+    }
+
+    /// <summary>
     /// 数字签名列的显示文本。
     ///
     /// 签名的短名字直接显示出来（例如「Google LLC」），这样扫一眼就能看出

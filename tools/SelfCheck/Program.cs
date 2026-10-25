@@ -151,6 +151,7 @@ internal static class Program
                         && !args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
@@ -369,6 +370,10 @@ internal static class Program
             else if (args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunStrictLockdownTest();
+            }
+            else if (args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunTrafficTest();
             }
             else if (args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -9290,6 +9295,133 @@ internal static class Program
     /// 3.5：服务代查路径的离线部分（进程解析 / DTO 编解码 / 回填）。
     /// 真实 IPC 需要服务在运行，放到 VM 验收。
     /// </summary>
+    /// <summary>
+    /// 3.5：每程序流量 —— 字节格式化 / 行数据回填 / 排序 / 协议字段 / 英文列头。
+    /// 真实 TCP 扩展统计的数字必须在 VM 里测，离线只钉住纯逻辑。
+    /// </summary>
+    private static void RunTrafficTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previous = Localizer.Current;
+
+        W("################################################################");
+        W("#   每程序流量（离线：格式化 / 回填 / 排序 / 协议 / 英文）        #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Localizer.Initialize("zh");
+
+            CheckAssertion(results, "命令名正确",
+                ServiceProtocol.Commands.QueryTraffic == "query.traffic");
+
+            CheckAssertion(results, "0 字节", TcpConnectionItem.FormatTrafficBytes(0) == "0 B");
+            CheckAssertion(results, "1023 字节仍用 B", TcpConnectionItem.FormatTrafficBytes(1023) == "1023 B");
+            CheckAssertion(results, "1024 字节 = 1 KB", TcpConnectionItem.FormatTrafficBytes(1024) == "1 KB");
+            CheckAssertion(results, "1536 字节 = 1.5 KB", TcpConnectionItem.FormatTrafficBytes(1536) == "1.5 KB");
+            CheckAssertion(results, "1 MiB = 1 MB", TcpConnectionItem.FormatTrafficBytes(1024L * 1024) == "1 MB");
+            CheckAssertion(results, "1.5 GiB = 1.5 GB",
+                TcpConnectionItem.FormatTrafficBytes(1536L * 1024 * 1024) == "1.5 GB");
+
+            var item = MakeTrafficItem(123, 0, 0);
+
+            CheckAssertion(results, "没有数据时三列都是破折号",
+                item.TrafficOutText == "—"
+                && item.TrafficInText == "—"
+                && item.TrafficTotalText == "—");
+
+            item.ApplyTraffic(500, 1500);
+            W($"    流量文本 = {item.TrafficOutText} / {item.TrafficInText} / {item.TrafficTotalText}");
+            CheckAssertion(results, "上传/下载/总计文本正确",
+                item.TrafficOutText == "500 B"
+                && item.TrafficInText == "1.5 KB"
+                && item.TrafficTotalText == "2 KB");
+
+            item.ApplyTraffic(-100, -1);
+            CheckAssertion(results, "负数被夹到 0",
+                item.TrafficOutText == "0 B" && item.TrafficInText == "0 B");
+
+            var slow = MakeTrafficItem(1, 10, 10);
+            var fast = MakeTrafficItem(2, 100, 500);
+
+            var byTotal = ConnectionFilter.Apply(
+                new[] { slow, fast }, null, ConnectionSortColumn.TrafficTotal, ascending: false);
+            CheckAssertion(results, "按总流量降序", ReferenceEquals(byTotal[0], fast));
+
+            var byOut = ConnectionFilter.Apply(
+                new[] { slow, fast }, null, ConnectionSortColumn.TrafficOut, ascending: true);
+            CheckAssertion(results, "按上传升序", ReferenceEquals(byOut[0], slow));
+
+            var dto = new TrafficDto
+            {
+                Key = @"c:\tools\a.exe",
+                Path = @"C:\Tools\a.exe",
+                Name = "a.exe",
+                IsPathKnown = true,
+                Pids = new List<int> { 12 },
+                BytesIn = 1234,
+                BytesOut = 56,
+                LastSeenUtc = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc),
+            };
+
+            var json = JsonSerializer.Serialize(
+                new ServiceResponse { Ok = true, Traffic = new List<TrafficDto> { dto } },
+                ServiceProtocol.JsonOptions);
+            W($"    流量 JSON = {json}");
+            CheckAssertion(results, "响应 JSON 带 traffic / bytesIn / bytesOut",
+                json.Contains("\"traffic\":[", StringComparison.Ordinal)
+                && json.Contains("\"bytesIn\":1234", StringComparison.Ordinal)
+                && json.Contains("\"bytesOut\":56", StringComparison.Ordinal)
+                && json.Contains("\"isPathKnown\":true", StringComparison.Ordinal));
+
+            Localizer.Initialize("en");
+
+            CheckAssertion(results, "英文：流量列头",
+                Localizer.T("上传") == "Up"
+                && Localizer.T("下载") == "Down"
+                && Localizer.T("总计") == "Total");
+
+            var tip = Localizer.T("本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。");
+            W($"    英文流量提示 = {tip}");
+            CheckAssertion(results, "英文：近似值提示无中文",
+                !System.Text.RegularExpressions.Regex.IsMatch(tip, "[\u4e00-\u9fff]"));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "流量检查执行完成", false);
+        }
+        finally
+        {
+            Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static TcpConnectionItem MakeTrafficItem(int pid, long bytesOut, long bytesIn)
+    {
+        var item = new TcpConnectionItem
+        {
+            Pid = pid,
+            ProcessName = $"p{pid}.exe",
+            ProcessPath = $@"C:\p{pid}.exe",
+            Protocol = "IPv4",
+            LocalPort = 50000,
+            RemoteAddress = IPAddress.Loopback,
+            RemotePort = 443,
+            State = TcpState.Established,
+        };
+
+        if (bytesOut != 0 || bytesIn != 0)
+        {
+            item.ApplyTraffic(bytesOut, bytesIn);
+        }
+
+        return item;
+    }
+
     /// <summary>
     /// 3.5：临时锁网 —— 协议字段 / 状态字段 / 倒计时格式化 / 英文文案。
     /// 真实 WFP 会话要服务和管理员，放到 VM 验收。

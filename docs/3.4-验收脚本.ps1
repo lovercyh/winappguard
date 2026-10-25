@@ -146,7 +146,7 @@ function Invoke-OwnerPhase {
     $log = Get-LatestLog
     Assert '存在服务日志' ($null -ne $log)
     if ($null -ne $log) {
-        $tail = Get-Content $log.FullName -Encoding UTF8 -Tail 400
+        $tail = Get-Content $log.FullName -Raw -Encoding UTF8
         Assert '日志出现 WAG-WFP-011（迁移成功）' ($tail -match 'WAG-WFP-011')
     }
 

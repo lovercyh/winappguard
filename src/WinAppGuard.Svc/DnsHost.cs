@@ -21,6 +21,8 @@ internal static class DnsHost
     private static DnsEtwMonitor? _monitor;
     private static System.Threading.Timer? _watchdog;
     private static readonly Dictionary<int, ProcessCacheEntry> ProcessCache = new();
+    private static int _startFailures;
+    private static bool _stopping;
 
     internal static bool Collecting
     {
@@ -29,6 +31,11 @@ internal static class DnsHost
 
     internal static void Start()
     {
+        lock (Gate)
+        {
+            _stopping = false;
+        }
+
         EnsureRunning();
 
         lock (Gate)
@@ -48,6 +55,7 @@ internal static class DnsHost
 
         lock (Gate)
         {
+            _stopping = true;
             _watchdog?.Dispose();
             _watchdog = null;
 
@@ -123,6 +131,11 @@ internal static class DnsHost
     {
         lock (Gate)
         {
+            if (_stopping)
+            {
+                return;
+            }
+
             if (_monitor is { IsRunning: true })
             {
                 return;
@@ -149,13 +162,21 @@ internal static class DnsHost
 
             if (!monitor.Start())
             {
-                ServiceLog.Warning(
-                    "WAG-DNS-001",
-                    $"DNS ETW collection failed to start: {monitor.LastError}.");
+                _startFailures++;
+
+                // 坏环境（例如系统禁用 ETW）下 30 秒重试一次，日志按 1/10 节流。
+                if (_startFailures == 1 || _startFailures % 10 == 0)
+                {
+                    ServiceLog.Warning(
+                        "WAG-DNS-001",
+                        $"DNS ETW collection failed to start ({_startFailures} consecutive attempts): {monitor.LastError}.");
+                }
+
                 monitor.Dispose();
                 return;
             }
 
+            _startFailures = 0;
             _monitor = monitor;
             ServiceLog.Info(
                 "WAG-DNS-002",

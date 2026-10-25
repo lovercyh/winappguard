@@ -31,9 +31,6 @@ internal static class TrafficHost
     /// <summary>采样周期。再短会明显增加 API 调用量，再长会漏掉更多短连接。</summary>
     private static readonly TimeSpan SampleInterval = TimeSpan.FromSeconds(2);
 
-    /// <summary>PID → 路径缓存有效期（避免每 2 秒对每个 PID 都开一次进程句柄）。</summary>
-    private static readonly TimeSpan ProcessCacheTtl = TimeSpan.FromSeconds(60);
-
     /// <summary>连接消失后保留多久，避免刚好在关闭瞬间丢掉最后一次增量。</summary>
     private static readonly TimeSpan ConnectionRetention = TimeSpan.FromSeconds(10);
 
@@ -50,8 +47,6 @@ internal static class TrafficHost
     /// <summary>聚合键（路径小写 / pid:123）→ 累计值。</summary>
     private static readonly Dictionary<string, TrafficAccumulator> Totals =
         new(StringComparer.OrdinalIgnoreCase);
-
-    private static readonly Dictionary<int, ProcessCacheEntry> ProcessCache = new();
 
     /// <summary>统计连续失败次数，日志按 1/30 节流，避免坏环境下每 2 秒刷一条。</summary>
     private static int _failureLogCounter;
@@ -94,7 +89,6 @@ internal static class TrafficHost
 
             Connections.Clear();
             Totals.Clear();
-            ProcessCache.Clear();
         }
 
         ServiceLog.Info("WAG-TRAFFIC-002", "Traffic collection stopped.");
@@ -251,22 +245,8 @@ internal static class TrafficHost
 
     private static (string? Path, string Name, bool Known) ResolveProcess(int pid)
     {
-        var now = DateTime.UtcNow;
-
-        if (ProcessCache.TryGetValue(pid, out var cached)
-            && now - cached.ResolvedUtc < ProcessCacheTtl)
-        {
-            return string.IsNullOrEmpty(cached.Path)
-                ? (null, $"PID {pid}", false)
-                : (cached.Path, Path.GetFileName(cached.Path!), true);
-        }
-
-        if (ProcessCache.Count > 512)
-        {
-            // 进程数不多的机器不会走到这里；PID 频繁复用时清一次，避免无限增长。
-            ProcessCache.Clear();
-        }
-
+        // 刻意不做 PID → 路径缓存：PID 会复用，缓存会让「新程序」短暂继承旧程序的流量。
+        // 只有真正产生流量的 PID 才会走到这里，每个采样周期最多几十次 OpenProcess，开销可以忽略。
         string? path;
 
         try
@@ -277,12 +257,6 @@ internal static class TrafficHost
         {
             path = null;
         }
-
-        ProcessCache[pid] = new ProcessCacheEntry
-        {
-            Path = path,
-            ResolvedUtc = now,
-        };
 
         return string.IsNullOrEmpty(path)
             ? (null, $"PID {pid}", false)
@@ -299,17 +273,6 @@ internal static class TrafficHost
                      .ToList())
         {
             Connections.Remove(key);
-        }
-
-        if (ProcessCache.Count > 512)
-        {
-            foreach (var pid in ProcessCache
-                         .Where(pair => now - pair.Value.ResolvedUtc >= ProcessCacheTtl)
-                         .Select(pair => pair.Key)
-                         .ToList())
-            {
-                ProcessCache.Remove(pid);
-            }
         }
     }
 
@@ -441,12 +404,6 @@ internal static class TrafficHost
         public ulong LastIn;
         public ulong LastOut;
         public DateTime LastSeenUtc;
-    }
-
-    private sealed class ProcessCacheEntry
-    {
-        public string? Path;
-        public DateTime ResolvedUtc;
     }
 
     private sealed class TrafficAccumulator

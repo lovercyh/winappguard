@@ -151,7 +151,7 @@ public sealed partial class MainForm
 
     private async Task RefreshDnsAsync()
     {
-        if (_dnsLoading || IsDisposed || Disposing)
+        if (SuppressBackgroundServices || _dnsLoading || IsDisposed || Disposing)
         {
             return;
         }

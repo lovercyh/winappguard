@@ -9710,7 +9710,10 @@ internal static class Program
             var stdout = server.StandardOutput.ReadToEndAsync();
             var stderr = server.StandardError.ReadToEndAsync();
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            using var http = new HttpClient(new HttpClientHandler { UseProxy = false })
+            {
+                Timeout = TimeSpan.FromSeconds(30),
+            };
 
             HttpResponseMessage? response = null;
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);

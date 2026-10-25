@@ -9694,6 +9694,27 @@ internal static class Program
                 // x64 下由 evntrace.h / evntcons.h 的字段顺序推出来；大小不对说明 P/Invoke 布局错了。
                 CheckAssertion(results, "EVENT_TRACE_LOGFILEW 大小 = 448", logfileSize == 448);
                 CheckAssertion(results, "EVENT_RECORD 大小 = 112", recordSize == 112);
+
+                // 默认值里有 null 字符串 / null 数组；封送一次，确认不会在 OpenTrace 前抛异常。
+                var logfile = Activator.CreateInstance(logfileType);
+                var buffer = Marshal.AllocHGlobal(logfileSize);
+                var marshalled = false;
+
+                try
+                {
+                    Marshal.StructureToPtr(logfile!, buffer, false);
+                    marshalled = true;
+                }
+                catch (Exception ex)
+                {
+                    W($"    ！封送失败：{ex.GetType().Name}: {ex.Message}");
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+
+                CheckAssertion(results, "EVENT_TRACE_LOGFILEW 能安全封送", marshalled);
             }
 
             var dto = new DnsDto

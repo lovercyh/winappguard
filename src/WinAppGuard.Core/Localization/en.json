@@ -167,6 +167,7 @@
     "清空服务内存里的 DNS 查询记录": "Clear the DNS query records held in service memory",
     "只影响本次服务运行；之后的新查询会继续记录": "Only affects this service run; new queries are recorded afterwards",
     "记录本来就不会写盘，服务重启后同样会清空。": "Records are never written to disk; a service restart also clears them.",
+    "不会修改任何系统 DNS 设置。": "No system DNS setting is changed.",
     "清空记录": "Clear records",
     "正在启动防护服务…": "Starting the protection service…",
     "启动成功后界面会自动恢复可编辑状态。": "The UI will become editable once the service starts.",

@@ -117,12 +117,9 @@ internal static class TrafficHost
             lock (Gate)
             {
                 var now = DateTime.UtcNow;
-                var seen = new HashSet<string>(StringComparer.Ordinal);
 
                 foreach (var row in rows)
                 {
-                    seen.Add(row.Key);
-
                     if (!Connections.TryGetValue(row.Key, out var state) || state.Pid != row.Pid)
                     {
                         // 新连接（或 4 元组被复用）：启用统计，先记基线。
@@ -233,6 +230,7 @@ internal static class TrafficHost
                 Path = known ? path : null,
                 Name = name,
                 IsPathKnown = known,
+                Pids = known ? null : new List<int> { pid },
             };
 
             Totals[key] = item;
@@ -412,6 +410,7 @@ internal static class TrafficHost
         public string? Path;
         public string Name = string.Empty;
         public bool IsPathKnown;
+        public List<int>? Pids;
         public long BytesIn;
         public long BytesOut;
         public DateTime LastSeenUtc;
@@ -422,6 +421,7 @@ internal static class TrafficHost
             Path = Path,
             Name = Name,
             IsPathKnown = IsPathKnown,
+            Pids = Pids,
             BytesIn = BytesIn,
             BytesOut = BytesOut,
             LastSeenUtc = LastSeenUtc,

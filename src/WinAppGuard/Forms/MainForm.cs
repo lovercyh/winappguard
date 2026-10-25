@@ -1382,6 +1382,86 @@ public partial class MainForm : Form
     /// 绝不重新赋值 —— BindingSource 绑的是这个实例本身，
     /// 一换实例表格就永远是空的（见该字段的注释）。
     /// </summary>
+    /// <summary>
+    /// 3.5：界面是普通权限，读不到提权/受保护进程的路径；让服务代查并回填。
+    /// 只查当前扫描结果里路径为空的 PID，最多 64 个，失败静默（不打扰用户）。
+    /// </summary>
+    private async Task ResolveMissingProcessPathsAsync()
+    {
+        var targets = _scannedConnections
+            .Where(item => string.IsNullOrEmpty(item.ProcessPath))
+            .Where(item => item.Pid > 4)
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        var pids = targets
+            .Select(item => item.Pid)
+            .Distinct()
+            .Take(64)
+            .ToList();
+
+        var response = await Task.Run(() =>
+        {
+            try
+            {
+                return ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.QueryProcessPaths,
+                        Pids = pids,
+                    },
+                    TimeSpan.FromSeconds(3),
+                    out _);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        });
+
+        if (response is not { Ok: true, ProcessPaths: not null }
+            || IsDisposed
+            || Disposing)
+        {
+            return;
+        }
+
+        var paths = response.ProcessPaths
+            .Where(item => !string.IsNullOrEmpty(item.Path))
+            .GroupBy(item => item.Pid)
+            .ToDictionary(group => group.Key, group => group.First().Path!);
+
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        // 扫描可能在这期间又跑了一轮：只回填仍然在列表里的对象。
+        var active = new HashSet<TcpConnectionItem>(_scannedConnections);
+        var changed = false;
+
+        foreach (var item in targets)
+        {
+            if (active.Contains(item) && paths.TryGetValue(item.Pid, out var path))
+            {
+                item.ApplyResolvedPath(path);
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        var selectedKey = CaptureSelection();
+        RebuildView();
+        RebindGrid(selectedKey);
+    }
     private void RebuildView()
     {
         var view = ConnectionFilter.Apply(_scannedConnections, _searchKeyword, _sortColumn, _sortAscending);
@@ -2717,6 +2797,9 @@ public partial class MainForm : Form
 
             // 归属信息同样在后台补：Request 立即返回，不阻塞界面。
             RequestOwnershipForVisibleConnections();
+
+            // 3.5：界面读不到的提权/受保护进程路径，交给服务（SYSTEM）代查。
+            _ = ResolveMissingProcessPathsAsync();
         }
         catch (Exception ex)
         {

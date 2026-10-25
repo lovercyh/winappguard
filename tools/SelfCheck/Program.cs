@@ -149,6 +149,7 @@ internal static class Program
                          && !args.Contains("--ui-language-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--cli-language-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
@@ -359,6 +360,10 @@ internal static class Program
             else if (args.Contains("--cli-language-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunCliLanguageTest();
+            }
+            else if (args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunProcessPathTest();
             }
             else if (args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -9248,6 +9253,83 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
+    /// <summary>
+    /// 3.5：服务代查路径的离线部分（进程解析 / DTO 编解码 / 回填）。
+    /// 真实 IPC 需要服务在运行，放到 VM 验收。
+    /// </summary>
+    private static void RunProcessPathTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   进程路径代查（离线：解析 / DTO / 回填）                      #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var ownPath = ProcessResolver.TryGetImagePath(Environment.ProcessId);
+            W($"    当前进程路径 = {ownPath}");
+            CheckAssertion(results, "能读取当前进程路径",
+                !string.IsNullOrEmpty(ownPath) && File.Exists(ownPath));
+
+            CheckAssertion(results, "PID 0 返回 null",
+                ProcessResolver.TryGetImagePath(0) is null);
+
+            var item = new TcpConnectionItem
+            {
+                Pid = 123,
+                ProcessName = "PID 123",
+                ProcessPath = string.Empty,
+                Protocol = "IPv4",
+                LocalPort = 50000,
+                RemoteAddress = IPAddress.Loopback,
+                RemotePort = 443,
+                State = TcpState.Established,
+            };
+
+            item.ApplyResolvedPath(@"C:\Tools\a.exe");
+            CheckAssertion(results, "回填后路径正确",
+                item.ProcessPath == @"C:\Tools\a.exe");
+            CheckAssertion(results, "回填后程序名正确",
+                item.ProcessName == "a.exe");
+
+            var request = new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.QueryProcessPaths,
+                Pids = new List<int> { 1, 2 },
+            };
+
+            var requestJson = JsonSerializer.Serialize(request, ServiceProtocol.JsonOptions);
+            W($"    请求 JSON = {requestJson}");
+            CheckAssertion(results, "请求 JSON 使用 camelCase 且带 pids",
+                requestJson.Contains("\"pids\":[1,2]", StringComparison.Ordinal));
+
+            var response = new ServiceResponse
+            {
+                Ok = true,
+                ProcessPaths = new List<ProcessPathDto>
+                {
+                    new() { Pid = 1, Path = @"C:\Tools\a.exe" },
+                },
+            };
+
+            var responseJson = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+            W($"    响应 JSON = {responseJson}");
+            CheckAssertion(results, "响应 JSON 带 processPaths",
+                responseJson.Contains("\"processPaths\"", StringComparison.Ordinal));
+            CheckAssertion(results, "响应 JSON 带 pid/path",
+                responseJson.Contains("\"pid\":1", StringComparison.Ordinal)
+                && responseJson.Contains(@"C:\\Tools\\a.exe", StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "进程路径检查执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
     private static void RunCliTest()
     {
         var results = new List<(string Title, bool Passed)>();

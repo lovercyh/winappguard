@@ -19,10 +19,10 @@ public sealed class TcpConnectionItem
     public required int Pid { get; init; }
 
     /// <summary>程序名，例如 chrome.exe。拿不到路径时会退化成「PID 1234」。</summary>
-    public required string ProcessName { get; init; }
+    public required string ProcessName { get; set; }
 
     /// <summary>可执行文件完整路径。拿不到时为空字符串。</summary>
-    public required string ProcessPath { get; init; }
+    public required string ProcessPath { get; set; }
 
     /// <summary>协议版本，取值 "IPv4" 或 "IPv6"。</summary>
     public required string Protocol { get; init; }
@@ -93,6 +93,13 @@ public sealed class TcpConnectionItem
         string.IsNullOrEmpty(ProcessPath) ? "—" : Localizer.T(IsBlocked ? "已阻止" : "未阻止");
 
     /// <summary>
+    /// <summary>3.5：服务代查到路径后回填名称与路径。</summary>
+    public void ApplyResolvedPath(string path)
+    {
+        ProcessPath = path;
+        ProcessName = Path.GetFileName(path);
+    }
+
     /// 数字签名列的显示文本。
     ///
     /// 签名的短名字直接显示出来（例如「Google LLC」），这样扫一眼就能看出

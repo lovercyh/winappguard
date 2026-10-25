@@ -344,6 +344,48 @@ internal sealed class ControlServer : IDisposable
         TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
     }
 
+    /// <summary>
+    /// 3.5：批量 PID → 路径。只返回当前仍存在且服务能打开的进程。
+    /// </summary>
+    private static ServiceResponse ResolveProcessPaths(ServiceRequest request)
+    {
+        var paths = new List<ProcessPathDto>();
+        var pids = (request.Pids ?? new List<int>())
+            .Distinct()
+            .Take(64);
+
+        foreach (var pid in pids)
+        {
+            if (pid <= 0)
+            {
+                paths.Add(new ProcessPathDto { Pid = pid, Error = "invalid_pid" });
+                continue;
+            }
+
+            try
+            {
+                var path = ProcessResolver.TryGetImagePath(pid);
+
+                paths.Add(new ProcessPathDto
+                {
+                    Pid = pid,
+                    Path = path,
+                    Error = string.IsNullOrEmpty(path) ? "unavailable" : null,
+                });
+            }
+            catch (Exception)
+            {
+                paths.Add(new ProcessPathDto { Pid = pid, Error = "unavailable" });
+            }
+        }
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            ProcessPaths = paths,
+        };
+    }
     private static void TryWrite(NamedPipeServerStream pipe, ServiceResponse response, CancellationToken token)
     {
         try
@@ -401,6 +443,14 @@ internal sealed class ControlServer : IDisposable
                 Ok = false,
                 Error = "修改规则需要管理员权限（请从界面操作，会弹出 UAC）。",
             };
+        }
+
+        // 3.5：服务以 SYSTEM 运行，能读到界面读不到的提权/受保护进程路径。
+        if (string.Equals(
+                request.Command, ServiceProtocol.Commands.QueryProcessPaths,
+                StringComparison.Ordinal))
+        {
+            return ResolveProcessPaths(request);
         }
 
         return request.Command switch

@@ -45,6 +45,9 @@ public sealed class ServiceRequest
     public bool? AuditDomainLookup { get; set; }
 
     public int? AuditRetentionDays { get; set; }
+
+    /// <summary>3.5：批量查询路径的 PID 列表（最多 64 个）。</summary>
+    public List<int>? Pids { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -85,6 +88,9 @@ public sealed class ServiceResponse
 
     /// <summary>给人看的一句话（严格模式开关的结果说明）。</summary>
     public string? Message { get; set; }
+
+    /// <summary>3.5：会话中 PID 对应的路径。</summary>
+    public List<ProcessPathDto>? ProcessPaths { get; set; }
 }
 
 /// <summary>一条规则的 IPC 表示（与界面表格字段对应）。</summary>
@@ -110,6 +116,17 @@ public sealed class RuleDto
     public string Group { get; set; } = string.Empty;
 
     public bool Enabled { get; set; } = true;
+}
+
+/// <summary>3.5：一个 PID 的路径解析结果。路径为 null 表示进程已退出或无法读取。</summary>
+public sealed class ProcessPathDto
+{
+    public int Pid { get; set; }
+
+    public string? Path { get; set; }
+
+    /// <summary>英文错误码（not_found / access_denied / invalid_pid），界面负责翻译。</summary>
+    public string? Error { get; set; }
 }
 
 /// <summary>服务状态快照（v1）。</summary>

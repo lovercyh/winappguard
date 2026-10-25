@@ -161,7 +161,8 @@ internal static class Program
                          && !args.Contains("--protected-mode-owner-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--service-35-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--service-35-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--loopback-download-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -305,6 +306,10 @@ internal static class Program
             else if (args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServicePingTest();
+            }
+            else if (args.Contains("--loopback-download-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunLoopbackDownloadTest();
             }
             else if (args.Contains("--service-35-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -9599,6 +9604,30 @@ internal static class Program
     /// 在回环上起一个限速 HTTP 服务，让连接持续约 8 秒 ——
     /// 短于采样周期的连接会被 TCP 扩展统计漏掉，验收必须避开这个坑。
     /// </summary>
+    /// <summary>
+    /// 3.5：只验证回环下载链路（子进程服务 + 客户端），不需要防护服务。
+    /// 用来在 VM 上快速判断「下载方向统计不到」是测试环境问题还是采集实现问题。
+    /// </summary>
+    private static void RunLoopbackDownloadTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   回环下载链路（独立 PowerShell 服务进程，不需要防护服务）     #");
+        W("################################################################");
+        W();
+
+        const long total = 1024 * 1024;
+        var received = DownloadLoopbackPayload(total, out var error);
+
+        W($"    期望 {total} 字节，实际收到 {received} 字节（{error ?? "ok"}）");
+
+        CheckAssertion(results, "回环下载完整", received == total);
+        CheckAssertion(results, "回环下载无错误", string.IsNullOrEmpty(error));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static long DownloadLoopbackPayload(long totalBytes, out string? error)
     {
         error = null;
@@ -9613,6 +9642,8 @@ internal static class Program
 
         var script = $$"""
             $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            $WarningPreference = 'SilentlyContinue'
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, {{port}})
             $listener.Start()
             try {
@@ -9724,9 +9755,13 @@ internal static class Program
             _ = stdout.GetAwaiter().GetResult();
             var serverError = stderr.GetAwaiter().GetResult();
 
-            if (serverError.Length > 0)
+            if (!server.HasExited)
             {
-                error = $"回环服务输出：{serverError.Trim()}";
+                error = "回环服务进程没有在下载结束后退出。";
+            }
+            else if (server.ExitCode != 0)
+            {
+                error = $"回环服务退出码 {server.ExitCode}：{serverError.Trim()}";
             }
         }
         catch (Exception ex)

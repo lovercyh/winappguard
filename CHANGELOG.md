@@ -20,8 +20,8 @@
 
 ### 安全
 
-- WFP 子层/过滤器在**创建时**附带 owner-only DACL：`SYSTEM + 所有者` 完全控制，
-  不再授予 Administrators 删除/改 ACL 的权限。
+- WFP 子层/过滤器在**创建时**附带 owner-only **受保护** DACL：`SYSTEM + 所有者` 完全控制，
+  对象 Owner 设为创建者（服务 = SYSTEM），不再留成 Administrators；DACL 设置 `SE_DACL_PROTECTED`，拒绝父容器继承 ACE。
 - 升级后首次启动自动迁移旧对象：按规则快照删除并重建，失败不写标记、下次重试。
 - 迁移失败会立即按快照补回规则，避免把用户留在「规则消失」状态。
 - 有 WFP 规则时，非所有者运行卸载器或 `--recover` 会被明确拒绝，避免半卸载；
@@ -31,7 +31,7 @@
 
 ### 变更
 
-- 新增 `--wfp-dacl-sddl-test`（离线 5 项）与 `--wfp-dacl-test`（真实对象，需管理员）。
+- 新增 `--wfp-dacl-sddl-test`（离线 6 项）与 `--wfp-dacl-test`（真实对象，需管理员）。
 - 服务日志新增 `WAG-WFP-006`～`WAG-WFP-013` 事件码。
 - 程序集版本升到 **3.4**。
 

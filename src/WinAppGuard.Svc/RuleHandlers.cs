@@ -472,7 +472,7 @@ internal sealed class RuleHandlers
 
                 File.WriteAllText(
                     ServicePaths.WfpDaclMarkerFile,
-                    ownerSid,
+                    DaclMarkerValue(ownerSid),
                     new System.Text.UTF8Encoding(false));
 
                 ServiceLog.Operation(
@@ -498,6 +498,11 @@ internal sealed class RuleHandlers
         }
     }
 
+    /// <summary>标记内容的版本前缀：换 SDDL 时改版本，旧标记自动触发重新迁移。</summary>
+    private const string DaclMarkerVersion = "v3:";
+
+    private static string DaclMarkerValue(string ownerSid) => DaclMarkerVersion + ownerSid;
+
     private static bool IsDaclMarkerCurrent(string ownerSid)
     {
         try
@@ -508,7 +513,7 @@ internal sealed class RuleHandlers
             }
 
             var saved = File.ReadAllText(ServicePaths.WfpDaclMarkerFile).Trim();
-            return string.Equals(saved, ownerSid, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(saved, DaclMarkerValue(ownerSid), StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception)
         {

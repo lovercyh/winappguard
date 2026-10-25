@@ -793,18 +793,46 @@ internal sealed class WfpEngine : IDisposable
     {
         const string systemAce = "(A;;0xF01FF;;;SY)";
 
+        // 对象的 Owner 必须显式设置，不能留成 BA（Administrators）：
+        // Windows 会给对象 Owner 隐式 WRITE_DAC，如果 Owner 还是 BA，
+        // 即使 DACL 里没有 BA，管理员仍能改 ACL 再删除。
+        // 设成创建者自己（服务 = SYSTEM，CLI/自检 = 当前所有者）即可：
+        // 创建者把 Owner 设成自己不需要额外特权。
+        var creatorSid = GetCreatorSid();
+
         if (string.IsNullOrWhiteSpace(ownerSid))
         {
-            return "D:" + systemAce + "(A;;0xF01FF;;;BA)";
+            return $"O:{creatorSid}G:SYD:P{systemAce}(A;;0xF01FF;;;BA)";
         }
 
-        // 所有者就是 SYSTEM（理论上不会出现）：不重复添加，也不需要 BA。
+        // 所有者就是 SYSTEM：不重复添加，也不需要 BA。
         if (string.Equals(ownerSid, "S-1-5-18", StringComparison.OrdinalIgnoreCase))
         {
-            return "D:" + systemAce;
+            return $"O:{creatorSid}G:SYD:P{systemAce}";
         }
 
-        return $"D:{systemAce}(A;;0xF01FF;;;{ownerSid})";
+        return $"O:{creatorSid}G:SYD:P{systemAce}(A;;0xF01FF;;;{ownerSid})";
+    }
+
+    private static string? _creatorSid;
+
+    private static string GetCreatorSid()
+    {
+        if (_creatorSid is not null)
+        {
+            return _creatorSid;
+        }
+
+        try
+        {
+            _creatorSid = WindowsIdentity.GetCurrent().User?.Value ?? "SY";
+        }
+        catch (Exception)
+        {
+            _creatorSid = "SY";
+        }
+
+        return _creatorSid;
     }
 
     private static string? _ownerSid;

@@ -7197,17 +7197,24 @@ internal static class Program
             sddl.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.Ordinal));
         CheckAssertion(results, "不再包含 Administrators",
             !sddl.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
+        CheckAssertion(results, "DACL 标记为 protected",
+            sddl.Contains("D:P", StringComparison.Ordinal));
+        CheckAssertion(results, "对象 Owner 不是 Administrators",
+            sddl.Contains("O:BA", StringComparison.OrdinalIgnoreCase) == false);
 
         var fallback = WfpEngine.BuildProtectiveSddl(null);
         W($"    无所有者 = {fallback}");
         CheckAssertion(results, "没有所有者时回退 SY + BA",
             fallback.Contains(full, StringComparison.Ordinal)
             && fallback.Contains("(A;;0xF01FF;;;BA)", StringComparison.Ordinal));
+        CheckAssertion(results, "回退时 DACL 仍是 protected",
+            fallback.Contains("D:P", StringComparison.Ordinal));
 
         var systemOwner = WfpEngine.BuildProtectiveSddl("S-1-5-18");
         W($"    所有者是 SYSTEM = {systemOwner}");
         CheckAssertion(results, "所有者是 SYSTEM 时不重复添加",
-            systemOwner == "D:(A;;0xF01FF;;;SY)");
+            systemOwner.Contains("D:P(A;;0xF01FF;;;SY)", StringComparison.Ordinal)
+            && !systemOwner.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
 
         PrintSummary(results, showFirewallResidue: false);
     }
@@ -7224,6 +7231,20 @@ internal static class Program
         W("################################################################");
         W();
 
+        // SDDL 里权限可能写成 0xF01FF，也可能写成等价的符号串。
+        static bool HasFullAce(string? sddl, string sid)
+            => sddl is not null
+               && (sddl.Contains($"(A;;0xF01FF;;;{sid})", StringComparison.OrdinalIgnoreCase)
+                   || sddl.Contains(
+                       $"(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;{sid})",
+                       StringComparison.OrdinalIgnoreCase));
+
+        static bool IsProtected(string? sddl)
+            => sddl is not null && sddl.Contains("D:P", StringComparison.Ordinal);
+
+        static bool HasInheritedAces(string? sddl)
+            => sddl is not null && sddl.Contains(";ID;", StringComparison.OrdinalIgnoreCase);
+
         try
         {
             var config = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory).ReadConfig();
@@ -7238,28 +7259,42 @@ internal static class Program
             W($"    子层 SDDL = {sublayerSddl ?? "<读取失败>"}");
 
             CheckAssertion(results, "子层 DACL 可读", sublayerSddl is not null);
-            CheckAssertion(results, "子层包含 SYSTEM",
-                sublayerSddl?.Contains("(A;;0xF01FF;;;SY)", StringComparison.OrdinalIgnoreCase) == true);
-            CheckAssertion(results, "子层包含所有者",
-                sublayerSddl?.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.OrdinalIgnoreCase) == true);
-            CheckAssertion(results, "子层不包含 Administrators",
+            CheckAssertion(results, "子层 DACL 已保护（不接受继承）",
+                IsProtected(sublayerSddl));
+            CheckAssertion(results, "子层没有继承 ACE",
+                !HasInheritedAces(sublayerSddl));
+            CheckAssertion(results, "子层 Owner 不是 Administrators",
+                sublayerSddl?.Contains("O:BA", StringComparison.OrdinalIgnoreCase) == false);
+            CheckAssertion(results, "子层 SYSTEM 完全控制",
+                HasFullAce(sublayerSddl, "SY"));
+            CheckAssertion(results, "子层所有者完全控制",
+                HasFullAce(sublayerSddl, ownerSid));
+            CheckAssertion(results, "子层没有 Administrators ACE",
                 sublayerSddl?.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase) == false);
 
             var keys = engine.ListOurFilterKeys();
             string? temporaryRule = null;
+            string? temporaryExe = null;
 
-            // 没有规则时临时建一条（目标就是 SelfCheck 自己），检查完立刻删掉。
-            // 这样验收脚本不依赖机器上原本有没有规则。
+            // 没有规则时临时建一条。用 notepad.exe 的临时副本：
+            //   - 不能用 SelfCheck 自己（自我保护会拒绝）；
+            //   - 不能直接用 notepad.exe（万一用户已经阻止了它，清理时会误删用户规则）。
             if (keys.Count == 0)
             {
-                var self = Environment.ProcessPath;
+                var notepad = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "notepad.exe");
 
-                if (string.IsNullOrEmpty(self))
+                if (!File.Exists(notepad))
                 {
-                    throw new InvalidOperationException("拿不到 SelfCheck 自身路径。");
+                    throw new FileNotFoundException("找不到用于 DACL 测试的 notepad.exe。", notepad);
                 }
 
-                temporaryRule = RuleEngine.CreateBlockRule(self);
+                temporaryExe = Path.Combine(
+                    Path.GetTempPath(), $"wag-dacl-test-{Guid.NewGuid():N}.exe");
+                File.Copy(notepad, temporaryExe);
+
+                temporaryRule = RuleEngine.CreateBlockRule(temporaryExe);
                 keys = engine.ListOurFilterKeys();
                 W($"    临时创建测试规则：{temporaryRule}");
             }
@@ -7283,11 +7318,15 @@ internal static class Program
 
                     filterChecks++;
 
-                    CheckAssertion(results, $"过滤器 {key:N} 包含 SYSTEM",
-                        filterSddl.Contains("(A;;0xF01FF;;;SY)", StringComparison.OrdinalIgnoreCase));
-                    CheckAssertion(results, $"过滤器 {key:N} 包含所有者",
-                        filterSddl.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.OrdinalIgnoreCase));
-                    CheckAssertion(results, $"过滤器 {key:N} 不包含 Administrators",
+                    CheckAssertion(results, $"过滤器 {key:N} 已保护（不接受继承）",
+                        IsProtected(filterSddl));
+                    CheckAssertion(results, $"过滤器 {key:N} 没有继承 ACE",
+                        !HasInheritedAces(filterSddl));
+                    CheckAssertion(results, $"过滤器 {key:N} SYSTEM 完全控制",
+                        HasFullAce(filterSddl, "SY"));
+                    CheckAssertion(results, $"过滤器 {key:N} 所有者完全控制",
+                        HasFullAce(filterSddl, ownerSid));
+                    CheckAssertion(results, $"过滤器 {key:N} 没有 Administrators ACE",
                         !filterSddl.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
                 }
 
@@ -7299,6 +7338,18 @@ internal static class Program
                 {
                     _ = RuleEngine.DeleteRule(temporaryRule);
                     W("    临时测试规则已删除。");
+                }
+
+                if (temporaryExe is not null)
+                {
+                    try
+                    {
+                        File.Delete(temporaryExe);
+                    }
+                    catch (Exception)
+                    {
+                        // 临时文件删不掉不影响结论。
+                    }
                 }
             }
         }

@@ -139,7 +139,7 @@ function Invoke-OwnerPhase {
     Assert '能读到所有者 SID' (-not [string]::IsNullOrWhiteSpace($ownerSid)) $ownerSid
     if (Test-Path $marker) {
         $saved = (Get-Content $marker -Raw).Trim()
-        Assert '标记内容 = 所有者 SID' ($saved -eq $ownerSid) $saved
+        Assert '标记内容 = v3:所有者 SID' ($saved -eq "v3:$ownerSid") $saved
     }
 
     Write-Step '4. 服务日志'

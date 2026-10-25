@@ -310,8 +310,8 @@ exe 没有代码签名 —— 代码签名证书要花钱，而这是个免费�
   只接受所有者 ECDSA 签名。
 - **管道/服务 ACL**：管道只允许 `SYSTEM` + 所有者；服务 DACL 给
   `Administrators` 仅查询/启动，其他账户无权限。管理员仍可通过接管所有权绕过。
-- **WFP 对象 ACL（3.4 起）**：子层与过滤器只允许 `SYSTEM` + 所有者删除/改 ACL，
-  `Administrators` 不再有写权限。拥有 `SeTakeOwnership` / `SeRestore` 的管理员仍可先夺取所有权，
+- **WFP 对象 ACL（3.4 起）**：子层与过滤器使用**受保护 DACL**（`SE_DACL_PROTECTED`），
+  对象 Owner 设为创建者（服务 = SYSTEM），只允许 `SYSTEM` + 所有者删除/改 ACL；父容器的继承 ACE 被拒绝，`Administrators` 不再有写权限。拥有 `SeTakeOwnership` / `SeRestore` 的管理员仍可先夺取所有权，
   所以这是提高门槛，不是“管理员绝对删不掉”。
 - **密钥**：`%ProgramData%\WinAppGuard\protected-mode\client-key.dpapi`
   （DPAPI 用户级）；`config.json` 只存公钥/entropy/指纹。卸载时始终删除。

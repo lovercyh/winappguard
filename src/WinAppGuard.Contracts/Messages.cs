@@ -246,8 +246,11 @@ public sealed class ServiceStatus
     /// <summary>审计采集是否真的在跑（服务实际状态）。</summary>
     public bool AuditCollecting { get; set; }
 
-    /// <summary>3.5：流量采集是否在跑（TCP 扩展统计不可用时为 false）。</summary>
+    /// <summary>3.5：流量采集是否在跑（ETW 会话不可用时为 false）。</summary>
     public bool TrafficCollecting { get; set; }
+
+    /// <summary>3.5：本次服务运行解析到的网络数据事件数（诊断/验收用）。</summary>
+    public long TrafficEventsSeen { get; set; }
 
     /// <summary>3.5：DNS ETW 采集是否在跑（启动失败/被系统停止时为 false）。</summary>
     public bool DnsCollecting { get; set; }

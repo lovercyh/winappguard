@@ -125,7 +125,7 @@ public sealed class TcpConnectionItem
         HasTrafficData ? FormatTrafficBytes(TrafficBytesOut + TrafficBytesIn) : "—";
 
     /// <summary>流量列的悬停提示：把「近似值」的限制写清楚。</summary>
-    public string TrafficTooltip => Localizer.T("本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。");
+    public string TrafficTooltip => Localizer.T("本次运行累计（TCP + UDP 网络事件）；短连接可能漏计。");
 
     /// <summary>3.5：把服务返回的该程序累计流量填到这一行。</summary>
     public void ApplyTraffic(long bytesOut, long bytesIn)

@@ -21,8 +21,9 @@ public sealed record DnsQueryRecord(
 /// 边界（必须如实告知用户）：
 ///   - 只能看到经过 Windows DNS 客户端的查询；浏览器/应用自己做 DoH/DoT 时看不到；
 ///   - 命中 hosts 文件、或纯缓存且不发事件的场景可能没有记录；
+///   - 部分 Windows 版本会把查询记到 DNS Client 服务（svchost）名下，无法反推真实程序；
 ///   - 记录保存在内存环形缓冲里（默认 2000 条），服务重启即清空；
-///   - 只记域名 / PID / 结果码，不记录响应 IP 内容之外的任何载荷。
+///   - 只记域名 / PID / 结果码，不记录响应内容。
 /// </summary>
 public sealed class DnsEtwMonitor : IDisposable
 {
@@ -37,91 +38,47 @@ public sealed class DnsEtwMonitor : IDisposable
     /// <summary>ETW 的 EventTrace 自身 GUID，用来跳过元数据事件。</summary>
     private static readonly Guid EventTraceGuid = new("68FDD900-4A3E-11D1-84F4-0000F80464E3");
 
-    private const uint WnodeFlagTracedGuid = 0x00020000;
-    private const uint EventTraceRealTimeMode = 0x00000100;
-    private const uint ProcessTraceModeRealTime = 0x00000100;
-    private const uint ProcessTraceModeEventRecord = 0x10000000;
-    private const uint EventControlCodeEnableProvider = 1;
-    private const uint EventTraceControlStop = 1;
-    private const byte TraceLevelInformation = 4;
-
     private const int ErrorSuccess = 0;
-    private const int ErrorInsufficientBuffer = 122;
-    private const int ErrorAlreadyExists = 183;
-    private const int ErrorCancelled = 1223;
-    private const int ErrorWmiInstanceNotFound = 4201;
 
     private readonly object _gate = new();
     private readonly LinkedList<Entry> _records = new();
 
-    /// <summary>(pid, 域名) → 最近一条记录，用来合并 3006/3008 这类同一次查询的多个事件。</summary>
+    /// <summary>(pid, 域名) → 最近一条记录，用来合并同一次查询的多个事件。</summary>
     private readonly Dictionary<string, LinkedListNode<Entry>> _recent = new(StringComparer.Ordinal);
 
     private readonly int _capacity;
 
-    private Thread? _thread;
-    private ulong _traceHandle;
-    private IntPtr _sessionProperties;
-    private EventTraceLogfile _logfile;
-    private EventRecordCallback? _callback;
-    private bool _stopping;
-    private string? _lastError;
+    private EtwRealtimeSession? _session;
 
     public DnsEtwMonitor(int capacity = 2000)
     {
         _capacity = Math.Clamp(capacity, 100, 10_000);
     }
 
-    public bool IsRunning { get; private set; }
+    public bool IsRunning => _session?.IsRunning == true;
 
-    public string? LastError => _lastError;
+    public string? LastError => _session?.LastError;
 
     /// <summary>启动实时会话。失败返回 false，原因见 <see cref="LastError"/>。</summary>
     public bool Start()
     {
         lock (_gate)
         {
-            if (_thread is not null)
+            if (_session is not null)
             {
-                return IsRunning;
+                return _session.IsRunning;
             }
 
-            if (!TryStartSession(out var sessionError))
+            var session = new EtwRealtimeSession(
+                SessionName, SessionGuid, ProviderGuid, keywords: 0, OnEvent);
+
+            if (!session.Start())
             {
-                _lastError = $"StartTrace/EnableTrace failed: {sessionError}";
+                session.Dispose();
                 return false;
             }
 
-            _stopping = false;
-            _callback = OnEvent;
-            _logfile = new EventTraceLogfile
-            {
-                LoggerName = SessionName,
-                ProcessTraceMode = ProcessTraceModeEventRecord | ProcessTraceModeRealTime,
-                EventCallback = Marshal.GetFunctionPointerForDelegate(_callback),
-            };
-
-            _traceHandle = OpenTraceW(ref _logfile);
-
-            if (_traceHandle == ulong.MaxValue)
-            {
-                var error = Marshal.GetLastWin32Error();
-                _lastError = $"OpenTrace failed: {error}";
-                StopSession();
-                return false;
-            }
-
-            var handle = _traceHandle;
-            _thread = new Thread(() => ProcessLoop(handle))
-            {
-                IsBackground = true,
-                Name = "dns-etw",
-            };
-
-            _thread.Start();
-            IsRunning = true;
-            _lastError = null;
-
+            _session = session;
             return true;
         }
     }
@@ -129,33 +86,15 @@ public sealed class DnsEtwMonitor : IDisposable
     /// <summary>停止会话并释放消费者线程。</summary>
     public void Stop()
     {
-        Thread? thread;
-        ulong handle;
+        EtwRealtimeSession? session;
 
         lock (_gate)
         {
-            thread = _thread;
-            _thread = null;
-            _stopping = true;
-            IsRunning = false;
-            handle = _traceHandle;
-            _traceHandle = 0;
+            session = _session;
+            _session = null;
         }
 
-        // 先停会话：ProcessTrace 会因此返回，线程才能退出。
-        StopSession();
-
-        if (thread is not null && thread != Thread.CurrentThread)
-        {
-            _ = thread.Join(TimeSpan.FromSeconds(3));
-        }
-
-        if (handle != 0 && handle != ulong.MaxValue)
-        {
-            _ = CloseTrace(handle);
-        }
-
-        FreeSessionProperties();
+        session?.Dispose();
     }
 
     /// <summary>最近记录（新的在前）。</summary>
@@ -194,58 +133,32 @@ public sealed class DnsEtwMonitor : IDisposable
 
     public void Dispose() => Stop();
 
-    // ---------------- 消费线程 ----------------
-
-    private void ProcessLoop(ulong handle)
-    {
-        var result = ProcessTrace(new[] { handle }, 1, IntPtr.Zero, IntPtr.Zero);
-
-        lock (_gate)
-        {
-            IsRunning = false;
-
-            if (!_stopping
-                && result != ErrorSuccess
-                && result != ErrorCancelled)
-            {
-                _lastError = $"ProcessTrace exited: {result}";
-            }
-        }
-    }
-
     private void OnEvent(IntPtr recordPointer)
     {
-        try
+        var record = EtwRealtimeSession.ReadRecord(recordPointer);
+
+        // 实时会话通常不会收到元数据事件；仍然防御一下。
+        if (record.EventHeader.ProviderId == EventTraceGuid)
         {
-            var record = Marshal.PtrToStructure<EventRecord>(recordPointer);
-
-            // 实时会话通常不会收到元数据事件；仍然防御一下。
-            if (record.EventHeader.ProviderId == EventTraceGuid)
-            {
-                return;
-            }
-
-            if (!TryGetString(recordPointer, "QueryName", out var queryName))
-            {
-                return;
-            }
-
-            queryName = queryName.Trim();
-
-            if (queryName.Length == 0 || queryName.Length > 512)
-            {
-                return;
-            }
-
-            var status = ReadStatus(recordPointer);
-            var pid = record.EventHeader.ProcessId;
-            var (path, name) = ResolveProcess(pid);
-            Add(pid, path, name, queryName, status, record.EventHeader.Id);
+            return;
         }
-        catch (Exception)
+
+        if (!TryGetString(recordPointer, "QueryName", out var queryName))
         {
-            // ETW 回调里绝不能抛异常：那会打断整个消费线程。
+            return;
         }
+
+        queryName = queryName.Trim();
+
+        if (queryName.Length == 0 || queryName.Length > 512)
+        {
+            return;
+        }
+
+        var status = ReadStatus(recordPointer);
+        var pid = record.EventHeader.ProcessId;
+        var (path, name) = ResolveProcess(pid);
+        Add(pid, path, name, queryName, status, record.EventHeader.Id);
     }
 
     private static (string? Path, string Name) ResolveProcess(int pid)
@@ -312,117 +225,6 @@ public sealed class DnsEtwMonitor : IDisposable
                 _records.RemoveFirst();
                 _recent.Remove($"{first.Value.Pid}|{first.Value.QueryName.ToLowerInvariant()}");
             }
-        }
-    }
-
-    // ---------------- 会话 ----------------
-
-    private bool TryStartSession(out int error)
-    {
-        error = ErrorSuccess;
-
-        var propertiesSize = Marshal.SizeOf<EventTraceProperties>();
-        var nameBytes = (SessionName.Length + 1) * sizeof(char);
-        var totalSize = propertiesSize + nameBytes;
-        var buffer = Marshal.AllocHGlobal(totalSize);
-
-        try
-        {
-            for (var i = 0; i < totalSize; i++)
-            {
-                Marshal.WriteByte(buffer, i, 0);
-            }
-
-            var properties = new EventTraceProperties
-            {
-                Wnode = new WnodeHeader
-                {
-                    BufferSize = (uint)totalSize,
-                    Flags = WnodeFlagTracedGuid,
-                    ClientContext = 1,
-                    Guid = SessionGuid,
-                },
-                LogFileMode = EventTraceRealTimeMode,
-                FlushTimer = 1,
-                LoggerNameOffset = (uint)propertiesSize,
-            };
-
-            Marshal.StructureToPtr(properties, buffer, false);
-
-            var name = SessionName.ToCharArray();
-            Marshal.Copy(name, 0, IntPtr.Add(buffer, propertiesSize), name.Length);
-            Marshal.WriteInt16(buffer, propertiesSize + name.Length * sizeof(char), 0);
-
-            var rc = StartTraceW(out var handle, SessionName, buffer);
-
-            if (rc == ErrorAlreadyExists)
-            {
-                // 服务上次崩溃可能留下同名会话：停掉再试一次。
-                _ = ControlTraceW(0, SessionName, buffer, EventTraceControlStop);
-                rc = StartTraceW(out handle, SessionName, buffer);
-            }
-
-            if (rc != ErrorSuccess)
-            {
-                error = rc;
-                Marshal.FreeHGlobal(buffer);
-                return false;
-            }
-
-            // 0 = 不过滤关键字；Level 4 = Informational。
-            var provider = ProviderGuid;
-
-            var enableRc = EnableTraceEx2(
-                handle,
-                ref provider,
-                EventControlCodeEnableProvider,
-                TraceLevelInformation,
-                0,
-                0,
-                0,
-                IntPtr.Zero);
-
-            if (enableRc != ErrorSuccess)
-            {
-                _ = ControlTraceW(handle, SessionName, buffer, EventTraceControlStop);
-                error = enableRc;
-                Marshal.FreeHGlobal(buffer);
-                return false;
-            }
-
-            _sessionProperties = buffer;
-            return true;
-        }
-        catch
-        {
-            Marshal.FreeHGlobal(buffer);
-            throw;
-        }
-    }
-
-    private void StopSession()
-    {
-        var properties = _sessionProperties;
-
-        if (properties != IntPtr.Zero)
-        {
-            _ = ControlTraceW(0, SessionName, properties, EventTraceControlStop);
-        }
-    }
-
-    private void FreeSessionProperties()
-    {
-        IntPtr properties;
-
-        lock (_gate)
-        {
-            properties = _sessionProperties;
-            _sessionProperties = IntPtr.Zero;
-        }
-
-        if (properties != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(properties);
         }
     }
 
@@ -542,8 +344,6 @@ public sealed class DnsEtwMonitor : IDisposable
         }
     }
 
-    // ---------------- 内部模型 ----------------
-
     private sealed class Entry
     {
         public DateTime TimeUtc;
@@ -555,188 +355,6 @@ public sealed class DnsEtwMonitor : IDisposable
         public int EventId;
     }
 
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate void EventRecordCallback(IntPtr eventRecord);
-
-    // ---------------- 结构（evntrace.h / evntcons.h）----------------
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WnodeHeader
-    {
-        public uint BufferSize;
-        public uint ProviderId;
-        public ulong HistoricalContext;
-        public ulong TimeStamp;
-        public Guid Guid;
-        public uint ClientContext;
-        public uint Flags;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EventTraceProperties
-    {
-        public WnodeHeader Wnode;
-        public uint BufferSize;
-        public uint MinimumBuffers;
-        public uint MaximumBuffers;
-        public uint MaximumFileSize;
-        public uint LogFileMode;
-        public uint FlushTimer;
-        public uint EnableFlags;
-        public int AgeLimit;
-        public uint NumberOfBuffers;
-        public uint FreeBuffers;
-        public uint EventsLost;
-        public uint BuffersWritten;
-        public uint LogBuffersLost;
-        public uint RealTimeBuffersLost;
-        public IntPtr LoggerThreadId;
-        public uint LogFileNameOffset;
-        public uint LoggerNameOffset;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Size = 0xac, CharSet = CharSet.Unicode)]
-    private struct TimeZoneInformation
-    {
-        public uint Bias;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string StandardName;
-
-        [MarshalAs(UnmanagedType.ByValArray, ArraySubType = UnmanagedType.U2, SizeConst = 8)]
-        public ushort[] StandardDate;
-
-        public uint StandardBias;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string DaylightName;
-
-        [MarshalAs(UnmanagedType.ByValArray, ArraySubType = UnmanagedType.U2, SizeConst = 8)]
-        public ushort[] DaylightDate;
-
-        public uint DaylightBias;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EventTraceHeader
-    {
-        public ushort Size;
-        public ushort FieldTypeFlags;
-        public byte Type;
-        public byte Level;
-        public ushort Version;
-        public int ThreadId;
-        public int ProcessId;
-        public long TimeStamp;
-        public Guid Guid;
-        public uint KernelTime;
-        public uint UserTime;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EtwBufferContext
-    {
-        public byte ProcessorNumber;
-        public byte Alignment;
-        public ushort LoggerId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EventTrace
-    {
-        public EventTraceHeader Header;
-        public uint InstanceId;
-        public uint ParentInstanceId;
-        public Guid ParentGuid;
-        public IntPtr MofData;
-        public int MofLength;
-        public EtwBufferContext BufferContext;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TraceLogfileHeader
-    {
-        public uint BufferSize;
-        public uint Version;
-        public uint ProviderVersion;
-        public uint NumberOfProcessors;
-        public long EndTime;
-        public uint TimerResolution;
-        public uint MaximumFileSize;
-        public uint LogFileMode;
-        public uint BuffersWritten;
-        public uint StartBuffers;
-        public uint PointerSize;
-        public uint EventsLost;
-        public uint CpuSpeedInMHz;
-        public IntPtr LoggerName;
-        public IntPtr LogFileName;
-        public TimeZoneInformation TimeZone;
-        public long BootTime;
-        public long PerfFreq;
-        public long StartTime;
-        public uint ReservedFlags;
-        public uint BuffersLost;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct EventTraceLogfile
-    {
-        [MarshalAs(UnmanagedType.LPWStr)]
-        public string? LogFileName;
-
-        [MarshalAs(UnmanagedType.LPWStr)]
-        public string? LoggerName;
-
-        public long CurrentTime;
-        public uint BuffersRead;
-        public uint ProcessTraceMode;
-        public EventTrace CurrentEvent;
-        public TraceLogfileHeader LogfileHeader;
-        public IntPtr BufferCallback;
-        public int BufferSize;
-        public int Filled;
-        public int EventsLost;
-        public IntPtr EventCallback;
-        public int IsKernelTrace;
-        public IntPtr Context;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EventHeader
-    {
-        public ushort Size;
-        public ushort HeaderType;
-        public ushort Flags;
-        public ushort EventProperty;
-        public int ThreadId;
-        public int ProcessId;
-        public long TimeStamp;
-        public Guid ProviderId;
-        public ushort Id;
-        public byte Version;
-        public byte Channel;
-        public byte Level;
-        public byte Opcode;
-        public ushort Task;
-        public ulong Keyword;
-        public uint KernelTime;
-        public uint UserTime;
-        public Guid ActivityId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EventRecord
-    {
-        public EventHeader EventHeader;
-        public EtwBufferContext BufferContext;
-        public ushort ExtendedDataCount;
-        public ushort UserDataLength;
-        public IntPtr ExtendedData;
-        public IntPtr UserData;
-        public IntPtr UserContext;
-    }
-
     [StructLayout(LayoutKind.Sequential)]
     private struct PropertyDataDescriptor
     {
@@ -744,30 +362,6 @@ public sealed class DnsEtwMonitor : IDisposable
         public uint ArrayIndex;
         public uint Reserved;
     }
-
-    // ---------------- P/Invoke ----------------
-
-    [DllImport("advapi32.dll", EntryPoint = "StartTraceW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int StartTraceW(out ulong sessionHandle, string sessionName, IntPtr properties);
-
-    [DllImport("advapi32.dll", EntryPoint = "ControlTraceW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int ControlTraceW(
-        ulong sessionHandle, string? sessionName, IntPtr properties, uint controlCode);
-
-    [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern int EnableTraceEx2(
-        ulong traceHandle, ref Guid providerId, uint controlCode, byte level,
-        ulong matchAnyKeyword, ulong matchAllKeyword, uint timeout, IntPtr enableParameters);
-
-    [DllImport("advapi32.dll", EntryPoint = "OpenTraceW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern ulong OpenTraceW(ref EventTraceLogfile logfile);
-
-    [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern int ProcessTrace(
-        [In] ulong[] handleArray, uint handleCount, IntPtr startTime, IntPtr endTime);
-
-    [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern int CloseTrace(ulong traceHandle);
 
     [DllImport("tdh.dll", CharSet = CharSet.Unicode)]
     private static extern int TdhGetPropertySize(

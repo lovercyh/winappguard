@@ -152,7 +152,7 @@
     "上传": "Up",
     "下载": "Down",
     "总计": "Total",
-    "本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。": "Accumulated since this service started; TCP only. Short-lived connections and UDP may be missed.",
+    "本次运行累计（TCP + UDP 网络事件）；短连接可能漏计。": "Accumulated since this service started (TCP + UDP network events); short-lived connections may be missed.",
     "域名": "Domain",
     "结果": "Result",
     "搜索：程序 / 域名": "Search: program / domain",

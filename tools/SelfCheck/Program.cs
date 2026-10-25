@@ -9401,6 +9401,9 @@ internal static class Program
                         W($"      {row.Name,-32} 上传 {row.BytesOut,10}  下载 {row.BytesIn,10}");
                     }
                 }
+
+                var afterStatus = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+                W($"    流量事件数（本次服务运行累计）= {afterStatus?.TrafficEventsSeen ?? 0}");
             }
 
             // ---------------- DNS ----------------
@@ -9813,46 +9816,12 @@ internal static class Program
                 ServiceProtocol.Commands.QueryDns == "query.dns"
                 && ServiceProtocol.Commands.ClearDns == "write.dns.clear");
 
-            var logfileType = typeof(DnsEtwMonitor).GetNestedType(
-                "EventTraceLogfile", BindingFlags.NonPublic);
-            var recordType = typeof(DnsEtwMonitor).GetNestedType(
-                "EventRecord", BindingFlags.NonPublic);
+            var (logfileSize, recordSize) = EtwRealtimeSession.NativeStructSizes;
+            W($"    EVENT_TRACE_LOGFILEW = {logfileSize} 字节；EVENT_RECORD = {recordSize} 字节");
 
-            if (logfileType is null || recordType is null)
-            {
-                CheckAssertion(results, "找得到 ETW 结构体", false);
-            }
-            else
-            {
-                var logfileSize = Marshal.SizeOf(logfileType);
-                var recordSize = Marshal.SizeOf(recordType);
-                W($"    EVENT_TRACE_LOGFILEW = {logfileSize} 字节；EVENT_RECORD = {recordSize} 字节");
-
-                // x64 下由 evntrace.h / evntcons.h 的字段顺序推出来；大小不对说明 P/Invoke 布局错了。
-                CheckAssertion(results, "EVENT_TRACE_LOGFILEW 大小 = 448", logfileSize == 448);
-                CheckAssertion(results, "EVENT_RECORD 大小 = 112", recordSize == 112);
-
-                // 默认值里有 null 字符串 / null 数组；封送一次，确认不会在 OpenTrace 前抛异常。
-                var logfile = Activator.CreateInstance(logfileType);
-                var buffer = Marshal.AllocHGlobal(logfileSize);
-                var marshalled = false;
-
-                try
-                {
-                    Marshal.StructureToPtr(logfile!, buffer, false);
-                    marshalled = true;
-                }
-                catch (Exception ex)
-                {
-                    W($"    ！封送失败：{ex.GetType().Name}: {ex.Message}");
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(buffer);
-                }
-
-                CheckAssertion(results, "EVENT_TRACE_LOGFILEW 能安全封送", marshalled);
-            }
+            // x64 下由 evntrace.h / evntcons.h 的字段顺序推出来；大小不对说明 P/Invoke 布局错了。
+            CheckAssertion(results, "EVENT_TRACE_LOGFILEW 大小 = 448", logfileSize == 448);
+            CheckAssertion(results, "EVENT_RECORD 大小 = 112", recordSize == 112);
 
             var dto = new DnsDto
             {
@@ -9922,6 +9891,17 @@ internal static class Program
             CheckAssertion(results, "命令名正确",
                 ServiceProtocol.Commands.QueryTraffic == "query.traffic");
 
+            CheckAssertion(results, "ETW 事件方向映射正确",
+                NetworkEtwMonitor.TryClassifyEvent(10, out var tcpV4Out) && tcpV4Out
+                && NetworkEtwMonitor.TryClassifyEvent(11, out var tcpV4In) && !tcpV4In
+                && NetworkEtwMonitor.TryClassifyEvent(26, out var tcpV6Out) && tcpV6Out
+                && NetworkEtwMonitor.TryClassifyEvent(27, out var tcpV6In) && !tcpV6In
+                && NetworkEtwMonitor.TryClassifyEvent(42, out var udpV4Out) && udpV4Out
+                && NetworkEtwMonitor.TryClassifyEvent(43, out var udpV4In) && !udpV4In
+                && NetworkEtwMonitor.TryClassifyEvent(58, out var udpV6Out) && udpV6Out
+                && NetworkEtwMonitor.TryClassifyEvent(59, out var udpV6In) && !udpV6In
+                && !NetworkEtwMonitor.TryClassifyEvent(12, out _));
+
             CheckAssertion(results, "0 字节", TcpConnectionItem.FormatTrafficBytes(0) == "0 B");
             CheckAssertion(results, "1023 字节仍用 B", TcpConnectionItem.FormatTrafficBytes(1023) == "1023 B");
             CheckAssertion(results, "1024 字节 = 1 KB", TcpConnectionItem.FormatTrafficBytes(1024) == "1 KB");
@@ -9988,7 +9968,7 @@ internal static class Program
                 && Localizer.T("下载") == "Down"
                 && Localizer.T("总计") == "Total");
 
-            var tip = Localizer.T("本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。");
+            var tip = Localizer.T("本次运行累计（TCP + UDP 网络事件）；短连接可能漏计。");
             W($"    英文流量提示 = {tip}");
             CheckAssertion(results, "英文：近似值提示无中文",
                 !System.Text.RegularExpressions.Regex.IsMatch(tip, "[\u4e00-\u9fff]"));

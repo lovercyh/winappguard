@@ -905,7 +905,7 @@ public partial class MainForm : Form
         AddConnectionColumn("数字签名", nameof(TcpConnectionItem.SignatureText), 70, fill: true, minWidth: 70);
 
         // 流量列的悬停提示：必须写明「仅 TCP / 近似值」，不能让人当精确账单。
-        var trafficTip = Localizer.T("本次运行累计，仅统计 TCP；短连接和 UDP 可能漏计。");
+        var trafficTip = Localizer.T("本次运行累计（TCP + UDP 网络事件）；短连接可能漏计。");
 
         foreach (var columnName in new[]
                  {

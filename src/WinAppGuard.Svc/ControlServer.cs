@@ -584,6 +584,7 @@ internal sealed class ControlServer : IDisposable
         status.AuditCollecting = AuditHost.Collecting;
         status.AuditEventsWritten = AuditHost.EventsWritten;
         status.TrafficCollecting = TrafficHost.Collecting;
+        status.TrafficEventsSeen = TrafficHost.EventsSeen;
         status.DnsCollecting = DnsHost.Collecting;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;

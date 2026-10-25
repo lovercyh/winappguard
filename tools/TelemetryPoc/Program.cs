@@ -108,7 +108,7 @@ internal static class Program
     private static void RunRemote(string url, int seconds)
     {
         Console.WriteLine($"远程下载：{url}");
-        Console.WriteLine("（下载开始 2 秒后开始采样；采样期间下载会继续）");
+        Console.WriteLine("（下载开始 1 秒后开始逐秒采样；采样期间下载会继续）");
 
         long received = 0;
         using var cancellation = new CancellationTokenSource();
@@ -146,8 +146,8 @@ internal static class Program
             }
         });
 
-        Thread.Sleep(TimeSpan.FromSeconds(2));
-        Run(seconds);
+        Thread.Sleep(TimeSpan.FromSeconds(1));
+        WatchSelfConnections(seconds, () => Interlocked.Read(ref received));
 
         Console.WriteLine($"下载已收到：{FormatBytes((ulong)Interlocked.Read(ref received))}");
 
@@ -160,6 +160,89 @@ internal static class Program
         catch (Exception)
         {
             // 忽略取消/等待异常，采样结果已经输出。
+        }
+    }
+
+    /// <summary>
+    /// 逐秒采样**本进程**的 ESTABLISHED 连接，打印每条连接的启用/读取结果和增量。
+    ///
+    /// 为什么不沿用 Run()：Run() 只在等待结束后读一次；下载可能在读取前就结束，
+    /// 连接一消失，Get 只会返回 ERROR_NOT_FOUND，看起来像"客户端方向没有统计"。
+    /// </summary>
+    private static void WatchSelfConnections(int seconds, Func<long> received)
+    {
+        var baselines = new Dictionary<string, (ulong In, ulong Out)>(StringComparer.Ordinal);
+        var enabled = new HashSet<string>(StringComparer.Ordinal);
+        var totals = new Dictionary<string, (ulong In, ulong Out)>(StringComparer.Ordinal);
+
+        for (var tick = 1; tick <= seconds; tick++)
+        {
+            var connections = EnumerateV4()
+                .Concat(EnumerateV6())
+                .Where(connection =>
+                    connection.Pid == Environment.ProcessId
+                    && connection.State == TcpStateEstablished)
+                .ToList();
+
+            Console.WriteLine(
+                $"[{tick,2}s] 本进程 ESTABLISHED = {connections.Count}，已下载 {FormatBytes((ulong)received())}");
+
+            foreach (var connection in connections)
+            {
+                var key = connection.Tuple;
+
+                if (enabled.Add(key))
+                {
+                    var ok = connection.EnableStats();
+                    Console.WriteLine($"       + {key}  enable={ok}");
+
+                    if (!ok)
+                    {
+                        enabled.Remove(key);
+                        continue;
+                    }
+
+                    if (connection.TryRead(out var baselineIn, out var baselineOut))
+                    {
+                        baselines[key] = (baselineIn, baselineOut);
+                    }
+
+                    continue;
+                }
+
+                var read = connection.TryRead(out var inBytes, out var outBytes);
+                baselines.TryGetValue(key, out var last);
+
+                var deltaIn = inBytes >= last.In ? inBytes - last.In : inBytes;
+                var deltaOut = outBytes >= last.Out ? outBytes - last.Out : outBytes;
+
+                baselines[key] = (inBytes, outBytes);
+
+                if (read)
+                {
+                    totals.TryGetValue(key, out var total);
+                    totals[key] = (total.In + deltaIn, total.Out + deltaOut);
+                }
+
+                Console.WriteLine(
+                    $"       {key}  read={read}  in={FormatBytes(inBytes)}  out={FormatBytes(outBytes)}  " +
+                    $"deltaIn={FormatBytes(deltaIn)}  deltaOut={FormatBytes(deltaOut)}");
+            }
+
+            Thread.Sleep(TimeSpan.FromSeconds(1));
+        }
+
+        if (totals.Count == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("本进程连接累计：");
+
+        foreach (var (key, value) in totals)
+        {
+            Console.WriteLine($"    {key}  下载 {FormatBytes(value.In)}  上传 {FormatBytes(value.Out)}");
         }
     }
 
@@ -276,6 +359,16 @@ internal static class Program
         }
     }
 
+    private static string FormatV4(uint value)
+    {
+        var bytes = BitConverter.GetBytes(value);
+        return $"{bytes[0]}.{bytes[1]}.{bytes[2]}.{bytes[3]}";
+    }
+
+    /// <summary>MIB 里的端口是网络字节序，显示前换回主机序（47873 → 443）。</summary>
+    private static ushort HostPort(uint raw)
+        => (ushort)(((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF));
+
     private static string FormatBytes(ulong bytes)
     {
         string[] units = { "B", "KB", "MB", "GB", "TB" };
@@ -309,7 +402,8 @@ internal static class Program
         internal required MibTcpRow Row { get; init; }
 
         internal override string Tuple =>
-            $"4|{Row.LocalAddr:x8}:{Row.LocalPort} -> {Row.RemoteAddr:x8}:{Row.RemotePort}";
+            $"4|{FormatV4(Row.LocalAddr)}:{HostPort(Row.LocalPort)} -> " +
+            $"{FormatV4(Row.RemoteAddr)}:{HostPort(Row.RemotePort)}";
 
         internal override bool EnableStats()
         {
@@ -352,8 +446,8 @@ internal static class Program
         internal required MibTcp6Row Row { get; init; }
 
         internal override string Tuple =>
-            $"6|{Convert.ToHexString(Row.LocalAddr)}:{Row.LocalPort} -> " +
-            $"{Convert.ToHexString(Row.RemoteAddr)}:{Row.RemotePort}";
+            $"6|{Convert.ToHexString(Row.LocalAddr)}:{HostPort(Row.LocalPort)} -> " +
+            $"{Convert.ToHexString(Row.RemoteAddr)}:{HostPort(Row.RemotePort)}";
 
         internal override bool EnableStats()
         {

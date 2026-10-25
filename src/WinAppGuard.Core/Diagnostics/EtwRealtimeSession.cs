@@ -205,6 +205,9 @@ public sealed class EtwRealtimeSession : IDisposable
                 },
                 LogFileMode = EventTraceRealTimeMode,
                 FlushTimer = 1,
+                BufferSize = 64,
+                MinimumBuffers = 4,
+                MaximumBuffers = 64,
                 LoggerNameOffset = (uint)propertiesSize,
             };
 

@@ -311,6 +311,10 @@ internal static class Program
             {
                 RunLoopbackDownloadTest();
             }
+            else if (args.Contains("--etw-network-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunEtwNetworkTest();
+            }
             else if (args.Contains("--service-35-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunService35Test();
@@ -9604,10 +9608,6 @@ internal static class Program
     }
 
     /// <summary>
-    /// 在回环上起一个限速 HTTP 服务，让连接持续约 8 秒 ——
-    /// 短于采样周期的连接会被 TCP 扩展统计漏掉，验收必须避开这个坑。
-    /// </summary>
-    /// <summary>
     /// 3.5：只验证回环下载链路（子进程服务 + 客户端），不需要防护服务。
     /// 用来在 VM 上快速判断「下载方向统计不到」是测试环境问题还是采集实现问题。
     /// </summary>
@@ -9631,6 +9631,87 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
+    /// <summary>
+    /// 3.5：单独验证 ETW Network 采集（不经过服务、不需要 IPC）。
+    /// 起一个独立进程的回环服务，下载 4 MiB，同时逐秒取 ETW 增量。
+    /// 需要管理员权限（ETW 会话）。
+    /// </summary>
+    private static void RunEtwNetworkTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   ETW Network 实测（Kernel-Network，TCP+UDP，按 PID）          #");
+        W("################################################################");
+        W();
+
+        using var monitor = new NetworkEtwMonitor(
+            "WinAppGuard-Net-Test",
+            new Guid("2C3D4E5F-6A7B-4C8D-9E0F-1A2B3C4D5E6F"));
+
+        if (!monitor.Start())
+        {
+            W($"    启动失败：{monitor.LastError}");
+            CheckAssertion(results, "ETW Network 会话启动", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        var beforeEvents = monitor.EventsSeen;
+        string? downloadError = null;
+        long downloaded = 0;
+
+        var download = Task.Run(() =>
+            downloaded = DownloadLoopbackPayload(4 * 1024 * 1024, out downloadError));
+
+        var totals = new Dictionary<int, (ulong In, ulong Out)>();
+
+        // 下载约 8 秒；采样 12 秒，确保覆盖开始和结束。
+        for (var i = 0; i < 24; i++)
+        {
+            foreach (var delta in monitor.TakeSnapshot())
+            {
+                totals.TryGetValue(delta.Pid, out var current);
+                totals[delta.Pid] = (current.In + delta.BytesIn, current.Out + delta.BytesOut);
+            }
+
+            Thread.Sleep(500);
+        }
+
+        _ = download.Wait(TimeSpan.FromSeconds(5));
+
+        foreach (var delta in monitor.TakeSnapshot())
+        {
+            totals.TryGetValue(delta.Pid, out var current);
+            totals[delta.Pid] = (current.In + delta.BytesIn, current.Out + delta.BytesOut);
+        }
+
+        var events = monitor.EventsSeen - beforeEvents;
+        totals.TryGetValue(Environment.ProcessId, out var self);
+
+        W($"    下载 = {downloaded} 字节（{downloadError ?? "ok"}）");
+        W($"    ETW 事件数 = {events}");
+        W($"    本进程：下载 {self.In} 字节，上传 {self.Out} 字节");
+
+        W("    前 3 名：");
+        foreach (var (pid, value) in totals
+                     .OrderByDescending(pair => pair.Value.In + pair.Value.Out)
+                     .Take(3))
+        {
+            W($"      PID {pid,6}  下载 {value.In,10}  上传 {value.Out,10}");
+        }
+
+        CheckAssertion(results, "ETW 捕获到本进程下载（>= 2.5 MiB）",
+            self.In >= 2_500_000);
+        CheckAssertion(results, "ETW 事件数 > 0", events > 0);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 在回环上起一个限速 HTTP 服务，让连接持续约 8 秒 ——
+    /// 短于采样周期的连接会被 TCP 扩展统计漏掉，验收必须避开这个坑。
+    /// </summary>
     private static long DownloadLoopbackPayload(long totalBytes, out string? error)
     {
         error = null;

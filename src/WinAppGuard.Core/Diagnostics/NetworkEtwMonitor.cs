@@ -36,9 +36,17 @@ public sealed class NetworkEtwMonitor : IDisposable
 
     private readonly object _gate = new();
     private readonly Dictionary<int, Counters> _totals = new();
+    private readonly string _sessionName;
+    private readonly Guid _sessionGuid;
 
     private EtwRealtimeSession? _session;
     private long _eventsSeen;
+
+    public NetworkEtwMonitor(string sessionName = SessionName, Guid? sessionGuid = null)
+    {
+        _sessionName = sessionName;
+        _sessionGuid = sessionGuid ?? SessionGuid;
+    }
 
     public bool IsRunning => _session?.IsRunning == true;
 
@@ -57,7 +65,7 @@ public sealed class NetworkEtwMonitor : IDisposable
             }
 
             var session = new EtwRealtimeSession(
-                SessionName, SessionGuid, ProviderGuid, Keywords, OnEvent);
+                _sessionName, _sessionGuid, ProviderGuid, Keywords, OnEvent);
 
             if (!session.Start())
             {

@@ -99,6 +99,7 @@ partial class MainForm
     // ---------- 页三：设置 ----------
     private TabPage _tabSettings = null!;
     private TabPage _tabAudit = null!;
+    private TabPage _tabDns = null!;
 
     private Label _settingsNoticeLabel = null!;
     private GroupBox _autostartPanel = null!;
@@ -247,6 +248,7 @@ partial class MainForm
         _whitelistClearButton = new Button();
         _whitelistGrid = new DataGridViewBuffered();
         _tabAudit = new TabPage();
+        _tabDns = new TabPage();
         _tabSettings = new TabPage();
         _settingsNoticeLabel = new Label();
         _autostartPanel = new GroupBox();
@@ -379,6 +381,11 @@ partial class MainForm
         _tabAudit.Text = "记录";
         _tabAudit.UseVisualStyleBackColor = true;
 
+        _tabDns.Name = "_tabDns";
+        _tabDns.Padding = new Padding(3);
+        _tabDns.Text = "DNS";
+        _tabDns.UseVisualStyleBackColor = true;
+
         // ==================================================================
         // 标签页容器
         // ==================================================================
@@ -387,6 +394,7 @@ partial class MainForm
         _tabControl.Controls.Add(_tabRules);
         _tabControl.Controls.Add(_tabWhitelist);
         _tabControl.Controls.Add(_tabAudit);
+        _tabControl.Controls.Add(_tabDns);
         _tabControl.Controls.Add(_tabSettings);
         _tabControl.Location = new Point(24, 104);
         _tabControl.Name = "_tabControl";

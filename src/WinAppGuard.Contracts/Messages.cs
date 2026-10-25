@@ -97,6 +97,36 @@ public sealed class ServiceResponse
 
     /// <summary>3.5：每程序流量快照（按本次运行累计）。</summary>
     public List<TrafficDto>? Traffic { get; set; }
+
+    /// <summary>3.5：最近的 DNS 查询记录。</summary>
+    public List<DnsDto>? DnsRecords { get; set; }
+}
+
+/// <summary>
+/// 3.5：一条 DNS 查询记录。
+///
+/// 只有域名、PID、时间和结果码；**不记录**查询响应里的 IP 列表之外的任何内容，
+/// 更不记录 URL/HTTPS 路径。DoH/DoT 不经过系统 DNS 客户端，采不到。
+/// </summary>
+public sealed class DnsDto
+{
+    /// <summary>查询时间（UTC）。</summary>
+    public DateTime TimeUtc { get; set; }
+
+    /// <summary>发起查询的进程 PID。</summary>
+    public int Pid { get; set; }
+
+    /// <summary>进程完整路径；服务拿不到时为 null。</summary>
+    public string? ProcessPath { get; set; }
+
+    /// <summary>显示名（文件名，或「PID 123」）。</summary>
+    public string ProcessName { get; set; } = string.Empty;
+
+    /// <summary>查询的域名。</summary>
+    public string QueryName { get; set; } = string.Empty;
+
+    /// <summary>结果码（OK / NXDOMAIN / 0x...）；未完成时为空。</summary>
+    public string? Status { get; set; }
 }
 
 /// <summary>
@@ -215,6 +245,9 @@ public sealed class ServiceStatus
 
     /// <summary>3.5：流量采集是否在跑（TCP 扩展统计不可用时为 false）。</summary>
     public bool TrafficCollecting { get; set; }
+
+    /// <summary>3.5：DNS ETW 采集是否在跑（启动失败/被系统停止时为 false）。</summary>
+    public bool DnsCollecting { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

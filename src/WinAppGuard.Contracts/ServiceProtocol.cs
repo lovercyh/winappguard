@@ -109,6 +109,12 @@ public static class ServiceProtocol
         /// <summary>3.5：每程序流量快照（本次服务运行以来，仅 TCP）。</summary>
         public const string QueryTraffic = "query.traffic";
 
+        /// <summary>3.5：最近的 DNS 查询记录（内存环形缓冲）。</summary>
+        public const string QueryDns = "query.dns";
+
+        /// <summary>3.5：清空 DNS 内存记录（服务继续采集）。</summary>
+        public const string ClearDns = "write.dns.clear";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

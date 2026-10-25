@@ -340,6 +340,7 @@ public partial class MainForm : Form
         SetupRulesGrid();
         SetupWhitelistGrid();
         InitializeAuditPage();
+        InitializeDnsPage();
 
         // 3.2：把 Designer 里的中文静态文案换成英文（如果当前语言是英文）。
         ControlLocalizer.Apply(this);
@@ -5081,6 +5082,7 @@ public partial class MainForm : Form
 
                 _strictModeEnabled = false;
                 _strictModePermittedCount = 0;
+                _dnsCollecting = false;
                 NotifyLockdownEndedByService();
                 RefreshStrictModeStatus();
 
@@ -5113,6 +5115,7 @@ public partial class MainForm : Form
             // 会话活在服务里：服务不在了，严格模式必然已经撤销。
             _strictModeEnabled = false;
             _strictModePermittedCount = 0;
+            _dnsCollecting = false;
             NotifyLockdownEndedByService();
             RefreshStrictModeStatus();
 
@@ -5126,6 +5129,7 @@ public partial class MainForm : Form
 
         _strictModeEnabled = status.StrictModeActive;
         _strictModePermittedCount = status.StrictModePermittedCount;
+        _dnsCollecting = status.DnsCollecting;
         _lockdownActive = status.StrictModeLockdownActive;
         _lockdownExpiresUtc = status.StrictModeLockdownExpiresUtc;
         RefreshStrictModeStatus();

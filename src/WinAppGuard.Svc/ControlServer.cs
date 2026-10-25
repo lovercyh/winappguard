@@ -142,6 +142,9 @@ internal sealed class ControlServer : IDisposable
         // 3.5：流量采集与服务同生命周期（内存累计，不落盘）。
         TrafficHost.Start();
 
+        // 3.5：DNS 采集（ETW 实时会话；失败由看门狗重试）。
+        DnsHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -174,6 +177,8 @@ internal sealed class ControlServer : IDisposable
         AuditHost.Stop();
 
         TrafficHost.Stop();
+
+        DnsHost.Stop();
 
         _thread?.Join(3000);
         _thread = null;
@@ -494,6 +499,21 @@ internal sealed class ControlServer : IDisposable
                 Traffic = TrafficHost.Snapshot(),
             },
 
+            // 3.5：DNS 记录同样是只读；清空是 write.dns.clear（提权检查在上面统一做）。
+            ServiceProtocol.Commands.QueryDns => new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = true,
+                DnsRecords = DnsHost.Snapshot(500),
+            },
+
+            ServiceProtocol.Commands.ClearDns => new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = true,
+                Affected = DnsHost.Clear(),
+            },
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -564,6 +584,7 @@ internal sealed class ControlServer : IDisposable
         status.AuditCollecting = AuditHost.Collecting;
         status.AuditEventsWritten = AuditHost.EventsWritten;
         status.TrafficCollecting = TrafficHost.Collecting;
+        status.DnsCollecting = DnsHost.Collecting;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

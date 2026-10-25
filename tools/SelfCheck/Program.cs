@@ -15,6 +15,7 @@ using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
+using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
@@ -152,6 +153,7 @@ internal static class Program
                         && !args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
@@ -374,6 +376,10 @@ internal static class Program
             else if (args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunTrafficTest();
+            }
+            else if (args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunDnsTest();
             }
             else if (args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3894,6 +3900,24 @@ internal static class Program
                         CheckAssertion(results, "英文：白名单列头无中文",
                             whitelistGrid.Columns.Cast<DataGridViewColumn>()
                                 .All(column => !HasCjk(column.HeaderText)));
+                    }
+
+                    if (TryGetField<TabPage>(form, "_tabDns", out var dnsTab)
+                        && TryGetField<DataGridView>(form, "_dnsGrid", out var dnsGrid))
+                    {
+                        var dnsHeaders = dnsGrid.Columns.Cast<DataGridViewColumn>()
+                            .Select(column => column.HeaderText)
+                            .ToList();
+
+                        W($"    3.5 DNS 页签 = {dnsTab.Text} | 列头 = {string.Join(" | ", dnsHeaders)}");
+                        CheckAssertion(results, "英文：DNS 页签与列头无中文",
+                            !HasCjk(dnsTab.Text) && dnsHeaders.All(text => !HasCjk(text)));
+
+                        if (TryGetField<Label>(form, "_dnsHintLabel", out var dnsHint))
+                        {
+                            W($"    DNS 说明 = {dnsHint.Text}");
+                            CheckAssertion(results, "英文：DNS 说明无中文", !HasCjk(dnsHint.Text));
+                        }
                     }
 
                     if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
@@ -9295,6 +9319,93 @@ internal static class Program
     /// 3.5：服务代查路径的离线部分（进程解析 / DTO 编解码 / 回填）。
     /// 真实 IPC 需要服务在运行，放到 VM 验收。
     /// </summary>
+    /// <summary>
+    /// 3.5：DNS 采集的离线部分 —— 协议字段 / DTO / ETW 结构体大小 / 英文文案。
+    /// 真实 ETW 会话必须在 VM 里跑；结构体大小对不上会直接读错内存，所以这里先钉死。
+    /// </summary>
+    private static void RunDnsTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previous = Localizer.Current;
+
+        W("################################################################");
+        W("#   DNS（离线：协议 / DTO / ETW 结构大小 / 英文）                #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Localizer.Initialize("zh");
+
+            CheckAssertion(results, "命令名正确",
+                ServiceProtocol.Commands.QueryDns == "query.dns"
+                && ServiceProtocol.Commands.ClearDns == "write.dns.clear");
+
+            var logfileType = typeof(DnsEtwMonitor).GetNestedType(
+                "EventTraceLogfile", BindingFlags.NonPublic);
+            var recordType = typeof(DnsEtwMonitor).GetNestedType(
+                "EventRecord", BindingFlags.NonPublic);
+
+            if (logfileType is null || recordType is null)
+            {
+                CheckAssertion(results, "找得到 ETW 结构体", false);
+            }
+            else
+            {
+                var logfileSize = Marshal.SizeOf(logfileType);
+                var recordSize = Marshal.SizeOf(recordType);
+                W($"    EVENT_TRACE_LOGFILEW = {logfileSize} 字节；EVENT_RECORD = {recordSize} 字节");
+
+                // x64 下由 evntrace.h / evntcons.h 的字段顺序推出来；大小不对说明 P/Invoke 布局错了。
+                CheckAssertion(results, "EVENT_TRACE_LOGFILEW 大小 = 448", logfileSize == 448);
+                CheckAssertion(results, "EVENT_RECORD 大小 = 112", recordSize == 112);
+            }
+
+            var dto = new DnsDto
+            {
+                TimeUtc = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc),
+                Pid = 4321,
+                ProcessPath = @"C:\Tools\a.exe",
+                ProcessName = "a.exe",
+                QueryName = "example.com",
+                Status = "OK",
+            };
+
+            var json = JsonSerializer.Serialize(
+                new ServiceResponse { Ok = true, DnsRecords = new List<DnsDto> { dto } },
+                ServiceProtocol.JsonOptions);
+            W($"    DNS JSON = {json}");
+            CheckAssertion(results, "响应 JSON 带 dnsRecords / queryName",
+                json.Contains("\"dnsRecords\":[", StringComparison.Ordinal)
+                && json.Contains("\"queryName\":\"example.com\"", StringComparison.Ordinal)
+                && json.Contains("\"status\":\"OK\"", StringComparison.Ordinal));
+
+            Localizer.Initialize("en");
+
+            CheckAssertion(results, "英文：DNS 文案",
+                Localizer.T("域名") == "Domain"
+                && Localizer.T("结果") == "Result"
+                && Localizer.T("清空记录") == "Clear records");
+
+            var hint = Localizer.T(
+                "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到。内存保留最近 2000 条，服务重启后清空。");
+            W($"    英文 DNS 说明 = {hint}");
+            CheckAssertion(results, "英文：DNS 说明无中文",
+                !System.Text.RegularExpressions.Regex.IsMatch(hint, "[\u4e00-\u9fff]"));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "DNS 检查执行完成", false);
+        }
+        finally
+        {
+            Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     /// <summary>
     /// 3.5：每程序流量 —— 字节格式化 / 行数据回填 / 排序 / 协议字段 / 英文列头。
     /// 真实 TCP 扩展统计的数字必须在 VM 里测，离线只钉住纯逻辑。

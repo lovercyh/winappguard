@@ -7246,32 +7246,61 @@ internal static class Program
                 sublayerSddl?.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase) == false);
 
             var keys = engine.ListOurFilterKeys();
-            W($"    过滤器数量 = {keys.Count}");
-            CheckAssertion(results, "至少有一条过滤器（请先创建一条规则）", keys.Count > 0);
+            string? temporaryRule = null;
 
-            var filterChecks = 0;
-
-            foreach (var key in keys.Take(10))
+            // 没有规则时临时建一条（目标就是 SelfCheck 自己），检查完立刻删掉。
+            // 这样验收脚本不依赖机器上原本有没有规则。
+            if (keys.Count == 0)
             {
-                var filterSddl = engine.ReadFilterSecuritySddl(key);
+                var self = Environment.ProcessPath;
 
-                if (filterSddl is null)
+                if (string.IsNullOrEmpty(self))
                 {
-                    CheckAssertion(results, $"过滤器 {key:N} DACL 可读", false);
-                    continue;
+                    throw new InvalidOperationException("拿不到 SelfCheck 自身路径。");
                 }
 
-                filterChecks++;
-
-                CheckAssertion(results, $"过滤器 {key:N} 包含 SYSTEM",
-                    filterSddl.Contains("(A;;0xF01FF;;;SY)", StringComparison.OrdinalIgnoreCase));
-                CheckAssertion(results, $"过滤器 {key:N} 包含所有者",
-                    filterSddl.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.OrdinalIgnoreCase));
-                CheckAssertion(results, $"过滤器 {key:N} 不包含 Administrators",
-                    !filterSddl.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
+                temporaryRule = RuleEngine.CreateBlockRule(self);
+                keys = engine.ListOurFilterKeys();
+                W($"    临时创建测试规则：{temporaryRule}");
             }
 
-            CheckAssertion(results, "至少检查到一条过滤器", filterChecks > 0);
+            try
+            {
+                W($"    过滤器数量 = {keys.Count}");
+                CheckAssertion(results, "至少有可检查的过滤器", keys.Count > 0);
+
+                var filterChecks = 0;
+
+                foreach (var key in keys.Take(10))
+                {
+                    var filterSddl = engine.ReadFilterSecuritySddl(key);
+
+                    if (filterSddl is null)
+                    {
+                        CheckAssertion(results, $"过滤器 {key:N} DACL 可读", false);
+                        continue;
+                    }
+
+                    filterChecks++;
+
+                    CheckAssertion(results, $"过滤器 {key:N} 包含 SYSTEM",
+                        filterSddl.Contains("(A;;0xF01FF;;;SY)", StringComparison.OrdinalIgnoreCase));
+                    CheckAssertion(results, $"过滤器 {key:N} 包含所有者",
+                        filterSddl.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.OrdinalIgnoreCase));
+                    CheckAssertion(results, $"过滤器 {key:N} 不包含 Administrators",
+                        !filterSddl.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
+                }
+
+                CheckAssertion(results, "至少检查到一条过滤器", filterChecks > 0);
+            }
+            finally
+            {
+                if (temporaryRule is not null)
+                {
+                    _ = RuleEngine.DeleteRule(temporaryRule);
+                    W("    临时测试规则已删除。");
+                }
+            }
         }
         catch (Exception ex)
         {

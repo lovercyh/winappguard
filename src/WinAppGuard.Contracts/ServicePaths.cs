@@ -33,4 +33,10 @@ public static class ServicePaths
 
     /// <summary>DPAPI 用户级加密后的私钥（服务从不读取）。</summary>
     public static string OwnerKeyFile => Path.Combine(ProtectedModeDirectory, "client-key.dpapi");
+
+    /// <summary>
+    /// 3.4：WFP 对象 DACL 迁移标记。文件内容是当前所有者 SID；
+    /// 内容与配置不一致（例如 --reset-owner 换了所有者）时会重新迁移。
+    /// </summary>
+    public static string WfpDaclMarkerFile => Path.Combine(DataDirectory, "wfp-dacl-owner-only");
 }

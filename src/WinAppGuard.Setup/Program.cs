@@ -1002,6 +1002,16 @@ internal static class Program
 
     private static int Uninstall(bool keepData)
     {
+        // 3.4：收紧后的 WFP DACL 只允许所有者删除对象。
+        // 有对象且当前账户不是所有者时先拒绝，避免“服务删了、规则还在”的半卸载。
+        if (WfpRecovery.HasOurObjects() && !ProtectedModeClient.IsCurrentUserOwner())
+        {
+            Bilingual.Fail(
+                "还有本工具的 WFP 规则，但当前账户不是所有者。3.4 起这些规则只允许所有者删除；请用安装时的所有者账户运行卸载。",
+                "This app still has WFP rules, but the current account is not the owner. Since 3.4 only the owner can delete them; run the uninstaller as the install account.");
+            return 7;
+        }
+
         Bilingual.Say("停止界面进程…", "Stopping UI processes…");
         TryStopUiProcesses();
 

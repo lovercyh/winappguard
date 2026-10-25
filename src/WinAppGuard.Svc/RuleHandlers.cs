@@ -298,44 +298,9 @@ internal sealed class RuleHandlers
 
                 foreach (var item in missing)
                 {
-                    try
+                    if (TryCreateFromSnapshot(item))
                     {
-                        var expiry = RuleExpiry.Parse(item.Expiry);
-
-                        if (expiry.IsExpired(
-                                DateTime.UtcNow, SystemUptime.BootTimeUtc, freshLogonSession: false))
-                        {
-                            // 本来就该到期了：不重建，让正常清理逻辑处理。
-                            continue;
-                        }
-
-                        string name;
-
-                        if (string.Equals(item.Kind, "ip", StringComparison.OrdinalIgnoreCase))
-                        {
-                            name = RuleEngine.CreateIpBlockRule(item.Value);
-                        }
-                        else
-                        {
-                            var scope = RuleScope.TryParse(item.Scope, out var parsed)
-                                ? parsed
-                                : RuleScope.Any;
-
-                            name = string.Equals(item.Action, "allow", StringComparison.OrdinalIgnoreCase)
-                                ? RuleEngine.CreateAllowRule(item.Value, expiry, scope)
-                                : RuleEngine.CreateBlockRule(item.Value, expiry, scope);
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(item.Group))
-                        {
-                            _groups.SetGroup(name, item.Group);
-                        }
-
                         rebuilt++;
-                    }
-                    catch (Exception ex)
-                    {
-                        ServiceLog.Warning("WAG-RULE-912", $"Tamper protection: failed to rebuild rule {item.Name}.", ex);
                     }
                 }
 
@@ -393,6 +358,163 @@ internal sealed class RuleHandlers
         }
     }
 
+    /// <summary>
+    /// 按快照创建一条规则。已到期或创建失败返回 false。
+    /// 篡改防护与 DACL 迁移共用，避免两套“从快照重建”的逻辑走偏。
+    /// </summary>
+    private bool TryCreateFromSnapshot(RuleDto item)
+    {
+        try
+        {
+            var expiry = RuleExpiry.Parse(item.Expiry);
+
+            if (expiry.IsExpired(
+                    DateTime.UtcNow, SystemUptime.BootTimeUtc, freshLogonSession: false))
+            {
+                // 本来就该到期了：不重建，让正常清理逻辑处理。
+                return false;
+            }
+
+            string name;
+
+            if (string.Equals(item.Kind, "ip", StringComparison.OrdinalIgnoreCase))
+            {
+                name = RuleEngine.CreateIpBlockRule(item.Value);
+            }
+            else
+            {
+                var scope = RuleScope.TryParse(item.Scope, out var parsed)
+                    ? parsed
+                    : RuleScope.Any;
+
+                name = string.Equals(item.Action, "allow", StringComparison.OrdinalIgnoreCase)
+                    ? RuleEngine.CreateAllowRule(item.Value, expiry, scope)
+                    : RuleEngine.CreateBlockRule(item.Value, expiry, scope);
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.Group))
+            {
+                _groups.SetGroup(name, item.Group);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-RULE-912", $"Failed to rebuild rule {item.Name} from the snapshot.", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 3.4：把旧版本创建的 WFP 对象迁移到 owner-only DACL。
+    ///
+    /// 判定依据是标记文件里的所有者 SID：
+    ///   - 一致 → 已迁移；
+    ///   - 缺失/不同（首次升级、--reset-owner）→ 删除并按快照重建。
+    ///
+    /// 迁移失败时**不写标记**，并立刻让篡改防护按快照补回规则；
+    /// 下次服务启动会重试。
+    /// </summary>
+    internal void MigrateDaclIfNeeded(string? ownerSid)
+    {
+        lock (Gate)
+        {
+            if (string.IsNullOrWhiteSpace(ownerSid))
+            {
+                ServiceLog.Warning(
+                    "WAG-WFP-010",
+                    "Owner SID is unavailable; WFP DACL migration is skipped.");
+                return;
+            }
+
+            if (IsDaclMarkerCurrent(ownerSid))
+            {
+                return;
+            }
+
+            var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
+
+            try
+            {
+                int deleted;
+
+                using (var engine = WfpEngine.Open())
+                {
+                    // 没有权威副本时**绝不删已有规则**：删了就再也重建不回来。
+                    if (snapshot is null && engine.ListOurFilters().Count > 0)
+                    {
+                        ServiceLog.Warning(
+                            "WAG-WFP-014",
+                            "No rule snapshot; WFP DACL migration skipped to avoid losing rules.");
+                        return;
+                    }
+
+                    deleted = engine.DeleteAllOurFilters();
+                    engine.DeleteSublayer();
+                    engine.EnsureSublayer(persistent: true);
+                }
+
+                var rebuilt = 0;
+
+                if (snapshot is not null)
+                {
+                    foreach (var item in snapshot.Rules)
+                    {
+                        if (TryCreateFromSnapshot(item))
+                        {
+                            rebuilt++;
+                        }
+                    }
+                }
+
+                _groups.Save();
+
+                File.WriteAllText(
+                    ServicePaths.WfpDaclMarkerFile,
+                    ownerSid,
+                    new System.Text.UTF8Encoding(false));
+
+                ServiceLog.Operation(
+                    "WAG-WFP-011",
+                    $"WFP DACL migrated to owner-only (filters deleted {deleted}, rebuilt {rebuilt}).");
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning(
+                    "WAG-WFP-012",
+                    "WFP DACL migration failed; the next service start will retry.", ex);
+
+                // 已经删掉的过滤器立刻按快照补回，绝不把用户留在“规则消失”的状态。
+                try
+                {
+                    CheckTamper();
+                }
+                catch (Exception inner)
+                {
+                    ServiceLog.Warning("WAG-WFP-013", "Failed to restore rules after the DACL migration error.", inner);
+                }
+            }
+        }
+    }
+
+    private static bool IsDaclMarkerCurrent(string ownerSid)
+    {
+        try
+        {
+            if (!File.Exists(ServicePaths.WfpDaclMarkerFile))
+            {
+                return false;
+            }
+
+            var saved = File.ReadAllText(ServicePaths.WfpDaclMarkerFile).Trim();
+            return string.Equals(saved, ownerSid, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
     private ServiceResponse List(ServiceRequest request)
     {
         var list = BuildRuleDtos();
@@ -416,6 +538,25 @@ internal sealed class RuleHandlers
             Group = _groups.GetGroup(rule.Name),
             Enabled = rule.Enabled,
         }).ToList();
+    }
+
+    /// <summary>
+    /// 3.4：启动时只在快照**不存在**时写一份。
+    ///
+    /// 不能在每次启动都用“实际过滤器”覆盖快照：如果管理员在服务停止期间删掉了
+    /// 过滤器，实际列表是空的，覆盖会把权威副本也清空，篡改防护就再也补不回来了。
+    /// </summary>
+    internal void SaveSnapshotIfMissing()
+    {
+        lock (Gate)
+        {
+            if (RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile) is not null)
+            {
+                return;
+            }
+
+            SaveSnapshotNow();
+        }
     }
 
     /// <summary>

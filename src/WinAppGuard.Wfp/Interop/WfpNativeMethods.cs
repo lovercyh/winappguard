@@ -304,6 +304,38 @@ internal static class WfpNativeMethods
         ref Guid key,
         out IntPtr subLayer);
 
+    // ---------------- 3.4：WFP 对象安全描述符 ----------------
+
+    internal const uint OwnerSecurityInformation = 0x00000001;
+    internal const uint DaclSecurityInformation = 0x00000004;
+
+    /// <summary>释放 WFP API 返回的内存（不能用 Marshal.FreeHGlobal，堆不同）。</summary>
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern void FwpmFreeMemory0(ref IntPtr memory);
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmSubLayerGetSecurityInfoByKey0(
+        IntPtr engineHandle,
+        ref Guid key,
+        uint securityInfo,
+        out IntPtr sidOwner,
+        out IntPtr sidGroup,
+        out IntPtr dacl,
+        out IntPtr sacl,
+        out IntPtr securityDescriptor);
+
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmFilterGetSecurityInfoByKey0(
+        IntPtr engineHandle,
+        ref Guid key,
+        uint securityInfo,
+        out IntPtr sidOwner,
+        out IntPtr sidGroup,
+        out IntPtr dacl,
+        out IntPtr sacl,
+        out IntPtr securityDescriptor);
     [DllImport("fwpuclnt.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static extern uint FwpmFilterAdd0(
@@ -341,10 +373,6 @@ internal static class WfpNativeMethods
     internal static extern uint FwpmGetAppIdFromFileName0(
         [MarshalAs(UnmanagedType.LPWStr)] string fileName,
         out IntPtr appId);
-
-    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    internal static extern void FwpmFreeMemory0(ref IntPtr p);
 
     // ---------------- 辅助 ----------------
 

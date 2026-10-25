@@ -36,6 +36,34 @@ internal sealed record WfpRecoveryReport(
 /// </summary>
 internal static class WfpRecovery
 {
+    /// <summary>
+    /// 3.4：本工具在 WFP 里是否还有对象（子层存在即算有）。
+    /// 用来在卸载/恢复前做“只有所有者能删”的预检。
+    /// 判断不了时按“有”处理 —— 宁可拒绝，也不要把规则留在系统里。
+    /// </summary>
+    internal static bool HasOurObjects()
+    {
+        try
+        {
+            using var engine = WfpEngine.Open();
+
+            try
+            {
+                engine.ReadSublayer();
+                return true;
+            }
+            catch (WfpException ex) when (
+                ex.Code == WfpNativeMethods.FWP_E_SUBLAYER_NOT_FOUND)
+            {
+                return false;
+            }
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
     /// <summary>执行恢复。失败时抛 <see cref="WfpException"/>（调用方负责告诉用户）。</summary>
     internal static WfpRecoveryReport Recover()
     {

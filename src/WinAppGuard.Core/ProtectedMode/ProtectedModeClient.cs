@@ -86,6 +86,26 @@ internal static class ProtectedModeClient
         }
     }
 
+    /// <summary>
+    /// 3.4：当前账户是否是安装时的所有者。
+    /// 配置缺失/损坏一律视为“不是”，由调用方给出明确提示。
+    /// </summary>
+    internal static bool IsCurrentUserOwner()
+    {
+        try
+        {
+            var config = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory).ReadConfig();
+            var owner = WindowsIdentity.GetCurrent().User;
+
+            return owner is not null
+                   && string.Equals(
+                       config.OwnerSid, owner.Value, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
     internal static ProtectedModeStatus Evaluate()
     {
         var store = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory);

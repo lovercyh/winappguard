@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
+using WinAppGuard.Contracts;
+using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Interop;
 using WinAppGuard.Models;
 
@@ -291,6 +294,20 @@ internal sealed class WfpEngine : IDisposable
     /// <summary>本子层下所有过滤器的 key（<see cref="ListOurFilters"/> 的便捷版本）。</summary>
     internal IReadOnlyList<Guid> ListOurFilterKeys()
         => ListOurFilters().Select(filter => filter.Key).ToList();
+
+    /// <summary>3.4：读取本工具子层的 SDDL（验收用）。</summary>
+    internal string? ReadSublayerSecuritySddl()
+    {
+        ThrowIfDisposed();
+        return WfpDaclInspector.ReadSublayer(_handle);
+    }
+
+    /// <summary>3.4：读取一条过滤器的 SDDL（验收用）。</summary>
+    internal string? ReadFilterSecuritySddl(Guid filterKey)
+    {
+        ThrowIfDisposed();
+        return WfpDaclInspector.ReadFilter(_handle, filterKey);
+    }
 
     /// <summary>
     /// 加一条"按远端 IP 匹配"的过滤器（封禁 IP 用）。
@@ -767,7 +784,68 @@ internal sealed class WfpEngine : IDisposable
     }
 
     /// <summary>
-    /// 构造保护性安全描述符：DACL 里只有 SYSTEM 与 Administrators（完全控制）。
+    /// 构造保护性 DACL：SYSTEM + 所有者（3.4）。
+    ///
+    /// 所有者 SID 来自受保护模式配置；读不到时退回旧的 SYSTEM + Administrators，
+    /// 保证配置损坏的系统仍然可以管理，而不是“谁都删不掉”。
+    /// </summary>
+    internal static string BuildProtectiveSddl(string? ownerSid)
+    {
+        const string systemAce = "(A;;0xF01FF;;;SY)";
+
+        if (string.IsNullOrWhiteSpace(ownerSid))
+        {
+            return "D:" + systemAce + "(A;;0xF01FF;;;BA)";
+        }
+
+        // 所有者就是 SYSTEM（理论上不会出现）：不重复添加，也不需要 BA。
+        if (string.Equals(ownerSid, "S-1-5-18", StringComparison.OrdinalIgnoreCase))
+        {
+            return "D:" + systemAce;
+        }
+
+        return $"D:{systemAce}(A;;0xF01FF;;;{ownerSid})";
+    }
+
+    private static string? _ownerSid;
+    private static bool _ownerSidResolved;
+
+    /// <summary>
+    /// 读取所有者 SID（只读一次）。服务以 SYSTEM 运行，不能用当前进程身份。
+    /// 失败返回 null，由调用方回退到 SYSTEM + Administrators。
+    /// </summary>
+    private static string? ResolveOwnerSid()
+    {
+        if (_ownerSidResolved)
+        {
+            return _ownerSid;
+        }
+
+        _ownerSidResolved = true;
+
+        try
+        {
+            var config = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory).ReadConfig();
+
+            if (!string.IsNullOrWhiteSpace(config.OwnerSid))
+            {
+                // 先验证格式：非法 SID 传给 ConvertStringSecurityDescriptor 只会失败，
+                // 不如在这里就当作“读不到”。
+                _ = new SecurityIdentifier(config.OwnerSid);
+                _ownerSid = config.OwnerSid;
+            }
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning(
+                "[WAG-WFP-007] Failed to read the owner SID; WFP objects keep SYSTEM + Administrators.", ex);
+        }
+
+        return _ownerSid;
+    }
+
+    /// <summary>
+    /// 构造保护性安全描述符：SYSTEM + 所有者（3.4）。
     ///
     /// 3.0-c 修正：**只在创建对象时传入**（FwpmSubLayerAdd0 / FwpmFilterAdd0 的
     /// securityDescriptor 参数）。VM 实测“先创建、再 SetSecurityInfo”会把服务启动卡死，
@@ -777,10 +855,36 @@ internal sealed class WfpEngine : IDisposable
     /// </summary>
     private static IntPtr TryBuildProtectiveSd()
     {
+        var ownerSid = ResolveOwnerSid();
+        var descriptor = TryConvertSddl(BuildProtectiveSddl(ownerSid));
+
+        if (descriptor != IntPtr.Zero)
+        {
+            return descriptor;
+        }
+
+        if (!string.IsNullOrWhiteSpace(ownerSid))
+        {
+            LocalLog.Warning(
+                "[WAG-WFP-006] Failed to build the owner-only WFP security descriptor; falling back to SYSTEM + Administrators.");
+
+            descriptor = TryConvertSddl(BuildProtectiveSddl(null));
+
+            if (descriptor != IntPtr.Zero)
+            {
+                return descriptor;
+            }
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private static IntPtr TryConvertSddl(string sddl)
+    {
         try
         {
             if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    "D:(A;;0xF01FF;;;SY)(A;;0xF01FF;;;BA)",
+                    sddl,
                     SddlRevision1,
                     out var descriptor,
                     out _))

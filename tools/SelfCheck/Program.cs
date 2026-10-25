@@ -54,6 +54,8 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --wfp-rule-test    WFP：规则模型（编码/解析、V4+V6 两层、幂等写入、读取、删除）
 ///   WinAppGuard.SelfCheck.exe --wfp-migrate-test WFP：1.x → 2.0 迁移（造两条记事本规则 → 迁移 → 核对 → 清理）
 ///   WinAppGuard.SelfCheck.exe --wfp-status      WFP：只读，打印当前 2.0 规则与子层状态
+///   WinAppGuard.SelfCheck.exe --wfp-dacl-sddl-test  3.4：owner-only SDDL 构造（离线）
+///   WinAppGuard.SelfCheck.exe --wfp-dacl-test   3.4：真实子层/过滤器 DACL（需管理员 + 至少一条规则）
 ///   WinAppGuard.SelfCheck.exe --wfp-strict-test WFP：严格模式（动态会话 + 白名单 + 阻止全部，验证真能拦、退出即恢复）
 ///   WinAppGuard.SelfCheck.exe --audit-store-test 审计：事件模型与落盘（往返 / 轮转 / 清理 / 半行容错，离线）
 ///   WinAppGuard.SelfCheck.exe --audit-dns-test   审计：读本机 DNS 缓存 + 域名索引（离线、不联网）
@@ -147,6 +149,7 @@ internal static class Program
                          && !args.Contains("--ui-language-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--cli-language-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
@@ -400,6 +403,14 @@ internal static class Program
             else if (args.Contains("--wfp-rule-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunWfpRuleTest();
+            }
+            else if (args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpDaclSddlTest();
+            }
+            else if (args.Contains("--wfp-dacl-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpDaclTest();
             }
             else if (args.Contains("--wfp-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -7163,6 +7174,113 @@ internal static class Program
     ///
     /// 规则的实验对象是本自检程序自己：即使清理失败，被拦的也只是它。
     /// </summary>
+    /// <summary>
+    /// 3.4：离线验证保护性 SDDL 的构造（不需要管理员、不碰系统）。
+    /// </summary>
+    private static void RunWfpDaclSddlTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   WFP DACL（离线）：owner-only SDDL 构造与回退                 #");
+        W("################################################################");
+        W();
+
+        const string ownerSid = "S-1-5-21-1111-2222-3333-1001";
+        const string full = "(A;;0xF01FF;;;SY)";
+
+        var sddl = WfpEngine.BuildProtectiveSddl(ownerSid);
+        W($"    有所有者 = {sddl}");
+
+        CheckAssertion(results, "包含 SYSTEM 完全控制", sddl.Contains(full, StringComparison.Ordinal));
+        CheckAssertion(results, "包含所有者完全控制",
+            sddl.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.Ordinal));
+        CheckAssertion(results, "不再包含 Administrators",
+            !sddl.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
+
+        var fallback = WfpEngine.BuildProtectiveSddl(null);
+        W($"    无所有者 = {fallback}");
+        CheckAssertion(results, "没有所有者时回退 SY + BA",
+            fallback.Contains(full, StringComparison.Ordinal)
+            && fallback.Contains("(A;;0xF01FF;;;BA)", StringComparison.Ordinal));
+
+        var systemOwner = WfpEngine.BuildProtectiveSddl("S-1-5-18");
+        W($"    所有者是 SYSTEM = {systemOwner}");
+        CheckAssertion(results, "所有者是 SYSTEM 时不重复添加",
+            systemOwner == "D:(A;;0xF01FF;;;SY)");
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 3.4：读取真实 WFP 对象的 DACL（需管理员 + 至少一条规则，VM 验收用）。
+    /// </summary>
+    private static void RunWfpDaclTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   WFP DACL（真实对象）：子层 / 过滤器只允许 SYSTEM + 所有者   #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var config = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory).ReadConfig();
+            var ownerSid = config.OwnerSid;
+            W($"    所有者 SID = {ownerSid}");
+
+            CheckAssertion(results, "能读到所有者 SID", !string.IsNullOrWhiteSpace(ownerSid));
+
+            using var engine = WfpEngine.Open();
+
+            var sublayerSddl = engine.ReadSublayerSecuritySddl();
+            W($"    子层 SDDL = {sublayerSddl ?? "<读取失败>"}");
+
+            CheckAssertion(results, "子层 DACL 可读", sublayerSddl is not null);
+            CheckAssertion(results, "子层包含 SYSTEM",
+                sublayerSddl?.Contains("(A;;0xF01FF;;;SY)", StringComparison.OrdinalIgnoreCase) == true);
+            CheckAssertion(results, "子层包含所有者",
+                sublayerSddl?.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.OrdinalIgnoreCase) == true);
+            CheckAssertion(results, "子层不包含 Administrators",
+                sublayerSddl?.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase) == false);
+
+            var keys = engine.ListOurFilterKeys();
+            W($"    过滤器数量 = {keys.Count}");
+            CheckAssertion(results, "至少有一条过滤器（请先创建一条规则）", keys.Count > 0);
+
+            var filterChecks = 0;
+
+            foreach (var key in keys.Take(10))
+            {
+                var filterSddl = engine.ReadFilterSecuritySddl(key);
+
+                if (filterSddl is null)
+                {
+                    CheckAssertion(results, $"过滤器 {key:N} DACL 可读", false);
+                    continue;
+                }
+
+                filterChecks++;
+
+                CheckAssertion(results, $"过滤器 {key:N} 包含 SYSTEM",
+                    filterSddl.Contains("(A;;0xF01FF;;;SY)", StringComparison.OrdinalIgnoreCase));
+                CheckAssertion(results, $"过滤器 {key:N} 包含所有者",
+                    filterSddl.Contains($"(A;;0xF01FF;;;{ownerSid})", StringComparison.OrdinalIgnoreCase));
+                CheckAssertion(results, $"过滤器 {key:N} 不包含 Administrators",
+                    !filterSddl.Contains(";;;BA)", StringComparison.OrdinalIgnoreCase));
+            }
+
+            CheckAssertion(results, "至少检查到一条过滤器", filterChecks > 0);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "WFP DACL 检查执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
     private static void RunWfpRuleTest()
     {
         var results = new List<(string Title, bool Passed)>();

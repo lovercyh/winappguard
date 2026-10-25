@@ -61,31 +61,6 @@ internal sealed class ControlServer : IDisposable
                 + "Run WinAppGuardSetup.exe --repair as the owner.", ex);
         }
 
-        if (_protectedMode is not null)
-        {
-            _thread = new Thread(Loop)
-            {
-                IsBackground = true,
-                Name = "ipc-server",
-            };
-
-            _thread.Start();
-        }
-
-        // 到期清理归服务：界面关掉、没人点刷新时也要准时解除临时阻断。
-        _expiryTimer = new System.Threading.Timer(
-            _ => Rules.PurgeExpiredQuietly(),
-            state: null,
-            dueTime: TimeSpan.FromSeconds(3),
-            period: TimeSpan.FromSeconds(30));
-
-        // 篡改检测：每 10 秒拿权威副本和实际过滤器比对（删了立即重建）。
-        _tamperTimer = new System.Threading.Timer(
-            _ => Rules.CheckTamper(),
-            state: null,
-            dueTime: TimeSpan.FromSeconds(15),
-            period: TimeSpan.FromSeconds(10));
-
         // 3.0-c：界面以普通权限运行，需要读取快照与审计记录。
         ServiceDataPermissions.EnsureReadableByUsers();
 
@@ -113,13 +88,43 @@ internal sealed class ControlServer : IDisposable
             ServiceLog.Warning("WAG-DATA-012", "Startup migration failed (service startup is not affected).", ex);
         }
 
-        // 启动时先写一份权威副本：即使从没改过规则，离线界面也有东西可看。
-        ServiceLog.Info("WAG-DATA-013", "Startup: writing the rule snapshot.");
-        Rules.SaveSnapshotNow();
+        // 3.4：启动时只在快照不存在时写一份，绝不用“实际过滤器”覆盖权威副本。
+        // 这样“服务停止期间过滤器被外部删除”仍然能被篡改防护按快照补回。
+        ServiceLog.Info("WAG-DATA-013", "Startup: ensuring the rule snapshot.");
+        Rules.SaveSnapshotIfMissing();
 
-        // 篡改防护：新建的子层/过滤器在创建时就带上保护性 DACL
-        // （见 WfpEngine.TryBuildProtectiveSd）。已有对象保持原有安全描述符，
-        // 不再做"先创建再改安全信息"——VM 实测那样会把服务启动卡死。
+        // 3.4：把 3.1–3.3 创建的 WFP 对象迁移到 owner-only DACL。
+        // 迁移会删除并重建过滤器，所以放在管道启动之前，避免客户端并发写入。
+        Rules.MigrateDaclIfNeeded(_protectedMode?.OwnerSid);
+
+        // 迁移失败或过滤器在停机期间被删除时，启动阶段就按快照补回，
+        // 不等 15 秒后的定时器。
+        Rules.CheckTamper();
+
+        if (_protectedMode is not null)
+        {
+            _thread = new Thread(Loop)
+            {
+                IsBackground = true,
+                Name = "ipc-server",
+            };
+
+            _thread.Start();
+        }
+
+        // 到期清理归服务：界面关掉、没人点刷新时也要准时解除临时阻断。
+        _expiryTimer = new System.Threading.Timer(
+            _ => Rules.PurgeExpiredQuietly(),
+            state: null,
+            dueTime: TimeSpan.FromSeconds(3),
+            period: TimeSpan.FromSeconds(30));
+
+        // 篡改检测：每 10 秒拿权威副本和实际过滤器比对（删了立即重建）。
+        _tamperTimer = new System.Threading.Timer(
+            _ => Rules.CheckTamper(),
+            state: null,
+            dueTime: TimeSpan.FromSeconds(15),
+            period: TimeSpan.FromSeconds(10));
 
         // 审计采集随服务启动（设置里关着就不开）。
         ServiceLog.Info("WAG-AUDIT-002", "Startup: starting audit capture.");

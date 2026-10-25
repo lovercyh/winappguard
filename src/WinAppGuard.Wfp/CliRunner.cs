@@ -285,6 +285,15 @@ internal static class CliRunner
     /// </summary>
     private static int RunRecover()
     {
+        // 3.4：WFP 对象只允许所有者删除；非所有者先拒绝，避免只清了一半。
+        if (WfpRecovery.HasOurObjects() && !ProtectedModeClient.IsCurrentUserOwner())
+        {
+            Console.Error.WriteLine(Localizer.IsEnglish
+                ? "This account is not the owner. WFP rules created by WinAppGuard 3.4+ can only be deleted by the owner; sign in as the owner and run --recover again."
+                : "当前账户不是所有者。3.4 起本工具的 WFP 规则只允许所有者删除；请用所有者账户登录后重新运行 --recover。");
+            return ExitFailed;
+        }
+
         // 1) 2.0 的对象。
         var report = WfpRecovery.Recover();
         Console.WriteLine(report.Describe());

@@ -332,6 +332,10 @@ Click *More info* → *Run anyway*, or verify the SHA-256 against the release no
 - **Pipe / service ACL** — the pipe allows only `SYSTEM` + the owner; the service DACL gives
   `Administrators` query/start only, and other accounts nothing. Administrators can still take
   ownership and bypass this, which is documented.
+- **WFP object ACL (since 3.4)** — the sublayer and filters allow deletion/ACL changes only to
+  `SYSTEM` + the owner; `Administrators` no longer have write access. An administrator with
+  `SeTakeOwnership` / `SeRestore` can still take ownership first, so this raises the bar rather
+  than making tampering impossible.
 - **Key** — `%ProgramData%\WinAppGuard\protected-mode\client-key.dpapi`
   (user-scoped DPAPI); `config.json` contains only the public key, entropy and fingerprint.
   It is always removed on uninstall.

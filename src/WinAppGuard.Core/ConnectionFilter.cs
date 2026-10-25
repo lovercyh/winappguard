@@ -149,7 +149,8 @@ public static class ConnectionFilter
             ConnectionSortColumn.TrafficOut => a.TrafficBytesOut.CompareTo(b.TrafficBytesOut),
             ConnectionSortColumn.TrafficIn => a.TrafficBytesIn.CompareTo(b.TrafficBytesIn),
             ConnectionSortColumn.TrafficTotal =>
-                (a.TrafficBytesOut + a.TrafficBytesIn).CompareTo(b.TrafficBytesOut + b.TrafficBytesIn),
+                ((Int128)a.TrafficBytesOut + a.TrafficBytesIn)
+                .CompareTo((Int128)b.TrafficBytesOut + b.TrafficBytesIn),
             _ => 0,
         };
 

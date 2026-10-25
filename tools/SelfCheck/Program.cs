@@ -160,7 +160,8 @@ internal static class Program
                          && !args.Contains("--protected-mode-store-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--protected-mode-owner-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--audit-migrate-test", StringComparer.OrdinalIgnoreCase)
-                         && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase);
+                         && !args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--service-35-test", StringComparer.OrdinalIgnoreCase);
 
         if (needsAdmin && !AdminHelper.IsRunningAsAdmin())
         {
@@ -304,6 +305,14 @@ internal static class Program
             else if (args.Contains("--service-ping-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServicePingTest();
+            }
+            else if (args.Contains("--service-35-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunService35Test();
+            }
+            else if (args.Contains("--service-lockdown-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceLockdownTest();
             }
             else if (args.Contains("--service-auth-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -9319,6 +9328,332 @@ internal static class Program
     /// 3.5：服务代查路径的离线部分（进程解析 / DTO 编解码 / 回填）。
     /// 真实 IPC 需要服务在运行，放到 VM 验收。
     /// </summary>
+    /// <summary>
+    /// 3.5：服务端端到端验收 —— 流量采集（本机回环下载）与 DNS ETW 捕获。
+    ///
+    /// 只读 + 本机回环，不需要管理员；但需要所有者密钥（签名 IPC）。
+    /// 输出都是实测数字：下载字节、本进程流量增量、DNS 探针记录。
+    /// </summary>
+    private static void RunService35Test()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   3.5 服务端实测（流量 TCP 扩展统计 / DNS ETW）                #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+            if (status is null)
+            {
+                W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+                CheckAssertion(results, "服务可用", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            W($"    服务版本 = {status.ServiceVersion}");
+            CheckAssertion(results, "服务版本是 3.5",
+                status.ServiceVersion.StartsWith("3.5", StringComparison.Ordinal));
+            CheckAssertion(results, "流量采集在跑", status.TrafficCollecting);
+            CheckAssertion(results, "DNS 采集在跑", status.DnsCollecting);
+
+            // ---------------- 流量 ----------------
+            var before = QueryTrafficFromService(out var trafficError);
+            TrafficDto? ownBefore = before is null ? null : FindOwnTraffic(before);
+
+            if (before is null)
+            {
+                W($"    读取流量失败：{trafficError}");
+                CheckAssertion(results, "读取流量快照", false);
+            }
+            else
+            {
+                W($"    下载前本进程累计下载 = {ownBefore?.BytesIn ?? 0} 字节");
+
+                var payloadBytes = 4 * 1024 * 1024;
+                var received = DownloadLoopbackPayload(payloadBytes, out var downloadError);
+                W($"    回环下载完成：{received} 字节（{downloadError ?? "ok"}）");
+
+                Thread.Sleep(TimeSpan.FromSeconds(5));
+
+                var after = QueryTrafficFromService(out _);
+                var ownAfter = after is null ? null : FindOwnTraffic(after);
+                var delta = ownAfter is null ? -1 : ownAfter.BytesIn - (ownBefore?.BytesIn ?? 0);
+
+                W($"    下载后本进程累计下载 = {ownAfter?.BytesIn ?? 0} 字节；本次增量 = {delta} 字节");
+                CheckAssertion(results, "本进程下载字节增量约为 4 MiB",
+                    delta >= 2_500_000 && delta <= 6_000_000);
+
+                if (after is not null)
+                {
+                    W("    流量前 5 名：");
+                    foreach (var row in after.Take(5))
+                    {
+                        W($"      {row.Name,-32} 上传 {row.BytesOut,10}  下载 {row.BytesIn,10}");
+                    }
+                }
+            }
+
+            // ---------------- DNS ----------------
+            var probe = $"{Guid.NewGuid():N}.example.com";
+            W($"    触发 DNS 查询：{probe}");
+
+            try
+            {
+                _ = Dns.GetHostAddresses(probe);
+            }
+            catch (Exception)
+            {
+                // 预期失败（NXDOMAIN）；这里要的只是产生一次真实查询。
+            }
+
+            var match = WaitForDnsRecord(probe, TimeSpan.FromSeconds(15));
+
+            CheckAssertion(results, "捕获到探针域名的 DNS 记录", match is not null);
+
+            if (match is not null)
+            {
+                W($"      PID = {match.Pid}，程序 = {match.ProcessName}，结果 = {match.Status}，时间 = {match.TimeUtc:O}");
+                CheckAssertion(results, "DNS 记录带 PID 和程序名",
+                    match.Pid > 0 && match.ProcessName.Length > 0);
+            }
+
+            var dnsAll = QueryDnsFromService(out _);
+            W($"    DNS 缓冲当前返回 {dnsAll?.Count ?? 0} 条（上限 500）");
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "3.5 服务端实测执行完成", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 3.5：临时锁网的服务端实测（需要管理员/所有者）。
+    ///
+    /// 会**真的**建立严格模式会话，然后立刻关闭；只在验收用的 VM 上跑。
+    /// </summary>
+    private static void RunServiceLockdownTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   3.5 临时锁网实测（会短暂断网；只在 VM 跑）                   #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        if (status.StrictModeActive)
+        {
+            W("    严格模式已经开启；为避免影响用户，本次不做任何变更。");
+            W("    请先关闭严格模式，再重新运行本项。");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        ServiceResponse? enabled = null;
+
+        try
+        {
+            enabled = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.StrictLockdown,
+                    LockdownSeconds = 60,
+                },
+                TimeSpan.FromSeconds(20),
+                out var enableError);
+
+            W($"    开启结果：ok={enabled?.Ok}，错误={enabled?.Error ?? enableError}");
+
+            CheckAssertion(results, "临时锁网 60 秒成功",
+                enabled is { Ok: true, Status.StrictModeLockdownActive: true });
+
+            if (enabled is { Ok: true, Status: not null })
+            {
+                var remaining = enabled.Status.StrictModeLockdownRemainingSeconds;
+                W($"    剩余 = {remaining} 秒；放行程序 = {enabled.Status.StrictModePermittedCount}");
+
+                CheckAssertion(results, "剩余时间在 1..60 秒",
+                    remaining is > 0 and <= 60);
+                CheckAssertion(results, "状态同时标记严格模式 + 临时锁网",
+                    enabled.Status.StrictModeActive && enabled.Status.StrictModeLockdownActive);
+            }
+        }
+        finally
+        {
+            // 无论上面成功与否，都要尽力把会话关掉，绝不留下断网状态。
+            var disabled = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.StrictDisable },
+                TimeSpan.FromSeconds(20),
+                out var disableError);
+
+            W($"    关闭结果：ok={disabled?.Ok}，错误={disabled?.Error ?? disableError}");
+
+            CheckAssertion(results, "能提前关闭临时锁网",
+                disabled is { Ok: true, Status.StrictModeActive: false, Status.StrictModeLockdownActive: false });
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static List<TrafficDto>? QueryTrafficFromService(out string? error)
+    {
+        var response = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
+            TimeSpan.FromSeconds(5),
+            out error);
+
+        return response is { Ok: true, Traffic: not null }
+            ? response.Traffic
+            : null;
+    }
+
+    private static List<DnsDto>? QueryDnsFromService(out string? error)
+    {
+        var response = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryDns },
+            TimeSpan.FromSeconds(5),
+            out error);
+
+        return response is { Ok: true, DnsRecords: not null }
+            ? response.DnsRecords
+            : null;
+    }
+
+    private static TrafficDto? FindOwnTraffic(IReadOnlyList<TrafficDto> list)
+    {
+        var ownPath = Environment.ProcessPath;
+
+        return string.IsNullOrEmpty(ownPath)
+            ? null
+            : list.FirstOrDefault(item =>
+                item.IsPathKnown
+                && string.Equals(item.Path, ownPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static DnsDto? WaitForDnsRecord(string name, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            var records = QueryDnsFromService(out _);
+
+            var match = records?.FirstOrDefault(record =>
+                string.Equals(record.QueryName, name, StringComparison.OrdinalIgnoreCase));
+
+            if (match is not null)
+            {
+                return match;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 在回环上起一个限速 HTTP 服务，让连接持续约 8 秒 ——
+    /// 短于采样周期的连接会被 TCP 扩展统计漏掉，验收必须避开这个坑。
+    /// </summary>
+    private static long DownloadLoopbackPayload(long totalBytes, out string? error)
+    {
+        error = null;
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            using var stream = client.GetStream();
+
+            // 读完请求头（到空行为止），随后发响应。
+            var buffer = new byte[1024];
+            var header = new StringBuilder();
+
+            while (!header.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                header.Append(Encoding.ASCII.GetString(buffer, 0, read));
+            }
+
+            var responseHeader =
+                $"HTTP/1.1 200 OK\r\nContent-Length: {totalBytes}\r\nConnection: close\r\n\r\n";
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(responseHeader));
+
+            var chunk = new byte[64 * 1024];
+            long sent = 0;
+
+            while (sent < totalBytes)
+            {
+                var count = (int)Math.Min(chunk.Length, totalBytes - sent);
+                await stream.WriteAsync(chunk.AsMemory(0, count));
+                await stream.FlushAsync();
+                sent += count;
+
+                // 512 KB/s：4 MiB 约 8 秒，保证跨过多个 2 秒采样周期。
+                await Task.Delay(125);
+            }
+        });
+
+        long received = 0;
+
+        try
+        {
+            using var http = new HttpClient();
+            using var response = http.GetAsync(
+                $"http://127.0.0.1:{port}/payload",
+                HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+
+            response.EnsureSuccessStatusCode();
+
+            using var body = response.Content.ReadAsStream();
+            var buffer = new byte[64 * 1024];
+            int read;
+
+            while ((read = body.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                received += read;
+            }
+
+            server.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+        }
+        finally
+        {
+            listener.Stop();
+        }
+
+        return received;
+    }
+
     /// <summary>
     /// 3.5：DNS 采集的离线部分 —— 协议字段 / DTO / ETW 结构体大小 / 英文文案。
     /// 真实 ETW 会话必须在 VM 里跑；结构体大小对不上会直接读错内存，所以这里先钉死。

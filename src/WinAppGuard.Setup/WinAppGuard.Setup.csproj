@@ -13,7 +13,7 @@
     <AssemblyName>WinAppGuardSetup</AssemblyName>
     <RootNamespace>WinAppGuard.Setup</RootNamespace>
 
-    <Version>3.4</Version>
+    <Version>3.5</Version>
     <Company>lovercyh</Company>
     <Copyright>Copyright © 2026 lovercyh</Copyright>
 

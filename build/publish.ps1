@@ -134,9 +134,12 @@ if ($LASTEXITCODE -ne 0) { throw "发布自检工具失败，退出码 $LASTEXIT
 
 Copy-Item (Join-Path $selfCheckOut 'WinAppGuard.SelfCheck.exe') $distTools -Force
 
-$acceptanceScript = Join-Path $root 'docs\3.4-验收脚本.ps1'
-if (Test-Path $acceptanceScript) {
-    Copy-Item $acceptanceScript $distTools -Force
+foreach ($name in @('3.4-验收脚本.ps1', '3.5-验收脚本.ps1')) {
+    $acceptanceScript = Join-Path $root "docs\$name"
+
+    if (Test-Path $acceptanceScript) {
+        Copy-Item $acceptanceScript $distTools -Force
+    }
 }
 
 Write-Host ''

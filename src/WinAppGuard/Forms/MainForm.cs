@@ -889,19 +889,19 @@ public partial class MainForm : Form
         //    （用户实际报过这个 bug）。放在最后一列只影响表格最右边缘，没人会去拖那里。
         // 3.5：加了「上传 / 下载 / 总计」三列，其它列再收窄一点，
         // 保证 1180 宽的默认窗口仍然放得下（流量是本次运行的近似值，列头保持短）。
-        AddConnectionColumn("程序名", nameof(TcpConnectionItem.ProcessName), 110, sortable: true);
-        AddConnectionColumn("程序路径", nameof(TcpConnectionItem.ProcessPathText), 110);
-        AddConnectionColumn("PID", nameof(TcpConnectionItem.Pid), 55, sortable: true);
+        AddConnectionColumn("程序名", nameof(TcpConnectionItem.ProcessName), 105, sortable: true);
+        AddConnectionColumn("程序路径", nameof(TcpConnectionItem.ProcessPathText), 90);
+        AddConnectionColumn("PID", nameof(TcpConnectionItem.Pid), 50, sortable: true);
         AddConnectionColumn("本地端口", nameof(TcpConnectionItem.LocalPortText), 70, sortable: true);
-        AddConnectionColumn("远程 IP", nameof(TcpConnectionItem.RemoteAddressText), 120, sortable: true);
+        AddConnectionColumn("远程 IP", nameof(TcpConnectionItem.RemoteAddressText), 110, sortable: true);
         AddConnectionColumn("远程端口", nameof(TcpConnectionItem.RemotePortText), 70, sortable: true);
         AddConnectionColumn("状态", nameof(TcpConnectionItem.StateText), 80, sortable: true);
-        AddConnectionColumn("协议", nameof(TcpConnectionItem.Protocol), 55);
-        AddConnectionColumn("上传", nameof(TcpConnectionItem.TrafficOutText), 65, sortable: true);
-        AddConnectionColumn("下载", nameof(TcpConnectionItem.TrafficInText), 65, sortable: true);
-        AddConnectionColumn("总计", nameof(TcpConnectionItem.TrafficTotalText), 70, sortable: true);
-        AddConnectionColumn("阻止状态", nameof(TcpConnectionItem.BlockStateText), 75);
-        AddConnectionColumn("放行", nameof(TcpConnectionItem.WhitelistText), 120);
+        AddConnectionColumn("协议", nameof(TcpConnectionItem.Protocol), 50);
+        AddConnectionColumn("上传", nameof(TcpConnectionItem.TrafficOutText), 60, sortable: true);
+        AddConnectionColumn("下载", nameof(TcpConnectionItem.TrafficInText), 60, sortable: true);
+        AddConnectionColumn("总计", nameof(TcpConnectionItem.TrafficTotalText), 65, sortable: true);
+        AddConnectionColumn("阻止状态", nameof(TcpConnectionItem.BlockStateText), 70);
+        AddConnectionColumn("放行", nameof(TcpConnectionItem.WhitelistText), 110);
         AddConnectionColumn("数字签名", nameof(TcpConnectionItem.SignatureText), 70, fill: true, minWidth: 70);
 
         // 流量列的悬停提示：必须写明「仅 TCP / 近似值」，不能让人当精确账单。

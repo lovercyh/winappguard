@@ -102,7 +102,24 @@ function Invoke-OwnerPhase {
     }
 
     $version = (Get-Item $setup).VersionInfo.ProductVersion
-    Assert '版本是 3.4+' ($version -like '3.4+*') $version
+    $svcVersion = (Get-Item $svc).VersionInfo.ProductVersion
+    Assert 'Setup 版本是 3.4+' ($version -like '3.4+*') $version
+    Assert '服务版本是 3.4+' ($svcVersion -like '3.4+*') $svcVersion
+
+    if ($version -notlike '3.4+*' -or $svcVersion -notlike '3.4+*') {
+        Write-Host 'dist-tools 里还是旧版本。请先覆盖 Setup / Uninstall / WinAppGuard.exe / WinAppGuardSvc.exe。' -ForegroundColor Red
+        return
+    }
+
+    $probe = & $check --wfp-dacl-sddl-test --no-pause 2>&1
+    $probeText = $probe -join "`n"
+    Assert 'SelfCheck 是 3.4 版' ($probeText -match 'WFP DACL（离线）')
+    Assert '--wfp-dacl-sddl-test' ($LASTEXITCODE -eq 0) "exit=$LASTEXITCODE"
+
+    if ($probeText -notmatch 'WFP DACL（离线）') {
+        Write-Host 'WinAppGuard.SelfCheck.exe 还是旧版，请重新发布并覆盖。' -ForegroundColor Red
+        return
+    }
 
     Write-Step '1. 记录升级前规则'
     $beforeCount = Get-RuleCount
@@ -137,8 +154,7 @@ function Invoke-OwnerPhase {
     & $check --wfp-dacl-test --no-pause
     Assert '--wfp-dacl-test' ($LASTEXITCODE -eq 0) "exit=$LASTEXITCODE"
 
-    & $check --wfp-dacl-sddl-test --no-pause
-    Assert '--wfp-dacl-sddl-test' ($LASTEXITCODE -eq 0) "exit=$LASTEXITCODE"
+    # --wfp-dacl-sddl-test 已在第 0 步跑过
 
     Write-Step '6. 规则没有丢'
     $afterCount = Get-RuleCount
@@ -193,6 +209,12 @@ function Invoke-NonOwnerPhase {
     Assert '管理员权限' (Test-Admin)
     if (-not (Test-Admin)) { throw '请用管理员 PowerShell 运行' }
 
+    $version = (Get-Item $setup).VersionInfo.ProductVersion
+    $svcVersion = (Get-Item $svc).VersionInfo.ProductVersion
+    Assert 'Setup 版本是 3.4+' ($version -like '3.4+*') $version
+    Assert '服务版本是 3.4+' ($svcVersion -like '3.4+*') $svcVersion
+    if ($version -notlike '3.4+*' -or $svcVersion -notlike '3.4+*') { return }
+
     $service = Get-Service -Name WinAppGuardSvc -ErrorAction SilentlyContinue
     Assert '服务仍在运行' ($null -ne $service -and $service.Status -eq 'Running')
 
@@ -230,6 +252,10 @@ function Invoke-CleanupPhase {
     Write-Step '0. 环境检查'
     Assert '管理员权限' (Test-Admin)
     if (-not (Test-Admin)) { throw '请用管理员 PowerShell 运行' }
+
+    $version = (Get-Item $setup).VersionInfo.ProductVersion
+    Assert 'Setup 版本是 3.4+' ($version -like '3.4+*') $version
+    if ($version -notlike '3.4+*') { return }
 
     $ownerSid = Get-OwnerSid
     $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value

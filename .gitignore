@@ -6,6 +6,7 @@ dist-tools/
 build/_publish/
 build/_publish_svc/
 build/_publish_setup/
+build/_selfcheck/
 tools/_publish/
 
 # 自检工具运行时生成的报告（每次运行都会重新生成，没必要入库）

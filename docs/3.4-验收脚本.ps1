@@ -1,9 +1,9 @@
 ﻿# WinAppGuard 3.4 一键验收脚本
 #
-# 用法（管理员 PowerShell）：
-#   .\3.4-验收脚本.ps1 -Phase Owner     # 账户 A：安装时的所有者
-#   .\3.4-验收脚本.ps1 -Phase NonOwner  # 账户 B：另一个管理员（非所有者）
-#   .\3.4-验收脚本.ps1 -Phase Cleanup   # 回到账户 A，最后卸载
+# 用法（管理员 PowerShell；如果提示“禁止运行脚本”，用 -ExecutionPolicy Bypass 形式）：
+#   powershell -ExecutionPolicy Bypass -File .\3.4-验收脚本.ps1 -Phase Owner
+#   powershell -ExecutionPolicy Bypass -File .\3.4-验收脚本.ps1 -Phase NonOwner
+#   powershell -ExecutionPolicy Bypass -File .\3.4-验收脚本.ps1 -Phase Cleanup
 #
 # 说明：
 #   - 三个阶段必须用对应账户分别运行，脚本无法替你切换 Windows 账户；

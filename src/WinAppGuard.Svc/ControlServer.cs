@@ -38,6 +38,7 @@ internal sealed class ControlServer : IDisposable
     private static int _authRejectedCount;
     private System.Threading.Timer? _expiryTimer;
     private System.Threading.Timer? _tamperTimer;
+    private System.Threading.Timer? _lockdownTimer;
 
     internal void Start()
     {
@@ -126,6 +127,14 @@ internal sealed class ControlServer : IDisposable
             dueTime: TimeSpan.FromSeconds(15),
             period: TimeSpan.FromSeconds(10));
 
+        // 3.5：临时锁网到期检查。每秒一次，锁内只比较一个 DateTime；
+        // 到期撤销在 RuleHandlers 的串行锁里做，避免与规则写入同时碰 WFP。
+        _lockdownTimer = new System.Threading.Timer(
+            _ => Rules.ExpireLockdownIfDue(),
+            state: null,
+            dueTime: TimeSpan.FromSeconds(1),
+            period: TimeSpan.FromSeconds(1));
+
         // 审计采集随服务启动（设置里关着就不开）。
         ServiceLog.Info("WAG-AUDIT-002", "Startup: starting audit capture.");
         AuditHost.StartIfEnabled();
@@ -151,8 +160,11 @@ internal sealed class ControlServer : IDisposable
         _expiryTimer = null;
         _tamperTimer?.Dispose();
         _tamperTimer = null;
+        _lockdownTimer?.Dispose();
+        _lockdownTimer = null;
 
         // 严格模式会话随服务一起撤销：停服务 = 立即恢复联网。
+        LockdownHost.Shutdown();
         StrictModeHost.Shutdown();
 
         // 审计采集也停掉（记录文件先刷盘再关闭）。
@@ -528,6 +540,9 @@ internal sealed class ControlServer : IDisposable
 
         status.StrictModeActive = StrictModeHost.IsEnabled;
         status.StrictModePermittedCount = StrictModeHost.PermittedCount;
+        status.StrictModeLockdownActive = LockdownHost.IsActive;
+        status.StrictModeLockdownExpiresUtc = LockdownHost.ExpiresUtc;
+        status.StrictModeLockdownRemainingSeconds = LockdownHost.RemainingSeconds;
 
         var audit = AuditHost.Snapshot();
         status.AuditEnabled = audit.Enabled;

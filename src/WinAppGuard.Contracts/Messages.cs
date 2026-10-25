@@ -48,6 +48,9 @@ public sealed class ServiceRequest
 
     /// <summary>3.5：批量查询路径的 PID 列表（最多 64 个）。</summary>
     public List<int>? Pids { get; set; }
+
+    /// <summary>3.5：临时锁网的持续时间（秒）。由服务端再做一次范围校验。</summary>
+    public int? LockdownSeconds { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -153,6 +156,20 @@ public sealed class ServiceStatus
 
     /// <summary>严格模式当前放行的程序数量（3.0-c）。</summary>
     public int StrictModePermittedCount { get; set; }
+
+    // ---- 3.5：临时锁网 ----
+
+    /// <summary>
+    /// 当前严格模式是否由「临时锁网」建立。
+    /// 手动开启严格模式时为 false —— 两种状态不能混在一起，否则界面会显示错的倒计时。
+    /// </summary>
+    public bool StrictModeLockdownActive { get; set; }
+
+    /// <summary>临时锁网到期时间（UTC）；未锁网为 null。</summary>
+    public DateTime? StrictModeLockdownExpiresUtc { get; set; }
+
+    /// <summary>临时锁网剩余秒数（0 = 未锁网）。服务端算，界面不要自己猜。</summary>
+    public int StrictModeLockdownRemainingSeconds { get; set; }
 
     /// <summary>审计开关（机器级设置）。</summary>
     public bool AuditEnabled { get; set; }

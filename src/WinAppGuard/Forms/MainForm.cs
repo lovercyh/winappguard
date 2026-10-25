@@ -139,6 +139,12 @@ public partial class MainForm : Form
     /// <summary>严格模式当前放行的程序数（服务状态快照）。</summary>
     private int _strictModePermittedCount;
 
+    /// <summary>3.5：当前严格模式是否由临时锁网建立（用于显示倒计时和到期提示）。</summary>
+    private bool _lockdownActive;
+
+    /// <summary>3.5：临时锁网到期时间（UTC，服务给的时间；界面只用来算倒计时）。</summary>
+    private DateTime? _lockdownExpiresUtc;
+
     /// <summary>上次看到的"自动重建规则"计数（用于弹一次托盘提示）。-1 = 还没同步过。</summary>
     private int _lastTamperRebuilt = -1;
 
@@ -468,6 +474,8 @@ public partial class MainForm : Form
             {
                 _strictModeEnabled = strictStatus.StrictModeActive;
                 _strictModePermittedCount = strictStatus.StrictModePermittedCount;
+                _lockdownActive = strictStatus.StrictModeLockdownActive;
+                _lockdownExpiresUtc = strictStatus.StrictModeLockdownExpiresUtc;
 
                 // 顺带把审计设置/采集状态同步到记录页（服务是唯一来源）。
                 ApplyAuditStatus(strictStatus);
@@ -4897,6 +4905,7 @@ public partial class MainForm : Form
 
                 _strictModeEnabled = false;
                 _strictModePermittedCount = 0;
+                NotifyLockdownEndedByService();
                 RefreshStrictModeStatus();
 
                 _auditCollecting = false;
@@ -4928,6 +4937,7 @@ public partial class MainForm : Form
             // 会话活在服务里：服务不在了，严格模式必然已经撤销。
             _strictModeEnabled = false;
             _strictModePermittedCount = 0;
+            NotifyLockdownEndedByService();
             RefreshStrictModeStatus();
 
             // 审计采集也随服务停止；已有记录仍可读。
@@ -4936,9 +4946,19 @@ public partial class MainForm : Form
             return;
         }
 
+        var lockdownWasActive = _lockdownActive;
+
         _strictModeEnabled = status.StrictModeActive;
         _strictModePermittedCount = status.StrictModePermittedCount;
+        _lockdownActive = status.StrictModeLockdownActive;
+        _lockdownExpiresUtc = status.StrictModeLockdownExpiresUtc;
         RefreshStrictModeStatus();
+
+        // 到点自动恢复：只提示一次。手动关闭会先把 _lockdownActive 清掉，不会误报。
+        if (lockdownWasActive && !_lockdownActive)
+        {
+            ShowTrayBalloon("临时锁网已结束", "已到时间，网络自动恢复。");
+        }
 
         // 审计设置 / 采集状态由服务给，界面只做显示与只读。
         ApplyAuditStatus(status);
@@ -5063,6 +5083,11 @@ public partial class MainForm : Form
             {
                 english.Add($"Now: only {_strictModePermittedCount} programs are allowed; new connections from everything else are blocked.");
                 english.Add("This is a session-only restriction: turning strict mode off, or stopping/crashing the protection service, removes it immediately.");
+
+                if (_lockdownActive && _lockdownExpiresUtc is { } lockdownExpires)
+                {
+                    english.Add($"Timed lockdown: {FormatLockdownRemaining(lockdownExpires - DateTime.UtcNow)}. It ends automatically; turning strict mode off or stopping the service also restores the network.");
+                }
             }
             else
             {
@@ -5090,6 +5115,11 @@ public partial class MainForm : Form
         {
             lines.Add($"现在：只放行 {_strictModePermittedCount} 个程序，其它程序的新连接会被拦掉。");
             lines.Add("这是「会话内」的临时限制：关闭严格模式、或防护服务停止/崩溃，限制立刻消失。");
+
+            if (_lockdownActive && _lockdownExpiresUtc is { } lockdownExpires)
+            {
+                lines.Add($"临时锁网：{FormatLockdownRemaining(lockdownExpires - DateTime.UtcNow)}。到点自动恢复；关闭严格模式或服务停止也会立即恢复。");
+            }
         }
         else
         {
@@ -5122,19 +5152,32 @@ public partial class MainForm : Form
         try
         {
             var enabled = _strictModeEnabled && _serviceAvailable;
+            var lockdownRemaining = _lockdownActive && _lockdownExpiresUtc is { } expires
+                ? expires - DateTime.UtcNow
+                : TimeSpan.Zero;
+            var lockdownActive = enabled && lockdownRemaining > TimeSpan.Zero;
 
             _strictModeStatusLabel.Text = !_serviceAvailable
                 ? (Localizer.IsEnglish ? "Status: service is not running; strict mode unavailable" : "当前状态：服务未运行，严格模式不可用")
                 : enabled
-                    ? (Localizer.IsEnglish
-                        ? $"Status: strict mode active ({_strictModePermittedCount} programs allowed)"
-                        : $"当前状态：严格模式生效中（放行 {_strictModePermittedCount} 个程序）")
+                    ? lockdownActive
+                        ? (Localizer.IsEnglish
+                            ? $"Status: timed lockdown active ({FormatLockdownRemaining(lockdownRemaining)}; {_strictModePermittedCount} programs allowed)"
+                            : $"当前状态：临时锁网中（{FormatLockdownRemaining(lockdownRemaining)}，放行 {_strictModePermittedCount} 个程序）")
+                        : (Localizer.IsEnglish
+                            ? $"Status: strict mode active ({_strictModePermittedCount} programs allowed)"
+                            : $"当前状态：严格模式生效中（放行 {_strictModePermittedCount} 个程序）")
                     : (Localizer.IsEnglish ? "Status: off; everything is allowed by default" : "当前状态：未开启，默认放行");
 
             _strictModeToggleButton.Text = enabled ? Localizer.T("关闭严格模式") : Localizer.T("开启严格模式…");
 
             // 会话归服务：服务不在就没有会话，按钮必须灰掉（不能假装还能开）。
             _strictModeToggleButton.Enabled = _serviceAvailable;
+
+            // 临时锁网只允许在「严格模式未开启」时开始；已经开着时再点只会得到一句拒绝。
+            _lockdown30Button.Enabled = _serviceAvailable && !enabled;
+            _lockdown2hButton.Enabled = _serviceAvailable && !enabled;
+            _trayLockdownItem.Enabled = _serviceAvailable && !enabled;
 
             _strictModeDetailLabel.Text = BuildStrictModeDetailText(enabled);
         }
@@ -5143,6 +5186,48 @@ public partial class MainForm : Form
             LocalLog.Error(LocalLog.Pick("刷新严格模式状态失败", "Failed to refresh the strict-mode status."), ex);
             _strictModeStatusLabel.Text = Localizer.T("当前状态：读取失败（详见日志）");
         }
+    }
+
+    /// <summary>
+    /// 3.5：把临时锁网剩余时间写成人话。
+    /// **纯函数**：自检直接断言中英文输出，避免出现「剩余 0 分钟」这种丢人的状态。
+    /// </summary>
+    internal static string FormatLockdownRemaining(TimeSpan remaining)
+    {
+        var totalMinutes = (int)Math.Ceiling(remaining.TotalMinutes);
+
+        if (totalMinutes <= 0)
+        {
+            totalMinutes = 1;
+        }
+
+        var hours = totalMinutes / 60;
+        var minutes = totalMinutes % 60;
+
+        var text = hours > 0
+            ? (minutes > 0
+                ? $"剩余 {hours} 小时 {minutes} 分钟"
+                : $"剩余 {hours} 小时")
+            : $"剩余 {minutes} 分钟";
+
+        return Localizer.T(text);
+    }
+
+    /// <summary>
+    /// 服务停止/崩溃时动态会话必然消失。用户开的是「30 分钟锁网」，
+    /// 结果 3 分钟就恢复了 —— 这件事必须主动说，不能等他自己发现。
+    /// </summary>
+    private void NotifyLockdownEndedByService()
+    {
+        if (!_lockdownActive)
+        {
+            return;
+        }
+
+        _lockdownActive = false;
+        _lockdownExpiresUtc = null;
+
+        ShowTrayBalloon("临时锁网已解除", "防护服务已停止或不可用，网络已经恢复。");
     }
 
     private void OnStrictModeToggleClick(object? sender, EventArgs e)
@@ -5157,9 +5242,139 @@ public partial class MainForm : Form
         }
     }
 
+    private void OnLockdown30Click(object? sender, EventArgs e)
+        => StartLockdown(TimeSpan.FromMinutes(30));
+
+    private void OnLockdown2hClick(object? sender, EventArgs e)
+        => StartLockdown(TimeSpan.FromHours(2));
+
+    /// <summary>
+    /// 3.5：临时锁网。复用严格模式的动态会话，只多一个到期时间。
+    ///
+    /// 只做**一次**确认：它有时限、可提前结束、服务停止也会恢复，
+    /// 后果不像「永久阻止」那样重；但清单和自动恢复规则必须讲清楚。
+    /// </summary>
+    private void StartLockdown(TimeSpan duration)
+    {
+        if (!_serviceAvailable)
+        {
+            UiMessageBox.Show(
+                this,
+                Localizer.T("防护服务未运行，无法开始临时锁网。"),
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (_strictModeEnabled)
+        {
+            UiMessageBox.Show(
+                this,
+                Localizer.T("严格模式已经开启。要提前结束，请点「关闭严格模式」。"),
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var affected = BuildProgramsThatWillLoseAccess();
+        var durationText = DescribeLockdownDuration(duration);
+
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "临时锁网",
+            question: Localizer.IsEnglish
+                ? $"Lock the network for {durationText}? Programs not on the whitelist will be offline."
+                : $"临时锁网 {durationText}？没有加入白名单的程序会断网。",
+            details: new[]
+            {
+                new KeyValuePair<string, string>("将要做的", "临时开启严格模式（会话内）"),
+                new KeyValuePair<string, string>("持续时间", durationText),
+                new KeyValuePair<string, string>("到期后", "自动恢复联网，不需要手动操作"),
+                new KeyValuePair<string, string>(
+                    "会被影响",
+                    affected.Count == 0
+                        ? "（没有 —— 当前联网的程序都已经在白名单里）"
+                        : $"{affected.Count} 个正在联网、但没加白名单的程序"),
+            },
+            warnings: new[]
+            {
+                "未加白名单的程序会立刻无法建立新的出站连接（已经连上的要等它自己断开）。",
+                "可以随时点「关闭严格模式」提前结束。",
+                "防护服务停止或崩溃时会自动恢复联网，不会留下永久断网。",
+                "不会修改 Windows 防火墙的任何设置。",
+            },
+            confirmText: "开始锁网");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            var response = CallService(
+                ServiceProtocol.Commands.StrictLockdown,
+                new ServiceRequest { LockdownSeconds = (int)duration.TotalSeconds },
+                "临时锁网");
+
+            if (response is null)
+            {
+                RefreshStrictModeStatus();
+                return;
+            }
+
+            _strictModeEnabled = response.Status?.StrictModeActive ?? true;
+            _strictModePermittedCount = response.Status?.StrictModePermittedCount ?? 0;
+            _lockdownActive = response.Status?.StrictModeLockdownActive ?? true;
+            _lockdownExpiresUtc = response.Status?.StrictModeLockdownExpiresUtc;
+
+            LocalLog.Operation(LocalLog.Pick(
+                $"临时锁网已开启：{durationText}。",
+                $"Timed lockdown enabled for {durationText} (ok={response.Ok})."));
+
+            RefreshStrictModeStatus();
+
+            ShowTrayBalloon(
+                "临时锁网已开启",
+                Localizer.IsEnglish
+                    ? $"Programs without whitelist access are offline; the network comes back in {durationText}."
+                    : $"未加白名单的程序已断网，{durationText}后自动恢复。");
+        }
+        catch (Exception ex)
+        {
+            ShowError("临时锁网失败", ex, "Failed to start the timed lockdown");
+            RefreshStrictModeStatus();
+        }
+    }
+
+    /// <summary>把锁网时长写成人话（只支持界面提供的两档，但保留通用格式）。</summary>
+    private static string DescribeLockdownDuration(TimeSpan duration)
+    {
+        var hours = (int)duration.TotalHours;
+        var minutes = (int)duration.TotalMinutes % 60;
+
+        if (hours > 0 && minutes == 0)
+        {
+            return Localizer.IsEnglish ? $"{hours} hours" : $"{hours} 小时";
+        }
+
+        if (hours > 0)
+        {
+            return Localizer.IsEnglish
+                ? $"{hours} hours {minutes} minutes"
+                : $"{hours} 小时 {minutes} 分钟";
+        }
+
+        return Localizer.IsEnglish ? $"{minutes} minutes" : $"{minutes} 分钟";
+    }
+
     /// <summary>关闭严格模式。这是"安全方向"的操作，所以只要一次确认。</summary>
     private void DisableStrictMode()
     {
+        var wasLockdown = _lockdownActive;
+
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "关闭严格模式",
@@ -5197,13 +5412,17 @@ public partial class MainForm : Form
 
             _strictModeEnabled = false;
             _strictModePermittedCount = 0;
+            _lockdownActive = false;
+            _lockdownExpiresUtc = null;
 
             LocalLog.Operation(LocalLog.Pick($"严格模式已关闭：{response.Message}", $"Strict mode disabled (ok={response.Ok})."));
 
             AfterRulesChanged();
             RefreshStrictModeStatus();
 
-            ShowTrayBalloon(Localizer.T("严格模式已关闭"), Localizer.T("限制已撤销，所有程序恢复联网。"));
+            ShowTrayBalloon(
+                wasLockdown ? "临时锁网已结束" : "严格模式已关闭",
+                wasLockdown ? "已提前结束，网络已经恢复。" : "限制已撤销，所有程序恢复联网。");
         }
         catch (Exception ex)
         {

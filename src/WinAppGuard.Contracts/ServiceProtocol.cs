@@ -92,6 +92,12 @@ public static class ServiceProtocol
         /// <summary>1.x 升级兜底：按界面传来的设置文件路径还原全局默认出站。</summary>
         public const string StrictRecoverLegacy = "write.strict.recoverLegacy";
 
+        /// <summary>
+        /// 3.5：临时锁网（定时严格模式）。复用严格模式的动态会话，
+        /// 只额外记录一个到期时间，到点由服务主动撤销。
+        /// </summary>
+        public const string StrictLockdown = "write.strict.lockdown";
+
         // ---- 3.0-c：审计（采集在服务，界面只读）----
 
         /// <summary>修改机器级审计设置（开关 / 域名推测 / 保留期）。</summary>

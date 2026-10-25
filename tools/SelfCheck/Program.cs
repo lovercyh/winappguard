@@ -150,6 +150,7 @@ internal static class Program
                         && !args.Contains("--cli-language-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--key-primitive-test", StringComparer.OrdinalIgnoreCase)
@@ -364,6 +365,10 @@ internal static class Program
             else if (args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunProcessPathTest();
+            }
+            else if (args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunStrictLockdownTest();
             }
             else if (args.Contains("--log-format-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3940,6 +3945,34 @@ internal static class Program
                         CheckAssertion(results, "英文：托盘菜单无中文",
                             trayItems.Count > 0
                             && trayItems.All(text => !HasCjk(text)));
+                    }
+
+                    if (TryGetField<Button>(form, "_lockdown30Button", out var lock30)
+                        && TryGetField<Button>(form, "_lockdown2hButton", out var lock2h))
+                    {
+                        W($"    锁网按钮 = {lock30.Text} | {lock2h.Text}");
+                        CheckAssertion(results, "英文：锁网按钮无中文",
+                            !HasCjk(lock30.Text) && !HasCjk(lock2h.Text));
+
+                        var need30 = TextRenderer.MeasureText(lock30.Text, lock30.Font).Width + 16;
+                        var need2h = TextRenderer.MeasureText(lock2h.Text, lock2h.Font).Width + 16;
+                        W($"    锁网按钮宽度：30 分钟需要 {need30}px / 实宽 {lock30.Width}px；" +
+                          $"2 小时需要 {need2h}px / 实宽 {lock2h.Width}px");
+                        CheckAssertion(results, "英文：锁网按钮不截断",
+                            need30 <= lock30.Width && need2h <= lock2h.Width);
+                    }
+
+                    if (TryGetField<ToolStripMenuItem>(form, "_trayLockdownItem", out var trayLockdown))
+                    {
+                        var lockdownItems = trayLockdown.DropDownItems
+                            .OfType<ToolStripMenuItem>()
+                            .Select(item => item.Text)
+                            .ToList();
+
+                        W("    锁网托盘子菜单 = " + string.Join(" | ", lockdownItems));
+                        CheckAssertion(results, "英文：锁网托盘子菜单无中文",
+                            lockdownItems.Count == 2
+                            && lockdownItems.All(text => !HasCjk(text)));
                     }
 
                     if (TryGetField<NotifyIcon>(form, "_trayIcon", out var trayIcon))
@@ -9257,6 +9290,100 @@ internal static class Program
     /// 3.5：服务代查路径的离线部分（进程解析 / DTO 编解码 / 回填）。
     /// 真实 IPC 需要服务在运行，放到 VM 验收。
     /// </summary>
+    /// <summary>
+    /// 3.5：临时锁网 —— 协议字段 / 状态字段 / 倒计时格式化 / 英文文案。
+    /// 真实 WFP 会话要服务和管理员，放到 VM 验收。
+    /// </summary>
+    private static void RunStrictLockdownTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previous = Localizer.Current;
+
+        W("################################################################");
+        W("#   临时锁网（离线：协议 / 状态 / 倒计时 / 英文）                #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Localizer.Initialize("zh");
+
+            CheckAssertion(results, "协议版本仍是 v2", ServiceProtocol.Version == 2);
+            CheckAssertion(results, "命令名正确",
+                ServiceProtocol.Commands.StrictLockdown == "write.strict.lockdown");
+
+            var request = new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.StrictLockdown,
+                LockdownSeconds = 1800,
+            };
+
+            var json = JsonSerializer.Serialize(request, ServiceProtocol.JsonOptions);
+            W($"    请求 JSON = {json}");
+            CheckAssertion(results, "请求带 lockdownSeconds",
+                json.Contains("\"lockdownSeconds\":1800", StringComparison.Ordinal));
+
+            var legacy = JsonSerializer.Deserialize<ServiceRequest>(
+                "{\"command\":\"write.strict.lockdown\"}", ServiceProtocol.JsonOptions);
+            CheckAssertion(results, "旧客户端不带 lockdownSeconds 时为 null",
+                legacy is { LockdownSeconds: null });
+
+            var expires = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
+            var status = new ServiceStatus
+            {
+                StrictModeActive = true,
+                StrictModePermittedCount = 12,
+                StrictModeLockdownActive = true,
+                StrictModeLockdownExpiresUtc = expires,
+                StrictModeLockdownRemainingSeconds = 1800,
+            };
+
+            var statusJson = JsonSerializer.Serialize(status, ServiceProtocol.JsonOptions);
+            W($"    状态 JSON = {statusJson}");
+            CheckAssertion(results, "状态带锁网字段",
+                statusJson.Contains("\"strictModeLockdownActive\":true", StringComparison.Ordinal)
+                && statusJson.Contains("\"strictModeLockdownExpiresUtc\":\"2026-10-25T12:00:00Z\"", StringComparison.Ordinal)
+                && statusJson.Contains("\"strictModeLockdownRemainingSeconds\":1800", StringComparison.Ordinal));
+
+            CheckAssertion(results, "中文倒计时：30 分钟",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromMinutes(30)) == "剩余 30 分钟");
+            CheckAssertion(results, "中文倒计时：2 小时",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromHours(2)) == "剩余 2 小时");
+            CheckAssertion(results, "中文倒计时：不足 1 分钟按 1 分钟算",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromSeconds(5)) == "剩余 1 分钟");
+            CheckAssertion(results, "中文倒计时：1 小时 59 分",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromMinutes(119)) == "剩余 1 小时 59 分钟");
+
+            Localizer.Initialize("en");
+
+            CheckAssertion(results, "英文倒计时：30 分钟",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromMinutes(30)) == "30 min left");
+            CheckAssertion(results, "英文倒计时：2 小时",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromHours(2)) == "2 h left");
+            CheckAssertion(results, "英文倒计时：1 小时 59 分",
+                MainForm.FormatLockdownRemaining(TimeSpan.FromMinutes(119)) == "1 h 59 min left");
+
+            CheckAssertion(results, "英文：锁网文案已翻译",
+                Localizer.T("临时锁网") == "Timed lockdown"
+                && Localizer.T("临时锁网已开启") == "Timed lockdown started"
+                && Localizer.T("临时锁网已结束") == "Timed lockdown ended"
+                && Localizer.T("开始锁网") == "Start lockdown"
+                && !System.Text.RegularExpressions.Regex.IsMatch(
+                    Localizer.T("防护服务已停止或不可用，网络已经恢复。"), "[\u4e00-\u9fff]"));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "临时锁网检查执行完成", false);
+        }
+        finally
+        {
+            Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunProcessPathTest()
     {
         var results = new List<(string Title, bool Passed)>();

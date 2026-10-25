@@ -88,6 +88,7 @@ internal sealed class RuleHandlers
                 ServiceProtocol.Commands.StrictDisable => Strict(request, enable: false),
                 ServiceProtocol.Commands.StrictRefresh => StrictRefresh(request),
                 ServiceProtocol.Commands.StrictRecoverLegacy => StrictRecoverLegacy(request),
+                ServiceProtocol.Commands.StrictLockdown => StrictLockdown(request),
 
                 ServiceProtocol.Commands.AuditConfigure => AuditConfigure(request),
                 ServiceProtocol.Commands.AuditClear => AuditClear(request),
@@ -120,6 +121,15 @@ internal sealed class RuleHandlers
 
     private ServiceResponse Strict(ServiceRequest request, bool enable)
     {
+        if (!enable)
+        {
+            // 手动关闭严格模式 = 提前结束临时锁网；不清掉到期时间，
+            // 到点还会再执行一次撤销，日志会误导排障的人。
+            LockdownHost.Cancel(
+                "WAG-STRICT-007",
+                "Timed lockdown cancelled by an explicit strict-mode disable.");
+        }
+
         var result = enable ? StrictModeHost.Enable() : StrictModeHost.Disable();
 
         return new ServiceResponse
@@ -142,6 +152,60 @@ internal sealed class RuleHandlers
             Ok = true,
             Status = ControlServer.BuildStatus(),
         };
+    }
+
+    private ServiceResponse StrictLockdown(ServiceRequest request)
+    {
+        var result = LockdownHost.Enable(request.LockdownSeconds ?? 0);
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = result.Success,
+            Error = result.Success ? null : result.Message,
+            Message = result.Message,
+            Status = ControlServer.BuildStatus(),
+        };
+    }
+
+    /// <summary>
+    /// 3.5：临时锁网到期检查。由 <see cref="ControlServer"/> 的定时器调用。
+    ///
+    /// 必须拿规则锁再动 WFP：到期撤销和用户的规则写入不能同时发生。
+    /// 撤销失败时重新挂 5 秒 —— 宁可晚一点恢复，也不能留下永久断网。
+    /// </summary>
+    internal void ExpireLockdownIfDue()
+    {
+        lock (Gate)
+        {
+            if (!LockdownHost.TryExpireIfDue(out var expiresUtc))
+            {
+                return;
+            }
+
+            if (!StrictModeHost.IsEnabled)
+            {
+                // 会话已经不在了（例如被外部/其它路径撤销）：网络本来就恢复了，
+                // 不能再 RetryLater，否则倒计时会永远续命。
+                ServiceLog.Info(
+                    "WAG-STRICT-008",
+                    $"Timed lockdown expired at {expiresUtc:O}; the session was already inactive.");
+                return;
+            }
+
+            var result = StrictModeHost.Disable();
+
+            if (result.Success)
+            {
+                ServiceLog.Operation(
+                    "WAG-STRICT-008",
+                    $"Timed lockdown expired at {expiresUtc:O}; network access restored.");
+            }
+            else
+            {
+                LockdownHost.RetryLater(TimeSpan.FromSeconds(5));
+            }
+        }
     }
 
     private ServiceResponse StrictRecoverLegacy(ServiceRequest request)

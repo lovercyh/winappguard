@@ -129,6 +129,8 @@ partial class MainForm
     private Panel _strictModeButtons = null!;
     private Button _strictModeToggleButton = null!;
     private Button _refreshStrictModeButton = null!;
+    private Button _lockdown30Button = null!;
+    private Button _lockdown2hButton = null!;
 
     // ---------- 其它 ----------
     private Button _exitButton = null!;
@@ -158,6 +160,9 @@ partial class MainForm
     private ContextMenuStrip _trayMenu = null!;
     private ToolStripMenuItem _trayShowItem = null!;
     private ToolStripMenuItem _trayDeleteAllItem = null!;
+    private ToolStripMenuItem _trayLockdownItem = null!;
+    private ToolStripMenuItem _trayLockdown30Item = null!;
+    private ToolStripMenuItem _trayLockdown2hItem = null!;
     private ToolStripSeparator _traySeparator = null!;
     private ToolStripMenuItem _trayExitItem = null!;
 
@@ -269,6 +274,8 @@ partial class MainForm
         _strictModeButtons = new Panel();
         _strictModeToggleButton = new Button();
         _refreshStrictModeButton = new Button();
+        _lockdown30Button = new Button();
+        _lockdown2hButton = new Button();
         _exitButton = new Button();
         _statusStrip = new StatusStrip();
         _adminStatusLabel = new ToolStripStatusLabel();
@@ -285,6 +292,9 @@ partial class MainForm
         _trayMenu = new ContextMenuStrip(components);
         _trayShowItem = new ToolStripMenuItem();
         _trayDeleteAllItem = new ToolStripMenuItem();
+        _trayLockdownItem = new ToolStripMenuItem();
+        _trayLockdown30Item = new ToolStripMenuItem();
+        _trayLockdown2hItem = new ToolStripMenuItem();
         _traySeparator = new ToolStripSeparator();
         _trayExitItem = new ToolStripMenuItem();
 
@@ -1080,6 +1090,8 @@ partial class MainForm
         _strictModeButtons.TabIndex = 2;
         _strictModeButtons.Controls.Add(_strictModeToggleButton);
         _strictModeButtons.Controls.Add(_refreshStrictModeButton);
+        _strictModeButtons.Controls.Add(_lockdown30Button);
+        _strictModeButtons.Controls.Add(_lockdown2hButton);
 
         _strictModeToggleButton.Location = new Point(14, 8);
         _strictModeToggleButton.Name = "_strictModeToggleButton";
@@ -1096,6 +1108,23 @@ partial class MainForm
         _refreshStrictModeButton.Text = "重新读取状态";
         _refreshStrictModeButton.UseVisualStyleBackColor = true;
         _refreshStrictModeButton.Click += OnRefreshStrictModeClick;
+
+        // 3.5：临时锁网。复用严格模式的会话，到点自动撤销。
+        _lockdown30Button.Location = new Point(390, 8);
+        _lockdown30Button.Name = "_lockdown30Button";
+        _lockdown30Button.Size = new Size(200, 32);
+        _lockdown30Button.TabIndex = 2;
+        _lockdown30Button.Text = "临时锁网 30 分钟";
+        _lockdown30Button.UseVisualStyleBackColor = true;
+        _lockdown30Button.Click += OnLockdown30Click;
+
+        _lockdown2hButton.Location = new Point(600, 8);
+        _lockdown2hButton.Name = "_lockdown2hButton";
+        _lockdown2hButton.Size = new Size(200, 32);
+        _lockdown2hButton.TabIndex = 3;
+        _lockdown2hButton.Text = "临时锁网 2 小时";
+        _lockdown2hButton.UseVisualStyleBackColor = true;
+        _lockdown2hButton.Click += OnLockdown2hClick;
 
         // 因为上面插了一整块，任务定义面板整体往下挪。
         // 默认折叠：这块 XML 只有极少数场景要看，常驻会白占 220px，把设置页拉得很长。
@@ -1291,7 +1320,7 @@ partial class MainForm
         // ---------- 系统托盘 ----------
         // 托盘是本工具「一直可用」的保障：用户点 X 只是收起来，规则仍在生效，
         // 想恢复被拦的程序随时能找到入口。
-        _trayMenu.Items.AddRange(new ToolStripItem[] { _trayShowItem, _trayDeleteAllItem, _traySeparator, _trayExitItem });
+        _trayMenu.Items.AddRange(new ToolStripItem[] { _trayShowItem, _trayLockdownItem, _trayDeleteAllItem, _traySeparator, _trayExitItem });
         _trayMenu.Name = "_trayMenu";
         _trayMenu.Size = new Size(260, 92);
 
@@ -1300,6 +1329,26 @@ partial class MainForm
         _trayShowItem.Text = "显示主界面";
         _trayShowItem.Font = new Font(_trayShowItem.Font, FontStyle.Bold);
         _trayShowItem.Click += OnTrayShowClick;
+
+        // 3.5：临时锁网（托盘入口）。子项单独建，避免和「开启严格模式」两步确认混淆。
+        _trayLockdownItem.Name = "_trayLockdownItem";
+        _trayLockdownItem.Size = new Size(259, 22);
+        _trayLockdownItem.Text = "临时锁网";
+        _trayLockdownItem.DropDownItems.AddRange(new ToolStripItem[]
+        {
+            _trayLockdown30Item,
+            _trayLockdown2hItem,
+        });
+
+        _trayLockdown30Item.Name = "_trayLockdown30Item";
+        _trayLockdown30Item.Size = new Size(200, 22);
+        _trayLockdown30Item.Text = "锁网 30 分钟";
+        _trayLockdown30Item.Click += OnLockdown30Click;
+
+        _trayLockdown2hItem.Name = "_trayLockdown2hItem";
+        _trayLockdown2hItem.Size = new Size(200, 22);
+        _trayLockdown2hItem.Text = "锁网 2 小时";
+        _trayLockdown2hItem.Click += OnLockdown2hClick;
 
         _trayDeleteAllItem.Name = "_trayDeleteAllItem";
         _trayDeleteAllItem.Size = new Size(259, 22);

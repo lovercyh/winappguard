@@ -105,6 +105,7 @@ public static class Localizer
         (new Regex(@"^确定要关闭严格模式吗？$"), "Disable strict mode?"),
         (new Regex(@"^确定要继续吗？$"), "Continue?"),
         (new Regex(@"^剩余 (\d+) 小时 (\d+) 分钟$"), "$1 h $2 min left"),
+        (new Regex(@"^剩余 (\d+) 小时$"), "$1 h left"),
         (new Regex(@"^剩余 (\d+) 分钟$"), "$1 min left"),
         (new Regex(@"^未知\((\d+)\)$"), "Unknown ($1)"),
         (new Regex(@"^(\d+) 个$"), "$1"),

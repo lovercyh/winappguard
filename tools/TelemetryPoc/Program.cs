@@ -36,12 +36,35 @@ internal static class Program
             Console.WriteLine("WinAppGuard 3.5 POC — TCP 扩展统计");
             Console.WriteLine();
             Console.WriteLine("  WinAppGuard.TelemetryPoc.exe --tcp [秒数]");
+            Console.WriteLine("  WinAppGuard.TelemetryPoc.exe --remote <下载地址> [秒数]");
             Console.WriteLine();
+            Console.WriteLine("--remote 会先发起下载，再采样，用来确认「客户端下载方向」是否被统计。");
             Console.WriteLine("需要管理员权限。只读，不修改防火墙规则。");
             return 0;
         }
 
-        if (!string.Equals(args[0], "--tcp", StringComparison.OrdinalIgnoreCase))
+        var mode = args[0].ToLowerInvariant();
+
+        if (mode == "--remote")
+        {
+            if (args.Length < 2)
+            {
+                Console.Error.WriteLine("--remote 需要下载地址。");
+                return 1;
+            }
+
+            var remoteSeconds = 15;
+
+            if (args.Length > 2 && int.TryParse(args[2], out var parsedSeconds)
+                && parsedSeconds is > 0 and <= 300)
+            {
+                remoteSeconds = parsedSeconds;
+            }
+
+            return RunElevated(() => RunRemote(args[1], remoteSeconds));
+        }
+
+        if (mode != "--tcp")
         {
             Console.Error.WriteLine("未知参数。用 --help 查看用法。");
             return 1;
@@ -54,6 +77,11 @@ internal static class Program
             seconds = parsed;
         }
 
+        return RunElevated(() => Run(seconds));
+    }
+
+    private static int RunElevated(Action action)
+    {
         var identity = WindowsIdentity.GetCurrent();
         var principal = new WindowsPrincipal(identity);
         var elevated = principal.IsInRole(WindowsBuiltInRole.Administrator);
@@ -67,13 +95,71 @@ internal static class Program
 
         try
         {
-            Run(seconds);
+            action();
             return 0;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"POC 失败：{ex.GetType().Name}: {ex.Message}");
             return 2;
+        }
+    }
+
+    private static void RunRemote(string url, int seconds)
+    {
+        Console.WriteLine($"远程下载：{url}");
+        Console.WriteLine("（下载开始 2 秒后开始采样；采样期间下载会继续）");
+
+        long received = 0;
+        using var cancellation = new CancellationTokenSource();
+
+        var download = Task.Run(async () =>
+        {
+            try
+            {
+                using var http = new HttpClient(new HttpClientHandler { UseProxy = false })
+                {
+                    Timeout = TimeSpan.FromMinutes(5),
+                };
+
+                using var response = await http.GetAsync(
+                    url, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
+
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync(cancellation.Token);
+                var buffer = new byte[64 * 1024];
+                int read;
+
+                while ((read = await stream.ReadAsync(buffer, cancellation.Token)) > 0)
+                {
+                    Interlocked.Add(ref received, read);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 采样结束主动取消，正常。
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"下载失败：{ex.GetType().Name}: {ex.Message}");
+            }
+        });
+
+        Thread.Sleep(TimeSpan.FromSeconds(2));
+        Run(seconds);
+
+        Console.WriteLine($"下载已收到：{FormatBytes((ulong)Interlocked.Read(ref received))}");
+
+        cancellation.Cancel();
+
+        try
+        {
+            _ = download.Wait(TimeSpan.FromSeconds(3));
+        }
+        catch (Exception)
+        {
+            // 忽略取消/等待异常，采样结果已经输出。
         }
     }
 
@@ -92,17 +178,28 @@ internal static class Program
 
         Console.WriteLine($"其中 ESTABLISHED = {established.Count}");
 
-        var enabled = 0;
+        var selfEstablished = established
+            .Where(connection => connection.Pid == Environment.ProcessId)
+            .ToList();
+
+        Console.WriteLine($"本进程 ESTABLISHED 连接 = {selfEstablished.Count}");
+
+        foreach (var connection in selfEstablished)
+        {
+            Console.WriteLine($"    {connection.Tuple}");
+        }
+
+        var enabledConnections = new List<Connection>();
 
         foreach (var connection in established)
         {
             if (connection.EnableStats())
             {
-                enabled++;
+                enabledConnections.Add(connection);
             }
         }
 
-        Console.WriteLine($"已启用统计 = {enabled}");
+        Console.WriteLine($"已启用统计 = {enabledConnections.Count}");
         Console.WriteLine($"等待 {seconds} 秒…");
 
         Thread.Sleep(TimeSpan.FromSeconds(seconds));
@@ -111,7 +208,9 @@ internal static class Program
         var readable = 0;
         var failed = 0;
 
-        foreach (var connection in established)
+        // 只读「启用成功」的连接。启用失败时 Get 会返回随机数据（微软文档明确警告），
+        // 非管理员跑的时候会看到几万 TB 的鬼数字，必须排除。
+        foreach (var connection in enabledConnections)
         {
             if (!connection.TryRead(out var sent, out var received))
             {
@@ -123,10 +222,23 @@ internal static class Program
 
             byPid.TryGetValue(connection.Pid, out var current);
             byPid[connection.Pid] = (current.Out + sent, current.In + received);
+
+            if (connection.Pid == Environment.ProcessId)
+            {
+                Console.WriteLine(
+                    $"    本进程连接 {connection.Tuple}：上传 {FormatBytes(sent)} 下载 {FormatBytes(received)}");
+            }
         }
 
         Console.WriteLine($"可读连接 = {readable}，读取失败 = {failed}");
         Console.WriteLine();
+
+        if (byPid.TryGetValue(Environment.ProcessId, out var own))
+        {
+            Console.WriteLine(
+                $"本进程（PID {Environment.ProcessId}）：上传 {FormatBytes(own.Out)}，下载 {FormatBytes(own.In)}");
+            Console.WriteLine();
+        }
 
         ulong totalOut = 0;
         ulong totalIn = 0;
@@ -185,6 +297,8 @@ internal static class Program
 
         internal required uint State { get; init; }
 
+        internal abstract string Tuple { get; }
+
         internal abstract bool EnableStats();
 
         internal abstract bool TryRead(out ulong sent, out ulong received);
@@ -193,6 +307,9 @@ internal static class Program
     private sealed class ConnectionV4 : Connection
     {
         internal required MibTcpRow Row { get; init; }
+
+        internal override string Tuple =>
+            $"4|{Row.LocalAddr:x8}:{Row.LocalPort} -> {Row.RemoteAddr:x8}:{Row.RemotePort}";
 
         internal override bool EnableStats()
         {
@@ -233,6 +350,10 @@ internal static class Program
     private sealed class ConnectionV6 : Connection
     {
         internal required MibTcp6Row Row { get; init; }
+
+        internal override string Tuple =>
+            $"6|{Convert.ToHexString(Row.LocalAddr)}:{Row.LocalPort} -> " +
+            $"{Convert.ToHexString(Row.RemoteAddr)}:{Row.RemotePort}";
 
         internal override bool EnableStats()
         {
@@ -394,6 +515,8 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)]
     private struct MibTcp6Row
     {
+        public uint State;
+
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
         public byte[] LocalAddr;
 
@@ -405,7 +528,6 @@ internal static class Program
 
         public uint RemoteScopeId;
         public uint RemotePort;
-        public uint State;
     }
 
     [StructLayout(LayoutKind.Sequential)]

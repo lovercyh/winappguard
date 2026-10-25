@@ -20,6 +20,9 @@ $service    = Join-Path $root 'src\WinAppGuard.Svc\WinAppGuard.Svc.csproj'
 $setup      = Join-Path $root 'src\WinAppGuard.Setup\WinAppGuard.Setup.csproj'
 $distDir    = Join-Path $root 'dist'
 $publishDir = Join-Path $root 'build\_publish'
+$selfCheck  = Join-Path $root 'tools\SelfCheck\SelfCheck.csproj'
+$selfCheckOut = Join-Path $root 'build\_selfcheck'
+$distTools  = Join-Path $root 'dist-tools'
 
 Write-Host '==> 清理旧的输出目录'
 if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
@@ -110,10 +113,37 @@ Write-Host "    内置载荷：$([math]::Round($zipBytes.Length / 1MB, 1)) MB（
 $sizeMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuard.exe')).Length / 1MB, 1)
 $serviceMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSvc.exe')).Length / 1MB, 1)
 $setupMB = [math]::Round((Get-Item (Join-Path $distDir 'WinAppGuardSetup.exe')).Length / 1MB, 1)
+
+# ---- 同步 dist-tools：VM 是整目录复制，必须让这个目录也保持最新 ----
+# 以前只更新 dist，VM 复制过去的 dist-tools 仍是旧版本，验收会跑到旧包上。
+Write-Host '==> 同步 dist-tools（VM 整目录复制用）'
+New-Item -ItemType Directory -Path $distTools -Force | Out-Null
+
+foreach ($name in @(
+    'WinAppGuard.exe',
+    'WinAppGuardSvc.exe',
+    'WinAppGuardSetup.exe',
+    'WinAppGuardUninstall.exe'
+)) {
+    Copy-Item (Join-Path $distDir $name) (Join-Path $distTools $name) -Force
+}
+
+if (Test-Path $selfCheckOut) { Remove-Item $selfCheckOut -Recurse -Force }
+dotnet publish $selfCheck -c Release -o $selfCheckOut
+if ($LASTEXITCODE -ne 0) { throw "发布自检工具失败，退出码 $LASTEXITCODE" }
+
+Copy-Item (Join-Path $selfCheckOut 'WinAppGuard.SelfCheck.exe') $distTools -Force
+
+$acceptanceScript = Join-Path $root 'docs\3.4-验收脚本.ps1'
+if (Test-Path $acceptanceScript) {
+    Copy-Item $acceptanceScript $distTools -Force
+}
+
 Write-Host ''
 Write-Host "==> 完成：dist\WinAppGuard.exe  （$sizeMB MB）"
 Write-Host "           dist\WinAppGuardSvc.exe  （$serviceMB MB）"
 Write-Host "           dist\WinAppGuardSetup.exe  （$setupMB MB）"
 Write-Host "           dist\WinAppGuardUninstall.exe  （卸载器，双击完整卸载）"
+Write-Host "           dist-tools\  （已同步：4 个 exe + WinAppGuard.SelfCheck.exe + 验收脚本）"
 Write-Host '    安装：管理员运行 dist\WinAppGuardSetup.exe --install'
 Write-Host '    界面以普通权限运行；修改规则时才弹一次 UAC。'

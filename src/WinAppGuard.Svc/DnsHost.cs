@@ -1,5 +1,4 @@
 using WinAppGuard.Contracts;
-using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics;
 
 namespace WinAppGuard.Service;
@@ -10,17 +9,17 @@ namespace WinAppGuard.Service;
 /// 真正抓事件的是 <see cref="DnsEtwMonitor"/>（Core）；这里只负责：
 ///   - 随服务启动 / 停止；
 ///   - 会话挂掉后自动重启（30 秒看门狗）；
-///   - 给查询结果补上进程路径（服务以 SYSTEM 运行，能读到界面读不到的进程）。
+///   - 把内存记录转换成 IPC DTO。
+///
+/// 进程路径在**事件发生的那一刻**解析（见 <see cref="DnsEtwMonitor"/>），
+/// 不在这里事后补：PID 会复用，事后解析可能把域名算到另一个程序头上。
 /// </summary>
 internal static class DnsHost
 {
     private static readonly object Gate = new();
 
-    private static readonly TimeSpan ProcessCacheTtl = TimeSpan.FromSeconds(60);
-
     private static DnsEtwMonitor? _monitor;
     private static System.Threading.Timer? _watchdog;
-    private static readonly Dictionary<int, ProcessCacheEntry> ProcessCache = new();
     private static int _startFailures;
     private static bool _stopping;
 
@@ -61,7 +60,6 @@ internal static class DnsHost
 
             monitor = _monitor;
             _monitor = null;
-            ProcessCache.Clear();
         }
 
         monitor?.Dispose();
@@ -85,22 +83,17 @@ internal static class DnsHost
         var records = monitor.Snapshot(max);
         var result = new List<DnsDto>(records.Count);
 
-        lock (Gate)
+        foreach (var record in records)
         {
-            foreach (var record in records)
+            result.Add(new DnsDto
             {
-                var (path, name) = ResolveProcessLocked(record.Pid);
-
-                result.Add(new DnsDto
-                {
-                    TimeUtc = record.TimeUtc,
-                    Pid = record.Pid,
-                    ProcessPath = path,
-                    ProcessName = name,
-                    QueryName = record.QueryName,
-                    Status = record.Status,
-                });
-            }
+                TimeUtc = record.TimeUtc,
+                Pid = record.Pid,
+                ProcessPath = record.ProcessPath,
+                ProcessName = record.ProcessName,
+                QueryName = record.QueryName,
+                Status = record.Status,
+            });
         }
 
         return result;
@@ -182,49 +175,5 @@ internal static class DnsHost
                 "WAG-DNS-002",
                 "DNS ETW collection started (Microsoft-Windows-DNS-Client).");
         }
-    }
-
-    private static (string? Path, string Name) ResolveProcessLocked(int pid)
-    {
-        var now = DateTime.UtcNow;
-
-        if (ProcessCache.TryGetValue(pid, out var cached)
-            && now - cached.At < ProcessCacheTtl)
-        {
-            return (cached.Path, Describe(cached.Path, pid));
-        }
-
-        if (ProcessCache.Count > 512)
-        {
-            ProcessCache.Clear();
-        }
-
-        string? path;
-
-        try
-        {
-            path = ProcessResolver.TryGetImagePath(pid);
-        }
-        catch (Exception)
-        {
-            path = null;
-        }
-
-        ProcessCache[pid] = new ProcessCacheEntry
-        {
-            Path = path,
-            At = now,
-        };
-
-        return (path, Describe(path, pid));
-    }
-
-    private static string Describe(string? path, int pid)
-        => string.IsNullOrEmpty(path) ? $"PID {pid}" : Path.GetFileName(path);
-
-    private sealed class ProcessCacheEntry
-    {
-        public string? Path;
-        public DateTime At;
     }
 }

@@ -3,7 +3,13 @@ using System.Runtime.InteropServices;
 namespace WinAppGuard.Core.Diagnostics;
 
 /// <summary>3.5：一条 DNS 查询记录（只含域名，不含响应内容）。</summary>
-public sealed record DnsQueryRecord(DateTime TimeUtc, int Pid, string QueryName, string Status);
+public sealed record DnsQueryRecord(
+    DateTime TimeUtc,
+    int Pid,
+    string? ProcessPath,
+    string ProcessName,
+    string QueryName,
+    string Status);
 
 /// <summary>
 /// 3.5：用 ETW 实时会话采集 <c>Microsoft-Windows-DNS-Client</c> 的查询事件。
@@ -164,6 +170,8 @@ public sealed class DnsEtwMonitor : IDisposable
                 list.Add(new DnsQueryRecord(
                     node.Value.TimeUtc,
                     node.Value.Pid,
+                    node.Value.ProcessPath,
+                    node.Value.ProcessName,
                     node.Value.QueryName,
                     node.Value.Status));
             }
@@ -228,7 +236,9 @@ public sealed class DnsEtwMonitor : IDisposable
             }
 
             var status = ReadStatus(recordPointer);
-            Add(record.EventHeader.ProcessId, queryName, status);
+            var pid = record.EventHeader.ProcessId;
+            var (path, name) = ResolveProcess(pid);
+            Add(pid, path, name, queryName, status);
         }
         catch (Exception)
         {
@@ -236,7 +246,23 @@ public sealed class DnsEtwMonitor : IDisposable
         }
     }
 
-    private void Add(int pid, string queryName, string status)
+    private static (string? Path, string Name) ResolveProcess(int pid)
+    {
+        string? path;
+
+        try
+        {
+            path = ProcessResolver.TryGetImagePath(pid);
+        }
+        catch (Exception)
+        {
+            path = null;
+        }
+
+        return (path, string.IsNullOrEmpty(path) ? $"PID {pid}" : Path.GetFileName(path));
+    }
+
+    private void Add(int pid, string? processPath, string processName, string queryName, string status)
     {
         if (pid <= 0)
         {
@@ -266,6 +292,8 @@ public sealed class DnsEtwMonitor : IDisposable
             {
                 TimeUtc = now,
                 Pid = pid,
+                ProcessPath = processPath,
+                ProcessName = processName,
                 QueryName = queryName,
                 Status = status,
             };
@@ -514,6 +542,8 @@ public sealed class DnsEtwMonitor : IDisposable
     {
         public DateTime TimeUtc;
         public int Pid;
+        public string? ProcessPath;
+        public string ProcessName = string.Empty;
         public string QueryName = string.Empty;
         public string Status = string.Empty;
     }

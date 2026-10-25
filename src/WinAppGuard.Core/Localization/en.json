@@ -160,7 +160,7 @@
     "DNS 采集：服务未运行": "DNS capture: service is not running",
     "DNS 采集：未运行（详见服务日志 WAG-DNS-*）": "DNS capture: not running (see service log WAG-DNS-*)",
     "DNS 采集：运行中 · 显示 {0} / 共 {1} 条": "DNS capture: running · showing {0} of {1}",
-    "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到。内存保留最近 2000 条，服务重启后清空。": "Only domains seen by the Windows DNS client are recorded; DoH/DoT may be invisible. The latest 2000 entries are kept in memory and cleared when the service restarts.",
+    "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到，部分系统会把查询记到 svchost（DNS Client 服务）名下。内存保留最近 2000 条，服务重启后清空。": "Only domains seen by the Windows DNS client are recorded; DoH/DoT may be invisible, and some systems attribute queries to svchost (the DNS Client service). The latest 2000 entries are kept in memory and cleared when the service restarts.",
     "还没有 DNS 记录。\r\n打开网站或程序联网后，这里会出现最近的域名查询。": "No DNS records yet.\r\nOpen a website or let a program go online; recent domain lookups will appear here.",
     "清空 DNS 记录": "Clear DNS records",
     "确定要清空当前的 DNS 记录吗？": "Clear the current DNS records?",

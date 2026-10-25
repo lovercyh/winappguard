@@ -93,6 +93,7 @@ internal static class DnsHost
                 ProcessName = record.ProcessName,
                 QueryName = record.QueryName,
                 Status = record.Status,
+                EventId = record.EventId,
             });
         }
 

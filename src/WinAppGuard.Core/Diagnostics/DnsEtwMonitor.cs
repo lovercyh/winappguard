@@ -9,7 +9,8 @@ public sealed record DnsQueryRecord(
     string? ProcessPath,
     string ProcessName,
     string QueryName,
-    string Status);
+    string Status,
+    int EventId);
 
 /// <summary>
 /// 3.5：用 ETW 实时会话采集 <c>Microsoft-Windows-DNS-Client</c> 的查询事件。
@@ -173,7 +174,8 @@ public sealed class DnsEtwMonitor : IDisposable
                     node.Value.ProcessPath,
                     node.Value.ProcessName,
                     node.Value.QueryName,
-                    node.Value.Status));
+                    node.Value.Status,
+                    node.Value.EventId));
             }
 
             return list;
@@ -238,7 +240,7 @@ public sealed class DnsEtwMonitor : IDisposable
             var status = ReadStatus(recordPointer);
             var pid = record.EventHeader.ProcessId;
             var (path, name) = ResolveProcess(pid);
-            Add(pid, path, name, queryName, status);
+            Add(pid, path, name, queryName, status, record.EventHeader.Id);
         }
         catch (Exception)
         {
@@ -262,7 +264,9 @@ public sealed class DnsEtwMonitor : IDisposable
         return (path, string.IsNullOrEmpty(path) ? $"PID {pid}" : Path.GetFileName(path));
     }
 
-    private void Add(int pid, string? processPath, string processName, string queryName, string status)
+    private void Add(
+        int pid, string? processPath, string processName,
+        string queryName, string status, int eventId)
     {
         if (pid <= 0)
         {
@@ -279,6 +283,7 @@ public sealed class DnsEtwMonitor : IDisposable
                 && (now - node.Value.TimeUtc).TotalSeconds <= 2)
             {
                 node.Value.TimeUtc = now;
+                node.Value.EventId = eventId;
 
                 if (status.Length > 0)
                 {
@@ -296,6 +301,7 @@ public sealed class DnsEtwMonitor : IDisposable
                 ProcessName = processName,
                 QueryName = queryName,
                 Status = status,
+                EventId = eventId,
             };
 
             var added = _records.AddLast(entry);
@@ -546,6 +552,7 @@ public sealed class DnsEtwMonitor : IDisposable
         public string ProcessName = string.Empty;
         public string QueryName = string.Empty;
         public string Status = string.Empty;
+        public int EventId;
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]

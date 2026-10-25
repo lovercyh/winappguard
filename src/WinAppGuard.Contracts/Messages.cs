@@ -127,6 +127,9 @@ public sealed class DnsDto
 
     /// <summary>结果码（OK / NXDOMAIN / 0x...）；未完成时为空。</summary>
     public string? Status { get; set; }
+
+    /// <summary>ETW 事件 ID（诊断用；3006 = 发起，3008 = 完成）。</summary>
+    public int EventId { get; set; }
 }
 
 /// <summary>

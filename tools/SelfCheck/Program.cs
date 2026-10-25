@@ -9411,15 +9411,31 @@ internal static class Program
                 // 预期失败（NXDOMAIN）；这里要的只是产生一次真实查询。
             }
 
-            var match = WaitForDnsRecord(probe, TimeSpan.FromSeconds(15));
+            var matches = WaitForDnsRecords(probe, TimeSpan.FromSeconds(15));
 
-            CheckAssertion(results, "捕获到探针域名的 DNS 记录", match is not null);
+            CheckAssertion(results, "捕获到探针域名的 DNS 记录", matches.Count > 0);
 
-            if (match is not null)
+            if (matches.Count > 0)
             {
-                W($"      PID = {match.Pid}，程序 = {match.ProcessName}，结果 = {match.Status}，时间 = {match.TimeUtc:O}");
+                foreach (var match in matches)
+                {
+                    W($"      event={match.EventId} PID={match.Pid} 程序={match.ProcessName} " +
+                      $"路径={match.ProcessPath ?? "（无）"} 结果={match.Status}");
+                }
+
                 CheckAssertion(results, "DNS 记录带 PID 和程序名",
-                    match.Pid > 0 && match.ProcessName.Length > 0);
+                    matches.Any(match => match.Pid > 0 && match.ProcessName.Length > 0));
+
+                // 3006/3008 由发起进程还是 Dnscache 记录，不同 Windows 版本不一样。
+                // 这里如实打印，不把「svchost」当成发起程序。
+                var ownPath = Environment.ProcessPath;
+                var own = matches.Any(match =>
+                    !string.IsNullOrEmpty(ownPath)
+                    && string.Equals(match.ProcessPath, ownPath, StringComparison.OrdinalIgnoreCase));
+
+                W(own
+                    ? "      归属：能对上发起程序（SelfCheck 自己）"
+                    : "      归属：ETW 把查询记到了系统 DNS 服务名下（可能是 Dnscache/svchost）");
             }
 
             var dnsAll = QueryDnsFromService(out _);
@@ -9547,26 +9563,36 @@ internal static class Program
                 && string.Equals(item.Path, ownPath, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static DnsDto? WaitForDnsRecord(string name, TimeSpan timeout)
+    private static List<DnsDto> WaitForDnsRecords(string name, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
+        var matches = new List<DnsDto>();
 
         while (DateTime.UtcNow < deadline)
         {
             var records = QueryDnsFromService(out _);
 
-            var match = records?.FirstOrDefault(record =>
-                string.Equals(record.QueryName, name, StringComparison.OrdinalIgnoreCase));
+            matches = records?
+                .Where(record => string.Equals(
+                    record.QueryName, name, StringComparison.OrdinalIgnoreCase))
+                .ToList() ?? new List<DnsDto>();
 
-            if (match is not null)
+            if (matches.Count > 0)
             {
-                return match;
+                // 再等一会儿，让 3006/3008 两条事件都到齐；不同 PID 的归属才看得清。
+                Thread.Sleep(1500);
+
+                records = QueryDnsFromService(out _);
+                return records?
+                    .Where(record => string.Equals(
+                        record.QueryName, name, StringComparison.OrdinalIgnoreCase))
+                    .ToList() ?? new List<DnsDto>();
             }
 
             Thread.Sleep(500);
         }
 
-        return null;
+        return matches;
     }
 
     /// <summary>
@@ -9577,70 +9603,131 @@ internal static class Program
     {
         error = null;
 
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        // 关键：服务端必须跑在**另一个进程**里。
+        // 如果客户端和服务端都在本进程，流量会被合并成同一个程序，
+        // 就分不清「客户端下载方向」到底有没有被统计到。
+        using var portProbe = new TcpListener(IPAddress.Loopback, 0);
+        portProbe.Start();
+        var port = ((IPEndPoint)portProbe.LocalEndpoint).Port;
+        portProbe.Stop();
 
-        var server = Task.Run(async () =>
-        {
-            using var client = await listener.AcceptTcpClientAsync();
-            using var stream = client.GetStream();
-
-            // 读完请求头（到空行为止），随后发响应。
-            var buffer = new byte[1024];
-            var header = new StringBuilder();
-
-            while (!header.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
-            {
-                var read = await stream.ReadAsync(buffer);
-                if (read <= 0)
-                {
-                    break;
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, {{port}})
+            $listener.Start()
+            try {
+                $client = $listener.AcceptTcpClient()
+                $stream = $client.GetStream()
+                $buffer = New-Object byte[] 1024
+                $header = ''
+                while (-not $header.EndsWith("`r`n`r`n")) {
+                    $read = $stream.Read($buffer, 0, $buffer.Length)
+                    if ($read -le 0) { break }
+                    $header += [Text.Encoding]::ASCII.GetString($buffer, 0, $read)
                 }
-
-                header.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                $total = {{totalBytes}}
+                $response = "HTTP/1.1 200 OK`r`nContent-Length: $total`r`nConnection: close`r`n`r`n"
+                $bytes = [Text.Encoding]::ASCII.GetBytes($response)
+                $stream.Write($bytes, 0, $bytes.Length)
+                $chunk = New-Object byte[] 65536
+                $sent = 0
+                while ($sent -lt $total) {
+                    $count = [Math]::Min($chunk.Length, $total - $sent)
+                    $stream.Write($chunk, 0, $count)
+                    $stream.Flush()
+                    $sent += $count
+                    Start-Sleep -Milliseconds 125
+                }
+                $stream.Close()
+                $client.Close()
+            } finally {
+                $listener.Stop()
             }
+            """;
 
-            var responseHeader =
-                $"HTTP/1.1 200 OK\r\nContent-Length: {totalBytes}\r\nConnection: close\r\n\r\n";
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(responseHeader));
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
-            var chunk = new byte[64 * 1024];
-            long sent = 0;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
 
-            while (sent < totalBytes)
-            {
-                var count = (int)Math.Min(chunk.Length, totalBytes - sent);
-                await stream.WriteAsync(chunk.AsMemory(0, count));
-                await stream.FlushAsync();
-                sent += count;
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-EncodedCommand");
+        startInfo.ArgumentList.Add(encoded);
 
-                // 512 KB/s：4 MiB 约 8 秒，保证跨过多个 2 秒采样周期。
-                await Task.Delay(125);
-            }
-        });
-
+        Process? server = null;
         long received = 0;
 
         try
         {
-            using var http = new HttpClient();
-            using var response = http.GetAsync(
-                $"http://127.0.0.1:{port}/payload",
-                HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+            server = Process.Start(startInfo);
 
-            response.EnsureSuccessStatusCode();
-
-            using var body = response.Content.ReadAsStream();
-            var buffer = new byte[64 * 1024];
-            int read;
-
-            while ((read = body.Read(buffer, 0, buffer.Length)) > 0)
+            if (server is null)
             {
-                received += read;
+                error = "无法启动回环服务进程（powershell.exe）。";
+                return 0;
             }
 
-            server.GetAwaiter().GetResult();
+            var stdout = server.StandardOutput.ReadToEndAsync();
+            var stderr = server.StandardError.ReadToEndAsync();
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+            HttpResponseMessage? response = null;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    response = http.GetAsync(
+                        $"http://127.0.0.1:{port}/payload",
+                        HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+                    break;
+                }
+                catch (HttpRequestException)
+                {
+                    // 子进程的 PowerShell 启动需要一点时间；端口还没起来就重试。
+                    Thread.Sleep(200);
+                }
+            }
+
+            if (response is null)
+            {
+                error = "回环服务进程没有在 10 秒内开始监听。";
+                return 0;
+            }
+
+            using (response)
+            {
+                response.EnsureSuccessStatusCode();
+
+                using var body = response.Content.ReadAsStream();
+                var buffer = new byte[64 * 1024];
+                int read;
+
+                while ((read = body.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    received += read;
+                }
+            }
+
+            _ = server.WaitForExit(5000);
+            _ = stdout.GetAwaiter().GetResult();
+            var serverError = stderr.GetAwaiter().GetResult();
+
+            if (serverError.Length > 0)
+            {
+                error = $"回环服务输出：{serverError.Trim()}";
+            }
         }
         catch (Exception ex)
         {
@@ -9648,7 +9735,19 @@ internal static class Program
         }
         finally
         {
-            listener.Stop();
+            if (server is { HasExited: false })
+            {
+                try
+                {
+                    server.Kill(entireProcessTree: true);
+                }
+                catch (Exception)
+                {
+                    // 忽略：验收失败时不要把清理异常盖到真正的原因上。
+                }
+            }
+
+            server?.Dispose();
         }
 
         return received;
@@ -9725,6 +9824,7 @@ internal static class Program
                 ProcessName = "a.exe",
                 QueryName = "example.com",
                 Status = "OK",
+                EventId = 3008,
             };
 
             var json = JsonSerializer.Serialize(
@@ -9734,7 +9834,8 @@ internal static class Program
             CheckAssertion(results, "响应 JSON 带 dnsRecords / queryName",
                 json.Contains("\"dnsRecords\":[", StringComparison.Ordinal)
                 && json.Contains("\"queryName\":\"example.com\"", StringComparison.Ordinal)
-                && json.Contains("\"status\":\"OK\"", StringComparison.Ordinal));
+                && json.Contains("\"status\":\"OK\"", StringComparison.Ordinal)
+                && json.Contains("\"eventId\":3008", StringComparison.Ordinal));
 
             Localizer.Initialize("en");
 
@@ -9744,7 +9845,7 @@ internal static class Program
                 && Localizer.T("清空记录") == "Clear records");
 
             var hint = Localizer.T(
-                "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到。内存保留最近 2000 条，服务重启后清空。");
+                "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到，部分系统会把查询记到 svchost（DNS Client 服务）名下。内存保留最近 2000 条，服务重启后清空。");
             W($"    英文 DNS 说明 = {hint}");
             CheckAssertion(results, "英文：DNS 说明无中文",
                 !System.Text.RegularExpressions.Regex.IsMatch(hint, "[\u4e00-\u9fff]"));

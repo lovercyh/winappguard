@@ -105,7 +105,7 @@ Write-Host ''
 Write-Host '===== 5. ETW 会话 =====' -ForegroundColor Cyan
 
 $logman = & logman query -ets 2>&1 | Out-String
-Assert-True 'DNS ETW 会话存在（WinAppGuard-Dns）' ($logman -match 'WinAppGuard-Dns')
+Assert-True 'DNS ETW 会话存在（WinAppGuard-Dns）' ([bool]($logman -match 'WinAppGuard-Dns'))
 
 Write-Host ''
 Write-Host '===== 6. 服务日志 =====' -ForegroundColor Cyan
@@ -122,8 +122,8 @@ else {
     Write-Host "  日志：$($logFile.FullName)"
     $recent = Get-Content $logFile.FullName -Tail 300
 
-    Assert-True '日志里有流量采集启动记录（WAG-TRAFFIC-001）' ($recent -match 'WAG-TRAFFIC-001')
-    Assert-True '日志里有 DNS 采集启动记录（WAG-DNS-002）'     ($recent -match 'WAG-DNS-002')
+    Assert-True '日志里有流量采集启动记录（WAG-TRAFFIC-001）' ([bool]($recent -match 'WAG-TRAFFIC-001'))
+    Assert-True '日志里有 DNS 采集启动记录（WAG-DNS-002）'     ([bool]($recent -match 'WAG-DNS-002'))
     Assert-True '日志里没有持续的采样失败（WAG-TRAFFIC-003 少于 3 条）' (($recent | Select-String 'WAG-TRAFFIC-003').Count -lt 3)
 }
 

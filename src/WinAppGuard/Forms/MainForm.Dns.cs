@@ -75,7 +75,7 @@ public sealed partial class MainForm
         {
             Location = new Point(0, 42),
             Width = 1000,
-            Text = "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到。内存保留最近 2000 条，服务重启后清空。",
+            Text = "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到，部分系统会把查询记到 svchost（DNS Client 服务）名下。内存保留最近 2000 条，服务重启后清空。",
             ForeColor = SystemColors.GrayText,
         };
 

@@ -37,8 +37,8 @@ function Write-Step([string]$name) {
     Write-Host "=== $name ===" -ForegroundColor Cyan
 }
 
-function Assert([string]$name, [bool]$ok, [string]$detail = '') {
-    if ($ok) {
+function Assert($name, $ok, $detail = '') {
+    if ([bool]$ok) {
         Write-Host "[通过] $name $detail" -ForegroundColor Green
     }
     else {

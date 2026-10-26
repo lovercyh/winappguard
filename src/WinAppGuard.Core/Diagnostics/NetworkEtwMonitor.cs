@@ -1,4 +1,6 @@
+using System.Net;
 using System.Runtime.InteropServices;
+using WinAppGuard.Core.Diagnostics.Ids;
 
 namespace WinAppGuard.Core.Diagnostics;
 
@@ -41,6 +43,18 @@ public sealed class NetworkEtwMonitor : IDisposable
 
     private EtwRealtimeSession? _session;
     private long _eventsSeen;
+    private long _flowParseFailures;
+    private volatile bool _captureFlows;
+
+    /// <summary>3.7：IDS 开启时才解析地址/端口；关闭时保持 3.6 的低开销。</summary>
+    public bool CaptureFlows
+    {
+        get => _captureFlows;
+        set => _captureFlows = value;
+    }
+
+    /// <summary>3.7：连接/数据事件（元数据）交给 IDS；回调在 ETW 线程执行。</summary>
+    public Action<NetworkFlowObservation>? FlowObserved { get; set; }
 
     public NetworkEtwMonitor(string sessionName = SessionName, Guid? sessionGuid = null)
     {
@@ -54,6 +68,9 @@ public sealed class NetworkEtwMonitor : IDisposable
 
     /// <summary>累计解析到的网络数据事件数（诊断/验收用）。</summary>
     public long EventsSeen => Interlocked.Read(ref _eventsSeen);
+
+    /// <summary>3.7：IDS 打开但地址/端口解析失败的次数（事件太短或模板不符）。</summary>
+    public long FlowParseFailures => Interlocked.Read(ref _flowParseFailures);
 
     public bool Start()
     {
@@ -124,7 +141,10 @@ public sealed class NetworkEtwMonitor : IDisposable
         var record = EtwRealtimeSession.ReadRecord(recordPointer);
         var id = record.EventHeader.Id;
 
-        if (!TryClassifyEvent(id, out var isOut))
+        var isData = TryClassifyEvent(id, out var isOut);
+        var isConnection = id is 12 or 15 or 28 or 31;
+
+        if (!isData && !isConnection)
         {
             return;
         }
@@ -134,34 +154,106 @@ public sealed class NetworkEtwMonitor : IDisposable
             return;
         }
 
-        // 所有 Data sent/received 模板的前两个字段都是 PID、size。
+        // 所有 Data sent/received 和 Connection 模板前两个字段都是 PID、size。
         var pid = Marshal.ReadInt32(record.UserData, 0);
         var size = unchecked((uint)Marshal.ReadInt32(record.UserData, 4));
 
-        if (pid <= 0 || size == 0)
+        if (pid <= 0)
         {
             return;
         }
 
-        lock (_gate)
+        if (isData && size > 0)
         {
-            if (!_totals.TryGetValue(pid, out var counters))
+            lock (_gate)
             {
-                counters = new Counters();
-                _totals[pid] = counters;
-            }
+                if (!_totals.TryGetValue(pid, out var counters))
+                {
+                    counters = new Counters();
+                    _totals[pid] = counters;
+                }
 
-            if (isOut)
-            {
-                counters.Out += size;
-            }
-            else
-            {
-                counters.In += size;
+                if (isOut)
+                {
+                    counters.Out += size;
+                }
+                else
+                {
+                    counters.In += size;
+                }
+
+                Interlocked.Increment(ref _eventsSeen);
             }
         }
 
-        Interlocked.Increment(ref _eventsSeen);
+        if (_captureFlows && FlowObserved is { } sink)
+        {
+            var observation = TryCreateFlowObservation(
+                record.UserData, record.UserDataLength, id, pid, size, isData, isOut, isConnection);
+
+            if (observation is not null)
+            {
+                sink(observation.Value);
+            }
+            else
+            {
+                Interlocked.Increment(ref _flowParseFailures);
+            }
+        }
+    }
+
+    private static NetworkFlowObservation? TryCreateFlowObservation(
+        IntPtr data,
+        int length,
+        ushort eventId,
+        int pid,
+        uint size,
+        bool isData,
+        bool isOut,
+        bool isConnection)
+    {
+        var isV6 = eventId is 26 or 27 or 28 or 29 or 30 or 31 or 32 or 34 or 58 or 59;
+        string remote;
+        ushort remotePort;
+
+        if (!isV6)
+        {
+            if (length < 20)
+            {
+                return null;
+            }
+
+            var address = (uint)Marshal.ReadInt32(data, 8);
+            remote = new IPAddress(BitConverter.GetBytes(address)).ToString();
+            remotePort = (ushort)IPAddress.NetworkToHostOrder(Marshal.ReadInt16(data, 16));
+        }
+        else
+        {
+            if (length < 44)
+            {
+                return null;
+            }
+
+            var bytes = new byte[16];
+            Marshal.Copy(IntPtr.Add(data, 8), bytes, 0, 16);
+            remote = new IPAddress(bytes).ToString();
+            remotePort = (ushort)IPAddress.NetworkToHostOrder(Marshal.ReadInt16(data, 40));
+        }
+
+        if (remotePort == 0)
+        {
+            return null;
+        }
+
+        return new NetworkFlowObservation(
+            DateTime.UtcNow,
+            pid,
+            eventId <= 34 ? "TCP" : "UDP",
+            remote,
+            remotePort,
+            isData ? isOut : eventId is 12 or 28,
+            isConnection,
+            isData ? size : 0);
     }
 
     private sealed class Counters

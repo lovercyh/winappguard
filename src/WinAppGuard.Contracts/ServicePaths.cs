@@ -39,4 +39,10 @@ public static class ServicePaths
     /// 内容与配置不一致（例如 --reset-owner 换了所有者）时会重新迁移。
     /// </summary>
     public static string WfpDaclMarkerFile => Path.Combine(DataDirectory, "wfp-dacl-owner-only");
+
+    /// <summary>3.7：IDS 状态与告警目录（服务写，界面只读）。</summary>
+    public static string IdsDirectory => Path.Combine(DataDirectory, "ids");
+
+    /// <summary>3.7：IDS 设置、抑制和告警确认状态。</summary>
+    public static string IdsStateFile => Path.Combine(IdsDirectory, "state.json");
 }

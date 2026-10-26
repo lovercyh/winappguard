@@ -118,6 +118,23 @@ public static class ServiceProtocol
         /// <summary>3.5：清空 DNS 内存记录（服务继续采集）。</summary>
         public const string ClearDns = "write.dns.clear";
 
+        // ---- 3.7：用户态 Flow IDS（只检测、不阻断）----
+
+        /// <summary>3.7：读取最近的 IDS 告警（只读）。</summary>
+        public const string QueryIdsAlerts = "query.ids.alerts";
+
+        /// <summary>3.7：修改 IDS 开关、规则、敏感度和保留期（写，需提权）。</summary>
+        public const string IdsConfigure = "write.ids.configure";
+
+        /// <summary>3.7：确认一条告警（写，需提权）。</summary>
+        public const string IdsAck = "write.ids.ack";
+
+        /// <summary>3.7：新增或取消一条抑制（写，需提权）。</summary>
+        public const string IdsSuppress = "write.ids.suppress";
+
+        /// <summary>3.7：清空告警（写，需提权）。</summary>
+        public const string IdsClear = "write.ids.clear";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

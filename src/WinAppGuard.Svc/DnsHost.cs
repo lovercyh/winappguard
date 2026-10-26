@@ -22,12 +22,26 @@ internal static class DnsHost
     private static System.Threading.Timer? _watchdog;
     private static int _startFailures;
     private static bool _stopping;
+    private static Action<DnsQueryRecord>? _querySink;
 
     internal static bool Collecting
     {
         get { lock (Gate) { return _monitor?.IsRunning == true; } }
     }
 
+    /// <summary>3.7：把 IDS 的 DNS 回调挂到当前/后续的 ETW 会话上。</summary>
+    internal static void SetQuerySink(Action<DnsQueryRecord>? sink)
+    {
+        lock (Gate)
+        {
+            _querySink = sink;
+
+            if (_monitor is not null)
+            {
+                _monitor.QueryObserved = sink;
+            }
+        }
+    }
     internal static void Start()
     {
         lock (Gate)
@@ -60,6 +74,7 @@ internal static class DnsHost
 
             monitor = _monitor;
             _monitor = null;
+            _querySink = null;
         }
 
         monitor?.Dispose();
@@ -171,6 +186,7 @@ internal static class DnsHost
             }
 
             _startFailures = 0;
+            monitor.QueryObserved = _querySink;
             _monitor = monitor;
             ServiceLog.Info(
                 "WAG-DNS-002",

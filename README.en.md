@@ -58,6 +58,10 @@ and finish with *"blocked."*
   (mostly `svchost.exe`) stays allowed so DNS, time sync and Windows Update keep working.
 - **Dedicated rules page** — manage every rule the tool has created, even if the program
   is no longer running.
+- **Flow IDS (detection only, never blocking)** — the *IDS* page is enabled by default and uses
+  connection metadata plus DNS records to flag periodic beaconing, port/host scans, lateral
+  movement and DNS anomalies. Alerts stay local for 30 days and can be acknowledged, suppressed
+  or cleared. No DPI, no HTTPS decryption, no packet capture, and no automatic blocking.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
   blocked), program, remote endpoint, **guessed domain**, and **which rule matched**. Search,
   filter to blocked only, or clear everything. Records are local only, enabled by default, and
@@ -104,6 +108,8 @@ This needs to be explicit.
   filters under its own sublayer GUID.
 - ❌ It does **not** block critical system processes (`lsass.exe`, `svchost.exe`, itself, …).
   This guard applies to **blocking** only, never to allowing.
+- ❌ Its IDS is **detection only**: it never drops, blocks or rewrites traffic automatically,
+  does not decrypt HTTPS, and does not fetch external threat intelligence.
 - ⚠️ It **does** use the network by default, for exactly three purposes (below). There is
   **no telemetry, no analytics, and no update check**.
 

@@ -1,6 +1,7 @@
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics;
+using WinAppGuard.Core.Diagnostics.Ids;
 
 namespace WinAppGuard.Service;
 
@@ -37,6 +38,8 @@ internal static class TrafficHost
     private static int _failureLogCounter;
     private static bool _stopping;
     private static DateTime _nextRetryUtc = DateTime.MinValue;
+    private static Action<NetworkFlowObservation>? _flowSink;
+    private static bool _captureFlows;
     private static DateTime _startedUtc = DateTime.UtcNow;
 
     internal static bool Collecting
@@ -49,12 +52,33 @@ internal static class TrafficHost
         get { lock (Gate) { return _monitor?.EventsSeen ?? 0; } }
     }
 
+    /// <summary>3.7：IDS 打开时地址/端口解析失败的事件数。</summary>
+    internal static long FlowParseFailures
+    {
+        get { lock (Gate) { return _monitor?.FlowParseFailures ?? 0; } }
+    }
+
     /// <summary>3.6：本次统计的起点（服务启动或最近一次清空）。</summary>
     internal static DateTime StartedUtc
     {
         get { lock (Gate) { return _startedUtc; } }
     }
 
+    /// <summary>3.7：把 IDS 的 flow 回调挂到当前/后续的 ETW 会话上。</summary>
+    internal static void SetFlowSink(Action<NetworkFlowObservation>? sink, bool capture)
+    {
+        lock (Gate)
+        {
+            _flowSink = sink;
+            _captureFlows = capture;
+
+            if (_monitor is not null)
+            {
+                _monitor.FlowObserved = sink;
+                _monitor.CaptureFlows = capture;
+            }
+        }
+    }
     internal static void Start()
     {
         lock (Gate)
@@ -90,6 +114,8 @@ internal static class TrafficHost
 
             monitor = _monitor;
             _monitor = null;
+            _flowSink = null;
+            _captureFlows = false;
 
             Totals.Clear();
         }
@@ -233,6 +259,8 @@ internal static class TrafficHost
 
             _startFailures = 0;
             _nextRetryUtc = DateTime.MinValue;
+            monitor.FlowObserved = _flowSink;
+            monitor.CaptureFlows = _captureFlows;
             _monitor = monitor;
         }
     }

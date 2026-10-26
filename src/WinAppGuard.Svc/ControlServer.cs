@@ -145,6 +145,9 @@ internal sealed class ControlServer : IDisposable
         // 3.5：DNS 采集（ETW 实时会话；失败由看门狗重试）。
         DnsHost.Start();
 
+        // 3.7：IDS 只消费上面两个 ETW 会话的回调，不新开会话。
+        IdsHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -175,6 +178,9 @@ internal sealed class ControlServer : IDisposable
 
         // 审计采集也停掉（记录文件先刷盘再关闭）。
         AuditHost.Stop();
+
+        // 3.7：先摘 IDS 回调，再停 ETW 会话。
+        IdsHost.Stop();
 
         TrafficHost.Stop();
 
@@ -532,6 +538,17 @@ internal sealed class ControlServer : IDisposable
                 Affected = DnsHost.Clear(),
             },
 
+            // 3.7：IDS 只读查询；写命令（write.ids.*）已由上面的提权检查统一拦截。
+            ServiceProtocol.Commands.QueryIdsAlerts => IdsHost.QueryAlerts(request),
+
+            ServiceProtocol.Commands.IdsConfigure => IdsHost.Configure(request),
+
+            ServiceProtocol.Commands.IdsAck => IdsHost.Ack(request),
+
+            ServiceProtocol.Commands.IdsSuppress => IdsHost.Suppress(request),
+
+            ServiceProtocol.Commands.IdsClear => IdsHost.Clear(request),
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -604,6 +621,13 @@ internal sealed class ControlServer : IDisposable
         status.TrafficCollecting = TrafficHost.Collecting;
         status.TrafficEventsSeen = TrafficHost.EventsSeen;
         status.DnsCollecting = DnsHost.Collecting;
+
+        var ids = IdsHost.GetStatus();
+        status.IdsEnabled = ids.Enabled;
+        status.IdsCollecting = ids.Collecting;
+        status.IdsAlertsNew = ids.AlertsNew;
+        status.IdsFlowCount = ids.FlowCount;
+        status.IdsEventsSeen = ids.EventsSeen;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

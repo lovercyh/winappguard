@@ -50,6 +50,9 @@ public sealed class DnsEtwMonitor : IDisposable
 
     private EtwRealtimeSession? _session;
 
+    /// <summary>3.7：每条新增/更新的 DNS 记录回调给 IDS；在 ETW 线程执行。</summary>
+    public Action<DnsQueryRecord>? QueryObserved { get; set; }
+
     public DnsEtwMonitor(int capacity = 2000)
     {
         _capacity = Math.Clamp(capacity, 100, 10_000);
@@ -187,6 +190,7 @@ public sealed class DnsEtwMonitor : IDisposable
         }
 
         var now = DateTime.UtcNow;
+        DnsQueryRecord? notification = null;
 
         lock (_gate)
         {
@@ -203,31 +207,48 @@ public sealed class DnsEtwMonitor : IDisposable
                     node.Value.Status = status;
                 }
 
-                return;
+                notification = ToRecord(node.Value);
             }
-
-            var entry = new Entry
+            else
             {
-                TimeUtc = now,
-                Pid = pid,
-                ProcessPath = processPath,
-                ProcessName = processName,
-                QueryName = queryName,
-                Status = status,
-                EventId = eventId,
-            };
+                var entry = new Entry
+                {
+                    TimeUtc = now,
+                    Pid = pid,
+                    ProcessPath = processPath,
+                    ProcessName = processName,
+                    QueryName = queryName,
+                    Status = status,
+                    EventId = eventId,
+                };
 
-            var added = _records.AddLast(entry);
-            _recent[key] = added;
+                var added = _records.AddLast(entry);
+                _recent[key] = added;
+                notification = ToRecord(entry);
 
-            while (_records.Count > _capacity && _records.First is { } first)
-            {
-                _records.RemoveFirst();
-                _recent.Remove($"{first.Value.Pid}|{first.Value.QueryName.ToLowerInvariant()}");
+                while (_records.Count > _capacity && _records.First is { } first)
+                {
+                    _records.RemoveFirst();
+                    _recent.Remove($"{first.Value.Pid}|{first.Value.QueryName.ToLowerInvariant()}");
+                }
             }
+        }
+
+        if (notification is { } record)
+        {
+            QueryObserved?.Invoke(record);
         }
     }
 
+    private static DnsQueryRecord ToRecord(Entry entry)
+        => new(
+            entry.TimeUtc,
+            entry.Pid,
+            entry.ProcessPath,
+            entry.ProcessName,
+            entry.QueryName,
+            entry.Status,
+            entry.EventId);
     // ---------------- TDH ----------------
 
     private static bool TryGetString(IntPtr record, string property, out string value)

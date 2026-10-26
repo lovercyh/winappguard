@@ -101,6 +101,7 @@ partial class MainForm
     private TabPage _tabAudit = null!;
     private TabPage _tabDns = null!;
     private TabPage _tabTraffic = null!;
+    private TabPage _tabIds = null!;
 
     private Label _settingsNoticeLabel = null!;
     private GroupBox _autostartPanel = null!;
@@ -251,6 +252,7 @@ partial class MainForm
         _tabAudit = new TabPage();
         _tabDns = new TabPage();
         _tabTraffic = new TabPage();
+        _tabIds = new TabPage();
         _tabSettings = new TabPage();
         _settingsNoticeLabel = new Label();
         _autostartPanel = new GroupBox();
@@ -393,12 +395,18 @@ partial class MainForm
         _tabTraffic.Text = "流量";
         _tabTraffic.UseVisualStyleBackColor = true;
 
+        _tabIds.Name = "_tabIds";
+        _tabIds.Padding = new Padding(3);
+        _tabIds.Text = "IDS";
+        _tabIds.UseVisualStyleBackColor = true;
+
         // ==================================================================
         // 标签页容器
         // ==================================================================
         _tabControl.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _tabControl.Controls.Add(_tabConnections);
         _tabControl.Controls.Add(_tabTraffic);
+        _tabControl.Controls.Add(_tabIds);
         _tabControl.Controls.Add(_tabRules);
         _tabControl.Controls.Add(_tabWhitelist);
         _tabControl.Controls.Add(_tabAudit);

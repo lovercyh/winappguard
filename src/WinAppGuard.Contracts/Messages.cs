@@ -51,6 +51,23 @@ public sealed class ServiceRequest
 
     /// <summary>3.5：临时锁网的持续时间（秒）。由服务端再做一次范围校验。</summary>
     public int? LockdownSeconds { get; set; }
+
+    // ---- 3.7：IDS ----
+
+    /// <summary>修改 IDS 设置（null = 不改）。</summary>
+    public IdsSettingsDto? IdsSettings { get; set; }
+
+    /// <summary>要确认的告警 id。</summary>
+    public string? IdsAlertId { get; set; }
+
+    /// <summary>要新增的抑制；<see cref="IdsRemoveSuppression"/> 为 true 时按 <see cref="IdsSuppressionDto.Id"/> 删除。</summary>
+    public IdsSuppressionDto? IdsSuppression { get; set; }
+
+    /// <summary>true = 取消抑制，false = 新增抑制。</summary>
+    public bool IdsRemoveSuppression { get; set; }
+
+    /// <summary>3.7：随设置一起批量取消的抑制 id（界面保存设置时用，避免多次 UAC）。</summary>
+    public List<string>? IdsRemoveSuppressionIds { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -106,6 +123,20 @@ public sealed class ServiceResponse
 
     /// <summary>3.5：最近的 DNS 查询记录。</summary>
     public List<DnsDto>? DnsRecords { get; set; }
+
+    // ---- 3.7：IDS ----
+
+    /// <summary>最近的 IDS 告警（按时间倒序）。</summary>
+    public List<IdsAlertDto>? IdsAlerts { get; set; }
+
+    /// <summary>当前抑制列表。</summary>
+    public List<IdsSuppressionDto>? IdsSuppressions { get; set; }
+
+    /// <summary>当前 IDS 设置。</summary>
+    public IdsSettingsDto? IdsSettings { get; set; }
+
+    /// <summary>IDS 运行状态。</summary>
+    public IdsStatusDto? IdsStatus { get; set; }
 }
 
 /// <summary>
@@ -136,6 +167,105 @@ public sealed class DnsDto
 
     /// <summary>ETW 事件 ID（诊断用；3006 = 发起，3008 = 完成）。</summary>
     public int EventId { get; set; }
+}
+
+/// <summary>
+/// 3.7：一条 IDS 告警。
+///
+/// 只有连接元数据与统计证据；**不含**载荷、URL、HTTPS 内容。
+/// 级别和状态都是稳定英文标记，界面负责翻译。
+/// </summary>
+public sealed class IdsAlertDto
+{
+    public string Id { get; set; } = string.Empty;
+
+    public DateTime TimeUtc { get; set; }
+
+    /// <summary>low / medium / high。</summary>
+    public string Severity { get; set; } = "medium";
+
+    /// <summary>beaconing / scan / lateral / dns。</summary>
+    public string RuleId { get; set; } = string.Empty;
+
+    public string RuleName { get; set; } = string.Empty;
+
+    public int Pid { get; set; }
+
+    public string ProcessName { get; set; } = string.Empty;
+
+    public string? ProcessPath { get; set; }
+
+    /// <summary>远端 IP:端口、主机、端口或父域。</summary>
+    public string Target { get; set; } = string.Empty;
+
+    /// <summary>数值型证据摘要（英文/数字，不写中文）。</summary>
+    public string Evidence { get; set; } = string.Empty;
+
+    /// <summary>new / ack / ignored。</summary>
+    public string Status { get; set; } = "new";
+}
+
+/// <summary>3.7：IDS 设置。</summary>
+public sealed class IdsSettingsDto
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>standard / conservative。</summary>
+    public string Sensitivity { get; set; } = "standard";
+
+    /// <summary>告警保留天数。</summary>
+    public int RetentionDays { get; set; } = 30;
+
+    public bool BeaconingRule { get; set; } = true;
+
+    public bool ScanRule { get; set; } = true;
+
+    public bool LateralRule { get; set; } = true;
+
+    public bool DnsRule { get; set; } = true;
+}
+
+/// <summary>3.7：一条抑制。</summary>
+public sealed class IdsSuppressionDto
+{
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>规则 id，或 * 表示全部规则。</summary>
+    public string RuleId { get; set; } = "*";
+
+    public string? ProcessPath { get; set; }
+
+    public string? ProcessName { get; set; }
+
+    public string? Target { get; set; }
+
+    /// <summary>到期时间（UTC）；null = 永久。</summary>
+    public DateTime? UntilUtc { get; set; }
+}
+
+/// <summary>3.7：IDS 运行状态（诊断与验收用）。</summary>
+public sealed class IdsStatusDto
+{
+    public bool Enabled { get; set; }
+
+    public bool Collecting { get; set; }
+
+    public string Sensitivity { get; set; } = "standard";
+
+    public int FlowCount { get; set; }
+
+    public long EventsSeen { get; set; }
+
+    /// <summary>被淘汰/解析失败的事件数；0 表示没观察到丢失。</summary>
+    public long EventsLost { get; set; }
+
+    public int AlertsNew { get; set; }
+
+    public int AlertsTotal { get; set; }
+
+    public DateTime? LastAlertUtc { get; set; }
+
+    public int SuppressionCount { get; set; }
 }
 
 /// <summary>
@@ -260,6 +390,23 @@ public sealed class ServiceStatus
 
     /// <summary>3.5：DNS ETW 采集是否在跑（启动失败/被系统停止时为 false）。</summary>
     public bool DnsCollecting { get; set; }
+
+    // ---- 3.7：IDS ----
+
+    /// <summary>IDS 是否在设置里开启。</summary>
+    public bool IdsEnabled { get; set; }
+
+    /// <summary>IDS 实际是否在采集（ETW 回调已挂上）。</summary>
+    public bool IdsCollecting { get; set; }
+
+    /// <summary>未确认的告警数。</summary>
+    public int IdsAlertsNew { get; set; }
+
+    /// <summary>当前内存里的 flow 数。</summary>
+    public int IdsFlowCount { get; set; }
+
+    /// <summary>IDS 观察到的网络事件数。</summary>
+    public long IdsEventsSeen { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

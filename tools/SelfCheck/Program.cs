@@ -16,6 +16,7 @@ using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics;
+using WinAppGuard.Core.Diagnostics.Ids;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
@@ -154,6 +155,7 @@ internal static class Program
                         && !args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
@@ -324,6 +326,10 @@ internal static class Program
             {
                 RunServiceTrafficClearTest();
             }
+            else if (args.Contains("--service-ids-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceIdsTest();
+            }
             else if (args.Contains("--service-lockdown-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceLockdownTest();
@@ -399,6 +405,10 @@ internal static class Program
             else if (args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunTrafficRecordsTest();
+            }
+            else if (args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunIdsTest();
             }
             else if (args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3983,6 +3993,69 @@ internal static class Program
                         }
                     }
 
+                    if (TryGetField<TabPage>(form, "_tabIds", out var idsTab)
+                        && TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, "_idsGrid", out var idsGrid))
+                    {
+                        var idsHeaders = idsGrid.Columns.Cast<DataGridViewColumn>()
+                            .Select(column => column.HeaderText)
+                            .ToList();
+
+                        W($"    3.7 IDS 页签 = {idsTab.Text} | 列头 = {string.Join(" | ", idsHeaders)}");
+                        CheckAssertion(results, "英文：IDS 页签与列头无中文",
+                            !HasCjk(idsTab.Text) && idsHeaders.All(text => !HasCjk(text)));
+
+                        if (TryGetField<TextBox>(form, "_idsSearchBox", out var idsSearch))
+                        {
+                            W($"    IDS 搜索占位 = {idsSearch.PlaceholderText}");
+                            CheckAssertion(results, "英文：IDS 搜索占位无中文",
+                                !HasCjk(idsSearch.PlaceholderText));
+                        }
+
+                        if (TryGetField<Label>(form, "_idsSummaryLabel", out var idsSummary))
+                        {
+                            W($"    IDS 状态行 = {idsSummary.Text}");
+                            CheckAssertion(results, "英文：IDS 状态行无中文",
+                                !HasCjk(idsSummary.Text));
+                        }
+
+                        if (TryGetField<ComboBox>(form, "_idsSeverityFilter", out var idsSeverity)
+                            && TryGetField<ComboBox>(form, "_idsRuleFilter", out var idsRule))
+                        {
+                            var items = idsSeverity.Items.Cast<object>()
+                                .Concat(idsRule.Items.Cast<object>())
+                                .Select(item => item?.ToString() ?? string.Empty)
+                                .ToList();
+
+                            W("    IDS 筛选 = " + string.Join(" | ", items));
+                            CheckAssertion(results, "英文：IDS 筛选无中文",
+                                items.All(text => !HasCjk(text)));
+                        }
+
+                        if (TryGetField<Button>(form, "_idsAckButton", out var idsAck)
+                            && TryGetField<Button>(form, "_idsSuppressButton", out var idsSuppress)
+                            && TryGetField<Button>(form, "_idsSettingsButton", out var idsSettings))
+                        {
+                            var buttons = new[] { idsAck, idsSuppress, idsSettings };
+                            var truncated = buttons
+                                .Select(button => new
+                                {
+                                    Button = button,
+                                    Need = TextRenderer.MeasureText(button.Text, button.Font).Width + 16,
+                                })
+                                .Where(item => item.Need > item.Button.Width)
+                                .Select(item => item.Button.Text)
+                                .ToList();
+
+                            W("    IDS 按钮 = " + string.Join(" | ", buttons.Select(button => button.Text)));
+                            CheckAssertion(results, "英文：IDS 按钮无中文且不截断",
+                                truncated.Count == 0
+                                && buttons.All(button => !HasCjk(button.Text)));
+                        }
+
+                        CheckAssertion(results, "英文：IDS 空状态无中文",
+                            !HasCjk(idsGrid.EmptyText));
+                    }
+
                     if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
                             form, "_rulesGrid", out var rulesEmpty))
                     {
@@ -4143,6 +4216,91 @@ internal static class Program
                         CheckAssertion(results, "英文：确认框控件无中文", leftovers.Count == 0);
                         CheckAssertion(results, "英文：确认框标题",
                             dialog.Text == "Add to blocklist");
+                    }
+
+                    // 3.7：IDS 设置 / 抑制对话框也要在英文下没有中文残留。
+                    var assembly = typeof(MainForm).Assembly;
+
+                    var idsSettingsType = assembly.GetType("WinAppGuard.Forms.IdsSettingsForm");
+                    var idsSettingsCtor = idsSettingsType?
+                        .GetConstructors(System.Reflection.BindingFlags.NonPublic
+                                         | System.Reflection.BindingFlags.Instance)
+                        .SingleOrDefault(constructor => constructor.GetParameters().Length == 2);
+
+                    if (idsSettingsCtor is not null)
+                    {
+                        using var idsDialog = (Form)idsSettingsCtor.Invoke(new object[]
+                        {
+                            new IdsSettingsDto(),
+                            new List<IdsSuppressionDto>
+                            {
+                                new()
+                                {
+                                    Id = "s1",
+                                    RuleId = "dns",
+                                    ProcessName = "demo.exe",
+                                    Target = "evil.example",
+                                    UntilUtc = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc),
+                                },
+                            },
+                        });
+
+                        var leftovers = Walk(idsDialog)
+                            .Where(control => HasCjk(control.Text))
+                            .Select(control => $"{control.GetType().Name}:{control.Text}")
+                            .ToList();
+
+                        var listItems = Walk(idsDialog)
+                            .OfType<ListBox>()
+                            .SelectMany(list => list.Items.Cast<object>())
+                            .Select(item => item.ToString() ?? string.Empty)
+                            .ToList();
+
+                        if (leftovers.Count > 0)
+                        {
+                            W("    IDS 设置对话框残留：" + string.Join(" / ", leftovers));
+                        }
+
+                        W("    IDS 抑制列表 = " + string.Join(" | ", listItems));
+                        CheckAssertion(results, "英文：IDS 设置对话框无中文",
+                            leftovers.Count == 0
+                            && !HasCjk(idsDialog.Text)
+                            && listItems.All(text => !HasCjk(text)));
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "英文：IDS 设置对话框可构造", false);
+                    }
+
+                    var idsSuppressType = assembly.GetType("WinAppGuard.Forms.IdsSuppressForm");
+                    var idsSuppressCtor = idsSuppressType?
+                        .GetConstructors(System.Reflection.BindingFlags.NonPublic
+                                         | System.Reflection.BindingFlags.Instance)
+                        .SingleOrDefault(constructor => constructor.GetParameters().Length == 3);
+
+                    if (idsSuppressCtor is not null)
+                    {
+                        using var suppressDialog = (Form)idsSuppressCtor.Invoke(new object[]
+                        {
+                            "Periodic beaconing", "demo.exe", "203.0.113.10:8443",
+                        });
+
+                        var leftovers = Walk(suppressDialog)
+                            .Where(control => HasCjk(control.Text))
+                            .Select(control => $"{control.GetType().Name}:{control.Text}")
+                            .ToList();
+
+                        if (leftovers.Count > 0)
+                        {
+                            W("    IDS 抑制对话框残留：" + string.Join(" / ", leftovers));
+                        }
+
+                        CheckAssertion(results, "英文：IDS 抑制对话框无中文",
+                            leftovers.Count == 0 && !HasCjk(suppressDialog.Text));
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "英文：IDS 抑制对话框可构造", false);
                     }
 
                     var sampleRule = new FirewallRuleItem
@@ -9610,6 +9768,218 @@ internal static class Program
     /// 3.6：服务端清空流量计数（需要管理员/所有者）。
     /// 会清空本次运行的流量统计，验收脚本应放在最后跑。
     /// </summary>
+    private static void RunServiceIdsTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        IdsSettingsDto? initialSettings = null;
+
+        W("################################################################");
+        W("#   3.7 IDS 服务端实测（设置 / 抑制 / 清空；只在 VM 跑）          #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    服务版本 = {status.ServiceVersion}");
+        CheckAssertion(results, "服务版本是 3.7 或更高",
+            status.ServiceVersion.StartsWith("3.7", StringComparison.Ordinal)
+            || status.ServiceVersion.StartsWith("3.8", StringComparison.Ordinal)
+            || status.ServiceVersion.StartsWith("3.9", StringComparison.Ordinal));
+
+        CheckAssertion(results, "状态里有 IDS 字段", status.IdsEnabled || status.IdsFlowCount >= 0);
+        W($"    IDS 开关={status.IdsEnabled} 采集中={status.IdsCollecting} " +
+          $"flow={status.IdsFlowCount} 事件={status.IdsEventsSeen} 新告警={status.IdsAlertsNew}");
+
+        var snapshot = QueryIdsResponse(out var queryError);
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取 IDS 失败：{snapshot?.Error ?? queryError}");
+            CheckAssertion(results, "读取 IDS 快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        initialSettings = snapshot.IdsSettings;
+        CheckAssertion(results, "IDS 快照带设置和状态",
+            snapshot.IdsSettings is not null && snapshot.IdsStatus is not null);
+
+        if (initialSettings is null)
+        {
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    初始设置：enabled={initialSettings.Enabled} " +
+          $"sensitivity={initialSettings.Sensitivity} retention={initialSettings.RetentionDays}d " +
+          $"alerts={snapshot.IdsAlerts?.Count ?? 0} suppressions={snapshot.IdsSuppressions?.Count ?? 0}");
+
+        try
+        {
+            // ---- 开关往返 ----
+            var off = CloneSettings(initialSettings);
+            off.Enabled = false;
+
+            var offResponse = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.IdsConfigure,
+                    IdsSettings = off,
+                },
+                TimeSpan.FromSeconds(15),
+                out var offError);
+
+            W($"    关闭 IDS：ok={offResponse?.Ok}，错误={offResponse?.Error ?? offError}");
+            CheckAssertion(results, "关闭 IDS 成功", offResponse is { Ok: true });
+
+            var afterOff = QueryIdsResponse(out _);
+            CheckAssertion(results, "关闭后状态为 Enabled=false",
+                afterOff?.IdsStatus is { Enabled: false });
+
+            var on = CloneSettings(initialSettings);
+            on.Enabled = true;
+
+            var onResponse = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.IdsConfigure,
+                    IdsSettings = on,
+                },
+                TimeSpan.FromSeconds(15),
+                out var onError);
+
+            W($"    开启 IDS：ok={onResponse?.Ok}，错误={onResponse?.Error ?? onError}");
+            CheckAssertion(results, "开启 IDS 成功", onResponse is { Ok: true });
+
+            Thread.Sleep(TimeSpan.FromSeconds(2));
+
+            var afterOn = QueryIdsResponse(out _);
+            W($"    开启后：enabled={afterOn?.IdsStatus?.Enabled} " +
+              $"collecting={afterOn?.IdsStatus?.Collecting} flow={afterOn?.IdsStatus?.FlowCount}");
+
+            CheckAssertion(results, "开启后状态为 Enabled=true",
+                afterOn?.IdsStatus is { Enabled: true });
+            CheckAssertion(results, "开启后采集在跑",
+                afterOn?.IdsStatus is { Collecting: true });
+
+            // ---- 抑制往返 ----
+            var target = "selftest-" + Guid.NewGuid().ToString("N") + ".example";
+
+            var addResponse = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.IdsSuppress,
+                    IdsSuppression = new IdsSuppressionDto
+                    {
+                        RuleId = "dns",
+                        ProcessName = "selftest.exe",
+                        Target = target,
+                        UntilUtc = DateTime.UtcNow.AddHours(1),
+                    },
+                },
+                TimeSpan.FromSeconds(15),
+                out var addError);
+
+            var added = addResponse?.IdsSuppressions?
+                .FirstOrDefault(item => item.Target == target);
+
+            W($"    新增抑制：ok={addResponse?.Ok}，id={added?.Id}，错误={addResponse?.Error ?? addError}");
+            CheckAssertion(results, "新增抑制成功", addResponse is { Ok: true } && added is not null);
+
+            if (added is not null)
+            {
+                var removeResponse = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.IdsSuppress,
+                        IdsRemoveSuppression = true,
+                        IdsSuppression = new IdsSuppressionDto { Id = added.Id },
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var removeError);
+
+                var stillThere = removeResponse?.IdsSuppressions?
+                    .Any(item => string.Equals(item.Id, added.Id, StringComparison.Ordinal)) == true;
+
+                W($"    取消抑制：ok={removeResponse?.Ok}，仍在={stillThere}，" +
+                  $"错误={removeResponse?.Error ?? removeError}");
+                CheckAssertion(results, "取消抑制成功",
+                    removeResponse is { Ok: true } && !stillThere);
+            }
+
+            // ---- 未知告警确认 / 清空 ----
+            var ackMissing = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.IdsAck,
+                    IdsAlertId = "no-such-alert",
+                },
+                TimeSpan.FromSeconds(15),
+                out _);
+
+            CheckAssertion(results, "确认不存在的告警返回失败", ackMissing is { Ok: false });
+
+            var clear = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.IdsClear },
+                TimeSpan.FromSeconds(15),
+                out var clearError);
+
+            W($"    清空告警：ok={clear?.Ok}，清理={clear?.Affected}，错误={clear?.Error ?? clearError}");
+            CheckAssertion(results, "清空 IDS 告警成功", clear is { Ok: true });
+
+            var afterClear = QueryIdsResponse(out _);
+            CheckAssertion(results, "清空后告警列表为空",
+                afterClear?.IdsAlerts is { Count: 0 });
+        }
+        finally
+        {
+            // 无论断言结果如何都要恢复用户原来的设置。
+            if (initialSettings is not null)
+            {
+                var restore = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.IdsConfigure,
+                        IdsSettings = initialSettings,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var restoreError);
+
+                W($"    恢复初始设置：ok={restore?.Ok}，错误={restore?.Error ?? restoreError}");
+                CheckAssertion(results, "恢复初始 IDS 设置", restore is { Ok: true });
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static ServiceResponse? QueryIdsResponse(out string? error)
+    {
+        return ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },
+            TimeSpan.FromSeconds(5),
+            out error);
+    }
+
+    private static IdsSettingsDto CloneSettings(IdsSettingsDto settings) => new()
+    {
+        Enabled = settings.Enabled,
+        Sensitivity = settings.Sensitivity,
+        RetentionDays = settings.RetentionDays,
+        BeaconingRule = settings.BeaconingRule,
+        ScanRule = settings.ScanRule,
+        LateralRule = settings.LateralRule,
+        DnsRule = settings.DnsRule,
+    };
+
     private static void RunServiceTrafficClearTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -10134,6 +10504,507 @@ internal static class Program
     /// 3.6：流量记录页的离线检查 —— 排序 / 搜索 / 未知路径 / 合计。
     /// 直接构造窗体并注入 DTO，不连服务、不产生真实流量。
     /// </summary>
+    private static void RunIdsTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+        var pid = Environment.ProcessId;
+
+        W("################################################################");
+        W("#   IDS（3.7）离线规则 / 存储 / 协议自检                         #");
+        W("################################################################");
+        W();
+
+        CheckAssertion(results, "IDS 查询命令名正确",
+            ServiceProtocol.Commands.QueryIdsAlerts == "query.ids.alerts");
+        CheckAssertion(results, "IDS 写命令有 write 前缀",
+            ServiceProtocol.Commands.IdsConfigure.StartsWith("write.", StringComparison.Ordinal)
+            && ServiceProtocol.Commands.IdsAck.StartsWith("write.", StringComparison.Ordinal)
+            && ServiceProtocol.Commands.IdsSuppress.StartsWith("write.", StringComparison.Ordinal)
+            && ServiceProtocol.Commands.IdsClear.StartsWith("write.", StringComparison.Ordinal));
+
+        // ---- beaconing ----
+        var beaconBelow = new IdsAnalyzer();
+        FeedBeacon(beaconBelow, pid, start, connections: 5);
+        CheckAssertion(results, "beaconing：5 次连接不告警",
+            beaconBelow.Evaluate(start.AddMinutes(1), new IdsSettings(), Array.Empty<IdsSuppression>()).Count == 0);
+
+        var beacon = new IdsAnalyzer();
+        FeedBeacon(beacon, pid, start, connections: 6);
+        var beaconAlerts = beacon.Evaluate(
+            start.AddMinutes(1), new IdsSettings(), Array.Empty<IdsSuppression>());
+        CheckAssertion(results, "beaconing：6 次、5 秒间隔命中",
+            beaconAlerts.Count == 1
+            && beaconAlerts[0].RuleId == "beaconing"
+            && beaconAlerts[0].Severity == IdsSeverity.Medium
+            && beaconAlerts[0].Target == "203.0.113.10:8443");
+
+        var beaconCooldown = beacon.Evaluate(
+            start.AddMinutes(1).AddSeconds(5), new IdsSettings(), Array.Empty<IdsSuppression>());
+        CheckAssertion(results, "beaconing：30 分钟内同一目标不重复告警",
+            beaconCooldown.Count == 0);
+
+        var beaconConservative = new IdsAnalyzer();
+        FeedBeacon(beaconConservative, pid, start, connections: 6);
+        CheckAssertion(results, "beaconing：保守敏感度下 6 次不告警",
+            beaconConservative.Evaluate(
+                start.AddMinutes(1),
+                new IdsSettings { Sensitivity = "conservative" },
+                Array.Empty<IdsSuppression>()).Count == 0);
+
+        var beaconConservative2 = new IdsAnalyzer();
+        FeedBeacon(beaconConservative2, pid, start, connections: 12);
+        CheckAssertion(results, "beaconing：保守敏感度下 12 次命中",
+            beaconConservative2.Evaluate(
+                start.AddMinutes(2),
+                new IdsSettings { Sensitivity = "conservative" },
+                Array.Empty<IdsSuppression>()).Count == 1);
+
+        var beaconSuppressed = new IdsAnalyzer();
+        FeedBeacon(beaconSuppressed, pid, start, connections: 6);
+        var suppression = new IdsSuppression
+        {
+            RuleId = "beaconing",
+            Target = "203.0.113.10:8443",
+        };
+        CheckAssertion(results, "beaconing：抑制后不告警",
+            beaconSuppressed.Evaluate(
+                start.AddMinutes(1),
+                new IdsSettings(),
+                new[] { suppression }).Count == 0);
+
+        var beaconExpired = new IdsAnalyzer();
+        FeedBeacon(beaconExpired, pid, start, connections: 6);
+        var expiredSuppression = new IdsSuppression
+        {
+            RuleId = "beaconing",
+            Target = "203.0.113.10:8443",
+            UntilUtc = start.AddHours(-1),
+        };
+        CheckAssertion(results, "beaconing：过期抑制不再生效",
+            beaconExpired.Evaluate(
+                start.AddMinutes(1),
+                new IdsSettings(),
+                new[] { expiredSuppression }).Count == 1);
+
+        // ---- 扫描 ----
+        var scan = new IdsAnalyzer();
+
+        for (var i = 0; i < 30; i++)
+        {
+            scan.ObserveFlow(new NetworkFlowObservation(
+                start.AddSeconds(i), pid, "TCP", "198.51.100.5", (ushort)(1000 + i), true, true, 0));
+        }
+
+        var scanAlerts = scan.Evaluate(
+            start.AddSeconds(31), new IdsSettings(), Array.Empty<IdsSuppression>());
+        CheckAssertion(results, "scan：同一主机 30 个端口命中且为高",
+            scanAlerts.Count == 1
+            && scanAlerts[0].RuleId == "scan"
+            && scanAlerts[0].Severity == IdsSeverity.High
+            && scanAlerts[0].Evidence.Contains("ports=30", StringComparison.Ordinal));
+
+        var horizontal = new IdsAnalyzer();
+
+        for (var i = 0; i < 20; i++)
+        {
+            horizontal.ObserveFlow(new NetworkFlowObservation(
+                start.AddSeconds(i), pid, "TCP", $"198.51.100.{i + 1}", 3389, true, true, 0));
+        }
+
+        var horizontalAlerts = horizontal.Evaluate(
+            start.AddSeconds(31), new IdsSettings(), Array.Empty<IdsSuppression>());
+        CheckAssertion(results, "scan：同一端口 20 台主机命中",
+            horizontalAlerts.Any(alert => alert.RuleId == "scan"));
+
+        var inboundScan = new IdsAnalyzer();
+
+        for (var i = 0; i < 30; i++)
+        {
+            inboundScan.ObserveFlow(new NetworkFlowObservation(
+                start.AddSeconds(i), pid, "TCP", "198.51.100.5", (ushort)(1000 + i), false, true, 0));
+        }
+
+        CheckAssertion(results, "scan：只统计出站连接（入站不告警）",
+            inboundScan.Evaluate(
+                start.AddSeconds(31), new IdsSettings(), Array.Empty<IdsSuppression>()).Count == 0);
+
+        var inboundBeacon = new IdsAnalyzer();
+
+        for (var i = 0; i < 6; i++)
+        {
+            inboundBeacon.ObserveFlow(new NetworkFlowObservation(
+                start.AddSeconds(i * 5), pid, "TCP", "203.0.113.10", 8443, false, true, 0));
+        }
+
+        CheckAssertion(results, "beaconing：只统计出站连接（入站不告警）",
+            inboundBeacon.Evaluate(
+                start.AddMinutes(1), new IdsSettings(), Array.Empty<IdsSuppression>()).Count == 0);
+
+        // ---- 内网横向 ----
+        var lateral = new IdsAnalyzer();
+
+        for (var i = 0; i < 4; i++)
+        {
+            lateral.ObserveFlow(new NetworkFlowObservation(
+                start.AddMinutes(i), pid, "TCP", $"10.0.0.{i + 1}", 445, true, true, 0));
+        }
+
+        var lateralAlerts = lateral.Evaluate(
+            start.AddMinutes(5), new IdsSettings(), Array.Empty<IdsSuppression>());
+        CheckAssertion(results, "lateral：4 台内网主机 445 命中且为高",
+            lateralAlerts.Count == 1
+            && lateralAlerts[0].RuleId == "lateral"
+            && lateralAlerts[0].Severity == IdsSeverity.High
+            && lateralAlerts[0].Evidence.Contains("privateHosts=4", StringComparison.Ordinal));
+
+        var lateralPublic = new IdsAnalyzer();
+
+        for (var i = 0; i < 4; i++)
+        {
+            lateralPublic.ObserveFlow(new NetworkFlowObservation(
+                start.AddMinutes(i), pid, "TCP", $"198.51.100.{i + 1}", 445, true, true, 0));
+        }
+
+        CheckAssertion(results, "lateral：公网地址不告警",
+            !lateralPublic.Evaluate(
+                    start.AddMinutes(5), new IdsSettings(), Array.Empty<IdsSuppression>())
+                .Any(alert => alert.RuleId == "lateral"));
+
+        // ---- DNS ----
+        var dns = new IdsAnalyzer();
+
+        for (var i = 0; i < 20; i++)
+        {
+            dns.ObserveDns(new NetworkDnsObservation(
+                start.AddSeconds(i * 10), pid, $"host{i}.evil.example", "OK"));
+        }
+
+        var dnsAlerts = dns.Evaluate(
+            start.AddMinutes(5), new IdsSettings(), Array.Empty<IdsSuppression>());
+        CheckAssertion(results, "dns：同一父域 20 个子域命中",
+            dnsAlerts.Count == 1
+            && dnsAlerts[0].RuleId == "dns"
+            && dnsAlerts[0].Target == "evil.example");
+
+        var dnsBelow = new IdsAnalyzer();
+
+        for (var i = 0; i < 10; i++)
+        {
+            dnsBelow.ObserveDns(new NetworkDnsObservation(
+                start.AddSeconds(i * 10), pid, $"host{i}.evil.example", "OK"));
+        }
+
+        CheckAssertion(results, "dns：10 个子域不告警",
+            dnsBelow.Evaluate(
+                start.AddMinutes(5), new IdsSettings(), Array.Empty<IdsSuppression>()).Count == 0);
+
+        var dnsDuplicates = new IdsAnalyzer();
+
+        for (var i = 0; i < 10; i++)
+        {
+            var name = $"dup{i}.evil.example";
+            dnsDuplicates.ObserveDns(new NetworkDnsObservation(
+                start.AddSeconds(i * 10), pid, name, "NXDOMAIN"));
+            dnsDuplicates.ObserveDns(new NetworkDnsObservation(
+                start.AddSeconds(i * 10 + 1), pid, name, "NXDOMAIN"));
+        }
+
+        CheckAssertion(results, "dns：发起/完成重复事件不重复计数",
+            dnsDuplicates.Evaluate(
+                start.AddMinutes(5), new IdsSettings(), Array.Empty<IdsSuppression>()).Count == 0);
+
+        var dnsPublicSuffix = new IdsAnalyzer();
+
+        for (var i = 0; i < 10; i++)
+        {
+            dnsPublicSuffix.ObserveDns(new NetworkDnsObservation(
+                start.AddSeconds(i * 10), pid, $"a{i}.alpha.com.cn", "OK"));
+            dnsPublicSuffix.ObserveDns(new NetworkDnsObservation(
+                start.AddSeconds(i * 10 + 1), pid, $"b{i}.beta.com.cn", "OK"));
+        }
+
+        CheckAssertion(results, "dns：按注册域分组（com.cn 不合并不同站点）",
+            dnsPublicSuffix.Evaluate(
+                start.AddMinutes(5), new IdsSettings(), Array.Empty<IdsSuppression>()).Count == 0);
+
+        // ---- 事件计数 / 清空 ----
+        CheckAssertion(results, "事件计数正确",
+            beacon.EventsSeen == 18 && beacon.EventsLost == 0);
+
+        beacon.Clear();
+        CheckAssertion(results, "清空后 flow / 事件归零",
+            beacon.FlowCount == 0 && beacon.EventsSeen == 0);
+
+        // flow 上限：到 20,000 后一次淘汰 10%，不是每个新 flow 全表扫描。
+        var capped = new IdsAnalyzer();
+
+        for (var i = 0; i < 20_000; i++)
+        {
+            capped.ObserveFlow(new NetworkFlowObservation(
+                start, pid, "TCP", $"10.20.{i / 256}.{i % 256}", 443, true, false, 1));
+        }
+
+        capped.ObserveFlow(new NetworkFlowObservation(
+            start, pid, "TCP", "10.20.99.99", 443, true, false, 1));
+
+        CheckAssertion(results, "flow 上限：一次淘汰 10% 并计入丢失",
+            capped.FlowCount == 18_001 && capped.EventsLost == 2_000);
+
+        // ---- 告警存储 ----
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-IdsTest-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var store = new IdsAlertStore(directory);
+            var fresh = new IdsAlert
+            {
+                TimeUtc = start,
+                RuleId = "beaconing",
+                Target = "203.0.113.10:8443",
+                Evidence = "connections=6",
+            };
+            var stale = new IdsAlert
+            {
+                TimeUtc = start.AddDays(-40),
+                RuleId = "scan",
+                Target = "host:198.51.100.5",
+            };
+
+            store.Append(fresh);
+            store.Append(stale);
+
+            var recent = store.LoadRecent(30, 100);
+            CheckAssertion(results, "告警存储：按保留期读取（旧记录过滤）",
+                recent.Count == 1 && recent[0].Id == fresh.Id);
+
+            var removed = store.Prune(30);
+            CheckAssertion(results, "告警存储：Prune 删除过期记录",
+                removed == 1 && store.LoadRecent(365, 100).Count == 1);
+
+            store.Clear();
+            CheckAssertion(results, "告警存储：清空后读取为空",
+                store.LoadRecent(30, 100).Count == 0);
+
+            // ---- 状态文件 ----
+            var statePath = Path.Combine(directory, "state.json");
+            var saved = new IdsState
+            {
+                Settings = new IdsSettings
+                {
+                    Enabled = true,
+                    Sensitivity = "conservative",
+                    RetentionDays = 14,
+                    DnsRule = false,
+                },
+                Suppressions =
+                {
+                    new IdsSuppression
+                    {
+                        RuleId = "dns",
+                        ProcessName = "demo.exe",
+                        Target = "evil.example",
+                    },
+                },
+            };
+
+            IdsStateFile.Save(statePath, saved);
+            var loaded = IdsStateFile.Load(statePath);
+
+            CheckAssertion(results, "状态文件：设置 / 抑制往返",
+                loaded.Settings.RetentionDays == 14
+                && loaded.Settings.Sensitivity == "conservative"
+                && !loaded.Settings.DnsRule
+                && loaded.Suppressions.Count == 1
+                && loaded.Suppressions[0].Target == "evil.example");
+
+            File.WriteAllText(statePath, "{ broken", new UTF8Encoding(false));
+            var broken = IdsStateFile.Load(statePath);
+            CheckAssertion(results, "状态文件：坏文件回退默认值",
+                broken.Settings.Enabled && broken.Settings.RetentionDays == 30);
+
+            // ---- DTO 往返 ----
+            var response = new ServiceResponse
+            {
+                Ok = true,
+                IdsAlerts = new List<IdsAlertDto>
+                {
+                    new()
+                    {
+                        Id = "abc",
+                        TimeUtc = start,
+                        Severity = IdsSeverity.Medium,
+                        RuleId = "beaconing",
+                        ProcessName = "demo.exe",
+                        Target = "203.0.113.10:8443",
+                        Evidence = "connections=6; mean=5.0s",
+                        Status = "new",
+                    },
+                },
+                IdsSettings = new IdsSettingsDto { RetentionDays = 30, DnsRule = false },
+                IdsStatus = new IdsStatusDto { FlowCount = 3, EventsSeen = 42, AlertsNew = 1 },
+            };
+
+            var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+            var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+
+            CheckAssertion(results, "协议 DTO：告警 / 设置 / 状态往返",
+                back?.IdsAlerts is { Count: 1 }
+                && back.IdsAlerts[0].RuleId == "beaconing"
+                && back.IdsAlerts[0].Target == "203.0.113.10:8443"
+                && back.IdsSettings is { RetentionDays: 30, DnsRule: false }
+                && back.IdsStatus is { FlowCount: 3, EventsSeen: 42, AlertsNew: 1 });
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响自检结论。
+            }
+        }
+
+        RunIdsUiChecks(results);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>3.7：IDS 页的行构建 / 搜索 / 筛选 / 状态行接线（离线，不联网）。</summary>
+    private static void RunIdsUiChecks(List<(string Title, bool Passed)> results)
+    {
+        var previous = Localizer.Current;
+
+        try
+        {
+            Localizer.Initialize("zh");
+            MainForm.SuppressBackgroundServices = true;
+
+            using var form = new MainForm(isAutostart: false);
+            TrySetField(form, "_runtimeInitialized", true);
+
+            var now = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+
+            TrySetField(form, "_idsAlerts", new List<IdsAlertDto>
+            {
+                new()
+                {
+                    Id = "a1", TimeUtc = now, Severity = "high", RuleId = "lateral",
+                    RuleName = "lateral", Pid = 100, ProcessName = "demo.exe",
+                    Target = "private-admin-ports", Evidence = "privateHosts=4", Status = "new",
+                },
+                new()
+                {
+                    Id = "a2", TimeUtc = now.AddMinutes(-1), Severity = "medium",
+                    RuleId = "beaconing", RuleName = "beaconing", Pid = 200,
+                    ProcessName = "agent.exe", Target = "203.0.113.10:8443",
+                    Evidence = "connections=6; mean=5.0s", Status = "ack",
+                },
+                new()
+                {
+                    Id = "a3", TimeUtc = now.AddMinutes(-2), Severity = "medium",
+                    RuleId = "dns", RuleName = "dns", Pid = 300, ProcessName = "browser.exe",
+                    Target = "evil.example", Evidence = "parent=evil.example; unique=20",
+                    Status = "new",
+                },
+                new()
+                {
+                    Id = "a4", TimeUtc = now.AddMinutes(-3), Severity = "low",
+                    RuleId = "scan", RuleName = "scan", Pid = 400, ProcessName = "tool.exe",
+                    Target = "host:198.51.100.5", Evidence = "ports=15", Status = "new",
+                },
+            });
+
+            TrySetField(form, "_idsStatus", new IdsStatusDto
+            {
+                Enabled = true,
+                Collecting = true,
+                Sensitivity = "standard",
+                FlowCount = 12,
+                EventsSeen = 345,
+                AlertsNew = 3,
+                AlertsTotal = 4,
+                SuppressionCount = 1,
+            });
+
+            var rebuild = typeof(MainForm).GetMethod(
+                "RebuildIdsView",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            if (rebuild is null
+                || !TryGetField<DataGridView>(form, "_idsGrid", out var grid)
+                || !TryGetField<TextBox>(form, "_idsSearchBox", out var search)
+                || !TryGetField<ComboBox>(form, "_idsSeverityFilter", out var severity)
+                || !TryGetField<ComboBox>(form, "_idsRuleFilter", out var rule)
+                || !TryGetField<Label>(form, "_idsSummaryLabel", out var summary))
+            {
+                CheckAssertion(results, "找得到 IDS 页控件", false);
+                return;
+            }
+
+            rebuild.Invoke(form, null);
+            Application.DoEvents();
+
+            CheckAssertion(results, "IDS 页显示全部 4 条告警", grid.Rows.Count == 4);
+
+            W($"    IDS 状态行 = {summary.Text}");
+            CheckAssertion(results, "IDS 状态行包含开启 / 只检测 / flow",
+                summary.Text.Contains("IDS 已开启", StringComparison.Ordinal)
+                && summary.Text.Contains("只检测、不阻断", StringComparison.Ordinal)
+                && summary.Text.Contains("flow 12", StringComparison.Ordinal)
+                && summary.Text.Contains("未确认 3", StringComparison.Ordinal));
+
+            search.Text = "evil.example";
+            Application.DoEvents();
+            CheckAssertion(results, "IDS 搜索目标生效", grid.Rows.Count == 1);
+
+            search.Text = string.Empty;
+            severity.SelectedIndex = 1;
+            Application.DoEvents();
+            CheckAssertion(results, "IDS 级别筛选（高）生效", grid.Rows.Count == 1);
+
+            severity.SelectedIndex = 0;
+            rule.SelectedIndex = 4;
+            Application.DoEvents();
+            CheckAssertion(results, "IDS 规则筛选（DNS）生效", grid.Rows.Count == 1);
+
+            rule.SelectedIndex = 0;
+            Application.DoEvents();
+            CheckAssertion(results, "IDS 清除筛选后恢复 4 条", grid.Rows.Count == 4);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "IDS 页检查执行完成", false);
+        }
+        finally
+        {
+            MainForm.SuppressBackgroundServices = false;
+            Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
+        }
+    }
+
+    private static void FeedBeacon(
+        IdsAnalyzer analyzer, int pid, DateTime start, int connections)
+    {
+        for (var i = 0; i < connections; i++)
+        {
+            var time = start.AddSeconds(i * 5);
+            analyzer.ObserveFlow(new NetworkFlowObservation(
+                time, pid, "TCP", "203.0.113.10", 8443, true, true, 0));
+            analyzer.ObserveFlow(new NetworkFlowObservation(
+                time, pid, "TCP", "203.0.113.10", 8443, true, false, 100));
+            analyzer.ObserveFlow(new NetworkFlowObservation(
+                time, pid, "TCP", "203.0.113.10", 8443, false, false, 100));
+        }
+    }
+
     private static void RunTrafficRecordsTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -10299,6 +11170,41 @@ internal static class Program
                     clearButton.Right <= (searchBox.Parent?.ClientSize.Width ?? 0));
                 CheckAssertion(results, "统计行不超出顶栏",
                     summary.Width <= (searchBox.Parent?.ClientSize.Width ?? 0));
+
+                // 3.7：IDS 页在同一最小窗口下也不越界。
+                if (TryGetField<TabPage>(form, "_tabIds", out var idsTab)
+                    && TryGetField<DataGridView>(form, "_idsGrid", out var idsGrid)
+                    && TryGetField<Button>(form, "_idsAckButton", out var idsAck)
+                    && TryGetField<Button>(form, "_idsClearButton", out var idsClear)
+                    && TryGetField<TextBox>(form, "_idsSearchBox", out var idsSearch))
+                {
+                    if (TryGetField<TabControl>(form, "_tabControl", out var idsTabs))
+                    {
+                        idsTabs.SelectedTab = idsTab;
+                    }
+
+                    form.PerformLayout();
+                    Application.DoEvents();
+
+                    var idsFixedWidth = idsGrid.Columns.Cast<DataGridViewColumn>()
+                        .Where(column => column.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
+                        .Sum(column => column.Width);
+
+                    var idsFillMin = idsGrid.Columns.Cast<DataGridViewColumn>()
+                        .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                        .Sum(column => column.MinimumWidth);
+
+                    W($"    980 宽 IDS：列宽合计 {idsFixedWidth + idsFillMin}px / " +
+                      $"客户区 {idsGrid.ClientSize.Width}px；清空按钮右边缘 {idsClear.Right}px / " +
+                      $"顶栏 {idsSearch.Parent?.Width}px");
+
+                    CheckAssertion(results, "最小宽度下 IDS 列不溢出",
+                        idsFixedWidth + idsFillMin <= idsGrid.ClientSize.Width);
+                    CheckAssertion(results, "最小宽度下 IDS 顶部按钮不越界",
+                        idsClear.Right <= (idsSearch.Parent?.ClientSize.Width ?? 0));
+                    CheckAssertion(results, "IDS 顶部按钮不重叠",
+                        idsAck.Right <= idsClear.Left && idsAck.Left > idsSearch.Right);
+                }
             }
         }
         catch (Exception ex)

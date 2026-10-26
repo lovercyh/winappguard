@@ -9568,9 +9568,14 @@ internal static class Program
             }
 
             W($"    服务版本 = {status.ServiceVersion}");
-            CheckAssertion(results, "服务版本是 3.5 或 3.6",
-                status.ServiceVersion.StartsWith("3.5", StringComparison.Ordinal)
-                || status.ServiceVersion.StartsWith("3.6", StringComparison.Ordinal));
+
+            var versionParts = status.ServiceVersion.Split('.');
+            var versionOk = versionParts.Length >= 2
+                            && int.TryParse(versionParts[0], out var major)
+                            && int.TryParse(versionParts[1], out var minor)
+                            && (major > 3 || (major == 3 && minor >= 5));
+
+            CheckAssertion(results, "服务版本是 3.5 或更高", versionOk);
             CheckAssertion(results, "流量采集在跑", status.TrafficCollecting);
             CheckAssertion(results, "DNS 采集在跑", status.DnsCollecting);
 
@@ -9789,10 +9794,13 @@ internal static class Program
         }
 
         W($"    服务版本 = {status.ServiceVersion}");
-        CheckAssertion(results, "服务版本是 3.7 或更高",
-            status.ServiceVersion.StartsWith("3.7", StringComparison.Ordinal)
-            || status.ServiceVersion.StartsWith("3.8", StringComparison.Ordinal)
-            || status.ServiceVersion.StartsWith("3.9", StringComparison.Ordinal));
+        var idsVersionParts = status.ServiceVersion.Split('.');
+        var idsVersionOk = idsVersionParts.Length >= 2
+                           && int.TryParse(idsVersionParts[0], out var idsMajor)
+                           && int.TryParse(idsVersionParts[1], out var idsMinor)
+                           && (idsMajor > 3 || (idsMajor == 3 && idsMinor >= 7));
+
+        CheckAssertion(results, "服务版本是 3.7 或更高", idsVersionOk);
 
         CheckAssertion(results, "状态里有 IDS 字段", status.IdsEnabled || status.IdsFlowCount >= 0);
         W($"    IDS 开关={status.IdsEnabled} 采集中={status.IdsCollecting} " +

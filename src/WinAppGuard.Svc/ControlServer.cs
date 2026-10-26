@@ -366,6 +366,20 @@ internal sealed class ControlServer : IDisposable
         TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
     }
 
+    /// <summary>3.6：清空流量计数并返回新的统计起点。</summary>
+    private static ServiceResponse ClearTraffic(ServiceRequest request)
+    {
+        var affected = TrafficHost.Clear();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Affected = affected,
+            TrafficStartedUtc = TrafficHost.StartedUtc,
+        };
+    }
+
     /// <summary>
     /// 3.5：批量 PID → 路径。只返回当前仍存在且服务能打开的进程。
     /// </summary>
@@ -497,7 +511,11 @@ internal sealed class ControlServer : IDisposable
                 Id = request.Id,
                 Ok = true,
                 Traffic = TrafficHost.Snapshot(),
+                TrafficStartedUtc = TrafficHost.StartedUtc,
             },
+
+            // 3.6：清空流量计数（write. 前缀，提权检查在上面统一做）。
+            ServiceProtocol.Commands.ClearTraffic => ClearTraffic(request),
 
             // 3.5：DNS 记录同样是只读；清空是 write.dns.clear（提权检查在上面统一做）。
             ServiceProtocol.Commands.QueryDns => new ServiceResponse

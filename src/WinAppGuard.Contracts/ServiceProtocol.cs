@@ -106,8 +106,11 @@ public static class ServiceProtocol
         /// <summary>3.5：批量查询 PID 对应的可执行文件路径（服务以 SYSTEM 运行，能读到界面读不到的进程）。</summary>
         public const string QueryProcessPaths = "query.process.paths";
 
-        /// <summary>3.5：每程序流量快照（本次服务运行以来，仅 TCP）。</summary>
+        /// <summary>3.5：每程序流量快照（本次服务运行以来，TCP + UDP 网络事件）。</summary>
         public const string QueryTraffic = "query.traffic";
+
+        /// <summary>3.6：清空本次运行的流量计数并重置统计起点。</summary>
+        public const string ClearTraffic = "write.traffic.clear";
 
         /// <summary>3.5：最近的 DNS 查询记录（内存环形缓冲）。</summary>
         public const string QueryDns = "query.dns";

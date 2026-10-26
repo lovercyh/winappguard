@@ -341,6 +341,7 @@ public partial class MainForm : Form
         SetupWhitelistGrid();
         InitializeAuditPage();
         InitializeDnsPage();
+        InitializeTrafficPage();
 
         // 3.2：把 Designer 里的中文静态文案换成英文（如果当前语言是英文）。
         ControlLocalizer.Apply(this);

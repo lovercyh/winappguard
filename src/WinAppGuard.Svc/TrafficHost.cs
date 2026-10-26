@@ -37,6 +37,7 @@ internal static class TrafficHost
     private static int _failureLogCounter;
     private static bool _stopping;
     private static DateTime _nextRetryUtc = DateTime.MinValue;
+    private static DateTime _startedUtc = DateTime.UtcNow;
 
     internal static bool Collecting
     {
@@ -48,11 +49,18 @@ internal static class TrafficHost
         get { lock (Gate) { return _monitor?.EventsSeen ?? 0; } }
     }
 
+    /// <summary>3.6：本次统计的起点（服务启动或最近一次清空）。</summary>
+    internal static DateTime StartedUtc
+    {
+        get { lock (Gate) { return _startedUtc; } }
+    }
+
     internal static void Start()
     {
         lock (Gate)
         {
             _stopping = false;
+            _startedUtc = DateTime.UtcNow;
         }
 
         EnsureRunning();
@@ -101,42 +109,59 @@ internal static class TrafficHost
         }
     }
 
+    /// <summary>
+    /// 3.6：清空本次运行的计数并把统计起点重置为当前时间。
+    /// 不重启 ETW 会话，后续事件继续累计。
+    /// </summary>
+    internal static int Clear()
+    {
+        lock (Gate)
+        {
+            var count = Totals.Count;
+            Totals.Clear();
+            _startedUtc = DateTime.UtcNow;
+
+            ServiceLog.Operation(
+                "WAG-TRAFFIC-007",
+                $"Traffic counters cleared ({count} programs); start time reset.");
+
+            return count;
+        }
+    }
+
     private static void Sample()
     {
         try
         {
             EnsureRunning();
 
-            NetworkEtwMonitor? monitor;
-
+            // 取 snapshot 和累加必须在同一把锁里：
+            // 否则「清空」可能插在两者之间，把清空前的增量又加回去。
             lock (Gate)
             {
-                monitor = _monitor;
-            }
+                var monitor = _monitor;
 
-            if (monitor is null)
-            {
-                return;
-            }
+                if (monitor is null)
+                {
+                    return;
+                }
 
-            var deltas = monitor.TakeSnapshot();
+                var deltas = monitor.TakeSnapshot();
 
-            if (deltas.Count == 0)
-            {
-                return;
-            }
+                if (deltas.Count == 0)
+                {
+                    return;
+                }
 
-            lock (Gate)
-            {
                 var now = DateTime.UtcNow;
 
                 foreach (var delta in deltas)
                 {
                     AccumulateLocked(delta.Pid, delta.BytesIn, delta.BytesOut, now);
                 }
-            }
 
-            _failureLogCounter = 0;
+                _failureLogCounter = 0;
+            }
         }
         catch (Exception ex)
         {

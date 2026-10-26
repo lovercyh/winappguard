@@ -100,6 +100,7 @@ partial class MainForm
     private TabPage _tabSettings = null!;
     private TabPage _tabAudit = null!;
     private TabPage _tabDns = null!;
+    private TabPage _tabTraffic = null!;
 
     private Label _settingsNoticeLabel = null!;
     private GroupBox _autostartPanel = null!;
@@ -249,6 +250,7 @@ partial class MainForm
         _whitelistGrid = new DataGridViewBuffered();
         _tabAudit = new TabPage();
         _tabDns = new TabPage();
+        _tabTraffic = new TabPage();
         _tabSettings = new TabPage();
         _settingsNoticeLabel = new Label();
         _autostartPanel = new GroupBox();
@@ -386,11 +388,17 @@ partial class MainForm
         _tabDns.Text = "DNS";
         _tabDns.UseVisualStyleBackColor = true;
 
+        _tabTraffic.Name = "_tabTraffic";
+        _tabTraffic.Padding = new Padding(3);
+        _tabTraffic.Text = "流量";
+        _tabTraffic.UseVisualStyleBackColor = true;
+
         // ==================================================================
         // 标签页容器
         // ==================================================================
         _tabControl.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _tabControl.Controls.Add(_tabConnections);
+        _tabControl.Controls.Add(_tabTraffic);
         _tabControl.Controls.Add(_tabRules);
         _tabControl.Controls.Add(_tabWhitelist);
         _tabControl.Controls.Add(_tabAudit);

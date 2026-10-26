@@ -153,6 +153,7 @@ internal static class Program
                         && !args.Contains("--process-path-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
@@ -319,6 +320,10 @@ internal static class Program
             {
                 RunService35Test();
             }
+            else if (args.Contains("--service-traffic-clear-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceTrafficClearTest();
+            }
             else if (args.Contains("--service-lockdown-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceLockdownTest();
@@ -390,6 +395,10 @@ internal static class Program
             else if (args.Contains("--strict-lockdown-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunStrictLockdownTest();
+            }
+            else if (args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunTrafficRecordsTest();
             }
             else if (args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -3935,6 +3944,42 @@ internal static class Program
                         {
                             W($"    DNS 说明 = {dnsHint.Text}");
                             CheckAssertion(results, "英文：DNS 说明无中文", !HasCjk(dnsHint.Text));
+                        }
+                    }
+
+                    if (TryGetField<TabPage>(form, "_tabTraffic", out var trafficTab)
+                        && TryGetField<DataGridView>(form, "_trafficGrid", out var trafficGrid))
+                    {
+                        var trafficHeaders = trafficGrid.Columns.Cast<DataGridViewColumn>()
+                            .Select(column => column.HeaderText)
+                            .ToList();
+
+                        W($"    3.6 流量页签 = {trafficTab.Text} | 列头 = {string.Join(" | ", trafficHeaders)}");
+                        CheckAssertion(results, "英文：流量页签与列头无中文",
+                            !HasCjk(trafficTab.Text) && trafficHeaders.All(text => !HasCjk(text)));
+
+                        if (TryGetField<TextBox>(form, "_trafficSearchBox", out var trafficSearch))
+                        {
+                            W($"    流量搜索占位 = {trafficSearch.PlaceholderText}");
+                            CheckAssertion(results, "英文：流量搜索占位无中文",
+                                !HasCjk(trafficSearch.PlaceholderText));
+                        }
+
+                        if (TryGetField<Label>(form, "_trafficSummaryLabel", out var trafficSummary))
+                        {
+                            W($"    流量统计行 = {trafficSummary.Text}");
+                            CheckAssertion(results, "英文：流量统计行无中文",
+                                !HasCjk(trafficSummary.Text));
+                        }
+
+                        if (TryGetField<Button>(form, "_trafficClearButton", out var trafficClear))
+                        {
+                            var need = TextRenderer.MeasureText(
+                                trafficClear.Text, trafficClear.Font).Width + 16;
+
+                            W($"    清空流量按钮：需要 {need}px / 实宽 {trafficClear.Width}px");
+                            CheckAssertion(results, "英文：清空流量按钮无中文且不截断",
+                                !HasCjk(trafficClear.Text) && need <= trafficClear.Width);
                         }
                     }
 
@@ -9348,7 +9393,7 @@ internal static class Program
         var results = new List<(string Title, bool Passed)>();
 
         W("################################################################");
-        W("#   3.5 服务端实测（流量 ETW Network / DNS ETW）                 #");
+        W("#   3.5/3.6 服务端实测（流量 ETW Network / DNS ETW）            #");
         W("################################################################");
         W();
 
@@ -9365,8 +9410,9 @@ internal static class Program
             }
 
             W($"    服务版本 = {status.ServiceVersion}");
-            CheckAssertion(results, "服务版本是 3.5",
-                status.ServiceVersion.StartsWith("3.5", StringComparison.Ordinal));
+            CheckAssertion(results, "服务版本是 3.5 或 3.6",
+                status.ServiceVersion.StartsWith("3.5", StringComparison.Ordinal)
+                || status.ServiceVersion.StartsWith("3.6", StringComparison.Ordinal));
             CheckAssertion(results, "流量采集在跑", status.TrafficCollecting);
             CheckAssertion(results, "DNS 采集在跑", status.DnsCollecting);
 
@@ -9558,6 +9604,95 @@ internal static class Program
         }
 
         PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 3.6：服务端清空流量计数（需要管理员/所有者）。
+    /// 会清空本次运行的流量统计，验收脚本应放在最后跑。
+    /// </summary>
+    private static void RunServiceTrafficClearTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   3.6 清空流量统计（会清空本次运行计数；只在 VM 跑）           #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        var before = QueryTrafficResponse(out var beforeError);
+
+        if (before is not { Ok: true })
+        {
+            W($"    读取流量失败：{before?.Error ?? beforeError}");
+            CheckAssertion(results, "读取流量快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    清空前：{before.Traffic?.Count ?? 0} 个程序，" +
+          $"统计起点 = {before.TrafficStartedUtc?.ToString("O") ?? "（旧服务未返回）"}");
+
+        var cleared = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.ClearTraffic },
+            TimeSpan.FromSeconds(15),
+            out var clearError);
+
+        W($"    清空结果：ok={cleared?.Ok}，清理={cleared?.Affected}，错误={cleared?.Error ?? clearError}");
+
+        CheckAssertion(results, "清空流量统计成功", cleared is { Ok: true });
+        CheckAssertion(results, "清空后返回统计起点",
+            cleared?.TrafficStartedUtc is not null);
+
+        var after = QueryTrafficResponse(out var afterError);
+
+        if (after is not { Ok: true })
+        {
+            W($"    清空后读取失败：{after?.Error ?? afterError}");
+            CheckAssertion(results, "清空后读取流量快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    清空后：{after.Traffic?.Count ?? 0} 个程序，" +
+          $"统计起点 = {after.TrafficStartedUtc?.ToString("O") ?? "（旧服务未返回）"}");
+
+        // 清空后可能有别的程序在毫秒级产生新流量，不能要求列表绝对为 0；
+        // 核心断言是：本进程原有的计数没了，且统计起点已重置。
+        var ownPath = Environment.ProcessPath;
+        var ownAfter = after.Traffic?.FirstOrDefault(item =>
+            item.IsPathKnown
+            && !string.IsNullOrEmpty(ownPath)
+            && string.Equals(item.Path, ownPath, StringComparison.OrdinalIgnoreCase));
+
+        var ownBytes = (ownAfter?.BytesIn ?? 0) + (ownAfter?.BytesOut ?? 0);
+        W($"    清空后本进程计数 = {ownBytes} 字节");
+
+        CheckAssertion(results, "清空后本进程计数归零（允许新流量 < 64 KiB）",
+            ownBytes < 64 * 1024);
+        CheckAssertion(results, "清空后统计起点不早于清空响应",
+            after.TrafficStartedUtc is not null
+            && cleared?.TrafficStartedUtc is not null
+            && after.TrafficStartedUtc >= cleared.TrafficStartedUtc);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static ServiceResponse? QueryTrafficResponse(out string? error)
+    {
+        return ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
+            TimeSpan.FromSeconds(5),
+            out error);
     }
 
     private static List<TrafficDto>? QueryTrafficFromService(out string? error)
@@ -9989,6 +10124,191 @@ internal static class Program
         }
         finally
         {
+            Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 3.6：流量记录页的离线检查 —— 排序 / 搜索 / 未知路径 / 合计。
+    /// 直接构造窗体并注入 DTO，不连服务、不产生真实流量。
+    /// </summary>
+    private static void RunTrafficRecordsTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var previous = Localizer.Current;
+
+        W("################################################################");
+        W("#   流量记录页（离线：排序 / 搜索 / 未知路径 / 合计）            #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Localizer.Initialize("zh");
+
+            CheckAssertion(results, "清空流量命令名正确",
+                ServiceProtocol.Commands.ClearTraffic == "write.traffic.clear");
+
+            var started = new DateTime(2026, 10, 26, 12, 34, 56, DateTimeKind.Utc);
+            var metadataJson = JsonSerializer.Serialize(
+                new ServiceResponse { Ok = true, TrafficStartedUtc = started },
+                ServiceProtocol.JsonOptions);
+
+            CheckAssertion(results, "响应 JSON 带 trafficStartedUtc",
+                metadataJson.Contains("\"trafficStartedUtc\":\"2026-10-26T12:34:56Z\"", StringComparison.Ordinal));
+
+            MainForm.SuppressBackgroundServices = true;
+
+            using var form = new MainForm(isAutostart: false);
+            TrySetField(form, "_runtimeInitialized", true);
+
+            var now = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+
+            var records = new List<TrafficDto>
+            {
+                new()
+                {
+                    Key = @"c:\a.exe", Path = @"C:\a.exe", Name = "a.exe",
+                    IsPathKnown = true, BytesOut = 100, BytesIn = 10, LastSeenUtc = now.AddMinutes(-3),
+                },
+                new()
+                {
+                    Key = @"c:\b.exe", Path = @"C:\b.exe", Name = "b.exe",
+                    IsPathKnown = true, BytesOut = 10, BytesIn = 500, LastSeenUtc = now.AddMinutes(-1),
+                },
+                new()
+                {
+                    Key = @"c:\c.exe", Path = @"C:\c.exe", Name = "c.exe",
+                    IsPathKnown = true, BytesOut = 60, BytesIn = 40, LastSeenUtc = now.AddMinutes(-2),
+                },
+                new()
+                {
+                    Key = "pid:999", Path = null, Name = "PID 999",
+                    IsPathKnown = false, BytesOut = 5, BytesIn = 5, LastSeenUtc = now.AddMinutes(-4),
+                },
+            };
+
+            TrySetField(form, "_trafficRecords", records);
+
+            var rebuild = typeof(MainForm).GetMethod(
+                "RebuildTrafficView",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            if (rebuild is null
+                || !TryGetField<DataGridView>(form, "_trafficGrid", out var grid)
+                || !TryGetField<TextBox>(form, "_trafficSearchBox", out var search)
+                || !TryGetField<Label>(form, "_trafficSummaryLabel", out var summary))
+            {
+                CheckAssertion(results, "找得到流量页控件", false);
+                PrintSummary(results, showFirewallResidue: false);
+                return;
+            }
+
+            rebuild.Invoke(form, null);
+            Application.DoEvents();
+
+            var order = grid.Rows.Cast<DataGridViewRow>()
+                .Select(row => row.Cells[0].Value?.ToString() ?? string.Empty)
+                .ToList();
+
+            W("    默认顺序（总计降序）= " + string.Join(" | ", order));
+            CheckAssertion(results, "默认按总计降序",
+                order.SequenceEqual(new[] { "b.exe", "a.exe", "c.exe", "PID 999" }));
+
+            CheckAssertion(results, "表头显示程序数与合计",
+                summary.Text.Contains("共 4 个程序", StringComparison.Ordinal)
+                && summary.Text.Contains("合计", StringComparison.Ordinal));
+
+            var enumType = typeof(MainForm).GetNestedType(
+                "TrafficSortColumn", BindingFlags.NonPublic);
+
+            if (enumType is null)
+            {
+                CheckAssertion(results, "找得到流量排序列枚举", false);
+            }
+            else
+            {
+                TrySetField(form, "_trafficSort", Enum.Parse(enumType, "Upload"));
+                TrySetField(form, "_trafficSortAscending", false);
+                rebuild.Invoke(form, null);
+                Application.DoEvents();
+
+                var uploadOrder = grid.Rows.Cast<DataGridViewRow>()
+                    .Select(row => row.Cells[0].Value?.ToString() ?? string.Empty)
+                    .ToList();
+
+                W("    按上传降序 = " + string.Join(" | ", uploadOrder));
+                CheckAssertion(results, "按上传降序", uploadOrder.FirstOrDefault() == "a.exe");
+            }
+
+            search.Text = "b.exe";
+            Application.DoEvents();
+
+            CheckAssertion(results, "搜索程序名生效",
+                grid.Rows.Count == 1
+                && grid.Rows[0].Cells[0].Value?.ToString() == "b.exe");
+
+            search.Text = "PID 999";
+            Application.DoEvents();
+
+            var unknownOk = grid.Rows.Count == 1
+                            && grid.Rows[0].Cells[1].Value?.ToString() == "（无法获取）"
+                            && grid.Rows[0].Cells[6].Value?.ToString() == "路径未知";
+
+            W($"    未知路径行 = {grid.Rows.Count} 行");
+            CheckAssertion(results, "未知路径显示无法获取 + 路径未知", unknownOk);
+
+            search.Text = string.Empty;
+            Application.DoEvents();
+
+            // 最小宽度布局：顶部控件不越界，列宽之和不超过客户区。
+            if (TryGetField<TabPage>(form, "_tabTraffic", out var trafficTab)
+                && TryGetField<DataGridView>(form, "_trafficGrid", out var layoutGrid)
+                && TryGetField<Control>(form, "_trafficSearchBox", out var searchBox)
+                && TryGetField<Button>(form, "_trafficClearButton", out var clearButton))
+            {
+                form.Show();
+                Application.DoEvents();
+
+                form.Size = new Size(980, 800);
+
+                if (TryGetField<TabControl>(form, "_tabControl", out var tabs))
+                {
+                    tabs.SelectedTab = trafficTab;
+                }
+
+                form.PerformLayout();
+                Application.DoEvents();
+
+                var fixedWidth = layoutGrid.Columns.Cast<DataGridViewColumn>()
+                    .Where(column => column.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
+                    .Sum(column => column.Width);
+
+                var fillMin = layoutGrid.Columns.Cast<DataGridViewColumn>()
+                    .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                    .Sum(column => column.MinimumWidth);
+
+                W($"    980 宽：列宽合计 {fixedWidth + fillMin}px / 客户区 {layoutGrid.ClientSize.Width}px；" +
+                  $"清空按钮右边缘 {clearButton.Right}px / 顶栏 {searchBox.Parent?.Width}px");
+
+                CheckAssertion(results, "最小宽度下流量列不溢出",
+                    fixedWidth + fillMin <= layoutGrid.ClientSize.Width);
+                CheckAssertion(results, "最小宽度下顶部按钮不越界",
+                    clearButton.Right <= (searchBox.Parent?.ClientSize.Width ?? 0));
+                CheckAssertion(results, "统计行不超出顶栏",
+                    summary.Width <= (searchBox.Parent?.ClientSize.Width ?? 0));
+            }
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "流量记录页检查执行完成", false);
+        }
+        finally
+        {
+            MainForm.SuppressBackgroundServices = false;
             Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
         }
 

@@ -98,6 +98,12 @@ public sealed class ServiceResponse
     /// <summary>3.5：每程序流量快照（按本次运行累计）。</summary>
     public List<TrafficDto>? Traffic { get; set; }
 
+    /// <summary>
+    /// 3.6：本次流量统计的起点（UTC）。服务重启或执行清空后更新；
+    /// 旧服务不返回时为 null，界面显示「未知」。
+    /// </summary>
+    public DateTime? TrafficStartedUtc { get; set; }
+
     /// <summary>3.5：最近的 DNS 查询记录。</summary>
     public List<DnsDto>? DnsRecords { get; set; }
 }

@@ -189,6 +189,32 @@ internal sealed class PocRunner : IDisposable
                 TryConnect(new IPAddress(new byte[] { 127, 0, 0, (byte)i }), port, 100);
             }
 
+            Console.WriteLine("scan：再试 15 个本机监听端口…");
+            var scanListeners = new List<TcpListener>();
+
+            try
+            {
+                for (var i = 0; i < 15; i++)
+                {
+                    var scanListener = new TcpListener(IPAddress.Loopback, 0);
+                    scanListener.Start();
+                    scanListeners.Add(scanListener);
+                }
+
+                foreach (var scanListener in scanListeners)
+                {
+                    var scanPort = ((IPEndPoint)scanListener.LocalEndpoint).Port;
+                    TryConnect(IPAddress.Loopback, scanPort, 200);
+                }
+            }
+            finally
+            {
+                foreach (var scanListener in scanListeners)
+                {
+                    scanListener.Stop();
+                }
+            }
+
             Console.WriteLine("scan：再试 127.0.0.1 上 15 个关闭端口…");
             for (var i = 0; i < 15; i++)
             {

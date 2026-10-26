@@ -389,10 +389,18 @@ internal sealed class PocRunner : IDisposable
 
             foreach (var pair in related)
             {
+                var intervals = new List<double>();
+
+                for (var i = 1; i < pair.Value.Connections.Count; i++)
+                {
+                    intervals.Add((pair.Value.Connections[i] - pair.Value.Connections[i - 1]).TotalSeconds);
+                }
+
                 Console.WriteLine(
                     $"      {pair.Key}  conns={pair.Value.Connections.Count}  " +
                     $"out={pair.Value.BytesOut}  in={pair.Value.BytesIn}  " +
-                    $"last={pair.Value.LastSeenUtc:HH:mm:ss.fff}");
+                    $"last={pair.Value.LastSeenUtc:HH:mm:ss.fff}  " +
+                    $"intervals={string.Join(",", intervals.Select(value => value.ToString("0.000")))}");
             }
         }
     }
@@ -725,7 +733,7 @@ internal sealed class PocRunner : IDisposable
                 intervals.Add((times[i] - times[i - 1]).TotalSeconds);
             }
 
-            if (intervals.Any(value => value < 5.0 || value > 300))
+            if (intervals.Any(value => value < 4.0 || value > 300))
             {
                 continue;
             }
@@ -741,7 +749,7 @@ internal sealed class PocRunner : IDisposable
                 continue;
             }
 
-            if (mean is >= 5.0 and <= 300 && cv <= 0.35)
+            if (mean is >= 4.0 and <= 300 && cv <= 0.35)
             {
                 AddAlert(
                     "中",

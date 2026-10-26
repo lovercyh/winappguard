@@ -56,12 +56,20 @@ and finish with *"blocked."*
   Closing the UI leaves protection on; stopping, crashing or force-killing the service
   **removes the restriction immediately**. A built-in list of required system programs
   (mostly `svchost.exe`) stays allowed so DNS, time sync and Windows Update keep working.
+- **Per-program traffic** — the Connections page shows **upload / download / total** for each
+  program since the service started (ETW, TCP + UDP, approximate; short connections may be missed).
+- **Traffic page** — aggregate every program's upload/download/total since the service started,
+  sort by time or traffic, search, see the measurement start time and totals, or clear it with one UAC.
+- **DNS page** — the latest queried **domains, PID, program and result**. Only names seen by the
+  Windows DNS client are recorded; **no URLs or response contents**; DoH/DoT may be invisible.
 - **Dedicated rules page** — manage every rule the tool has created, even if the program
   is no longer running.
 - **Flow IDS (detection only, never blocking)** — the *IDS* page is enabled by default and uses
   connection metadata plus DNS records to flag periodic beaconing, port/host scans, lateral
   movement and DNS anomalies. Alerts stay local for 30 days and can be acknowledged, suppressed
   or cleared. No DPI, no HTTPS decryption, no packet capture, and no automatic blocking.
+- **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
+  itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
   blocked), program, remote endpoint, **guessed domain**, and **which rule matched**. Search,
   filter to blocked only, or clear everything. Records are local only, enabled by default, and
@@ -183,15 +191,21 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 
 ## Screenshots
 
-| Rules | Settings |
+| IDS (detection only) | Traffic |
 |---|---|
-| ![Blocklist tab](docs/screenshots/02-rules.png) | ![Settings tab](docs/screenshots/03-settings.png) |
-| ![Strict-mode whitelist](docs/screenshots/05-whitelist.png) | |
+| ![IDS tab](docs/screenshots/06-ids.png) | ![Traffic tab](docs/screenshots/07-traffic.png) |
+| **DNS** | **Blocklist** |
+| ![DNS tab](docs/screenshots/08-dns.png) | ![Blocklist tab](docs/screenshots/02-rules.png) |
+| **Strict-mode whitelist** | **Settings** |
+| ![Strict-mode whitelist](docs/screenshots/05-whitelist.png) | ![Settings tab](docs/screenshots/03-settings.png) |
 
 ![Block confirmation](docs/screenshots/04-confirm-block.png)
 
 Every state-changing action goes through a confirmation dialog that names the exact program,
 its full path, the scope of the change, and the rule that is about to be created or deleted.
+
+> The IDS page only raises alerts and never blocks automatically; acknowledging, suppressing,
+> clearing and changing its settings each require one UAC prompt.
 
 ## Download (only two files from Releases)
 
@@ -242,6 +256,9 @@ registers the service (SYSTEM, automatic start), and creates a desktop shortcut.
 | IP ownership | Team Cymru WHOIS over plain TCP to `whois.cymru.com:43` — the only endpoint this app actively connects to (DNS lookups and revocation checks are separate, see above); batched and cached in memory; on by default, switchable off |
 | Strict mode | A **dynamic WFP session inside the protection service**: whitelist permit (high weight) + block all (low weight). Stopping or crashing the service revokes it; it changes no system setting |
 | Timed blocks | The expiry is stored **in the filter's own description field** (`AppGuard\|1\|Block\|C:\path\a.exe\|自动解除=…`), so it survives restarts. The service's 30-second timer removes expired filters and shows a tray notification |
+| Traffic accounting | ETW `Microsoft-Windows-Kernel-Network` TCP/UDP send/receive events, accumulated per PID; no packet capture and no payload inspection |
+| DNS records | ETW `Microsoft-Windows-DNS-Client`; only the domain, PID and result code, with the latest 2000 entries kept in memory |
+| Flow IDS | Reuses the two ETW sessions above and feeds connection tuples / counts / bytes / domains into an in-memory rule engine; raises alerts only, never inline blocking |
 | Service / protected mode | `WinAppGuardSvc` runs as SYSTEM and is the only process that writes WFP. The UI talks to it over the `WinAppGuard.Control.v2` pipe; every request is signed with the owner's ECDSA P-256 key (nonce + request bytes), and the service only stores the public key |
 | Records | WFP net events for blocked connections (with filter ID → rule name); 3-second polling + DNS-cache snapshots for normal connections; JSONL files, 8 MB segments, 7-day retention by default |
 
@@ -432,6 +449,9 @@ Most project documentation is in Chinese.
 | [`docs/发布手册.md`](docs/发布手册.md) | Build → verify → release workflow |
 | [`docs/服务化设计.md`](docs/服务化设计.md) | 3.0 protection service + UI client design (implemented) |
 | [`docs/受保护模式设计.md`](docs/受保护模式设计.md) | 3.1 single owner, ECDSA/DPAPI, protocol v2, ACLs and lifecycle |
+| [`docs/3.6-流量记录设计.md`](docs/3.6-流量记录设计.md) | 3.6 traffic page aggregation, sorting and clearing |
+| [`docs/3.7-用户态FlowIDS设计.md`](docs/3.7-用户态FlowIDS设计.md) | 3.7 user-mode Flow IDS: rules, thresholds, storage and limits |
+| [`docs/3.7-VM验收.md`](docs/3.7-VM验收.md) | 3.7 automated acceptance and VM measurements |
 
 ## Contributing
 

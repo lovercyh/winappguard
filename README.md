@@ -22,9 +22,14 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 > **3.1 起启用受保护模式**：安装时的账户成为**唯一所有者**。服务只接受所有者签名，
 > 其他账户（包括其他管理员）不能通过界面或 IPC 修改规则。私钥用 DPAPI 用户级加密，
 > 服务端只保存公钥。详见 [`docs/受保护模式设计.md`](docs/受保护模式设计.md)。
+>
+> **3.7 新增用户态 Flow IDS**：用连接元数据与 DNS 检测周期性外联、端口/主机扫描、
+> 内网横向和 DNS 异常。**只检测、不阻断**，默认开启，告警本地保留 30 天。详见
+> [`docs/3.7-用户态FlowIDS设计.md`](docs/3.7-用户态FlowIDS设计.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
+[![Release](https://img.shields.io/github/v/release/lovercyh/winappguard)](https://github.com/lovercyh/winappguard/releases/latest)
 
 ![联网连接页](docs/screenshots/01-connections.png)
 
@@ -155,26 +160,20 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 
 ## 界面
 
-| 规则 | 设置 |
+| IDS（只检测、不阻断） | 流量 |
 |---|---|
-| ![黑名单页](docs/screenshots/02-rules.png) | ![设置页](docs/screenshots/03-settings.png) |
-| ![严格模式下白名单](docs/screenshots/05-whitelist.png) | |
+| ![IDS 页](docs/screenshots/06-ids.png) | ![流量页](docs/screenshots/07-traffic.png) |
+| **DNS** | **黑名单** |
+| ![DNS 页](docs/screenshots/08-dns.png) | ![黑名单页](docs/screenshots/02-rules.png) |
+| **严格模式下白名单** | **设置** |
+| ![严格模式下白名单](docs/screenshots/05-whitelist.png) | ![设置页](docs/screenshots/03-settings.png) |
 
 ![阻止确认框](docs/screenshots/04-confirm-block.png)
 
 所有会改动系统状态的操作都要先过确认框。确认框里会写明：程序名、**完整路径**、
 影响范围、**即将创建或删除的规则名**。
 
-## 下载与使用
-
-从 [最新 Release](https://github.com/lovercyh/winappguard/releases/latest) 下载 `WinAppGuard.exe`。
-
-- 单文件自包含，约 49 MB，**目标机器不需要安装 .NET**
-- 可用发布说明里的 SHA-256 校验下载是否被篡改：
-  ```powershell
-  Get-FileHash .\WinAppGuard.exe -Algorithm SHA256
-  ```
-- **exe 没有代码签名**，SmartScreen 会提示「未知发布者」，这属于预期情况，见下方常见问题
+> IDS 页只产生告警，不会自动阻断；确认 / 抑制 / 清空和改设置同样要过一次 UAC。
 
 ## 下载（Releases 只需要两个文件）
 
@@ -192,6 +191,10 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 安装器双击后会请求一次管理员权限，然后自动完成：
 复制文件 → 创建服务（SYSTEM、自动启动）→ 创建桌面快捷方式。
 
+- 目标机器**不需要安装 .NET**；安装器已内置界面、服务和卸载器。
+- 安装包和卸载器**没有代码签名**，SmartScreen 首次运行会提示「未知发布者」，这是预期情况。
+- 下载后可用发布说明里的 SHA-256 校验文件是否被篡改。
+
 ## 安装 / 卸载
 
 - **双击 `WinAppGuardSetup.exe`**：未安装则安装，已安装则修复；会自动创建桌面快捷方式。
@@ -201,7 +204,8 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 ## 环境要求
 
 - Windows 10 / 11 x64
-- Windows 10 / 11 x64（界面普通权限即可运行；改规则时弹一次 UAC）
+- 安装与 CLI 需要管理员权限；界面用普通权限运行，改规则时弹一次 UAC
+- 运行发布包不需要 .NET；从源码构建需要 .NET SDK 10
 
 ## 工作原理
 
@@ -218,6 +222,9 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 | IP 归属 | Team Cymru WHOIS，走普通 TCP 连 `whois.cymru.com:43` —— 本程序**主动连接外部主机**的唯一端点；批量查询 + 内存缓存；默认开启，可关闭 |
 | 严格模式 | 进程内建立**动态 WFP 会话**：白名单放行（高权重）+ 阻止全部（低权重）。退出/崩溃即自动撤销，不改任何系统设置 |
 | 限时阻断 | 到期时间存在**过滤器自己的说明字段**里（`AppGuard\|1\|Block\|路径\|自动解除=…`），重启也不会丢。后台 30 秒定时器负责清理到期规则并弹托盘提示 |
+| 流量统计 | ETW `Microsoft-Windows-Kernel-Network` 的 TCP/UDP 收发事件，按 PID 累加；不抓包、不看载荷 |
+| DNS 记录 | ETW `Microsoft-Windows-DNS-Client`，只取域名、PID 和结果码；内存保留最近 2000 条 |
+| Flow IDS | 复用上面两个 ETW 会话，把连接五元组 / 次数 / 字节 / 域名交给内存规则引擎；只产生告警，不 inline 阻断 |
 
 ## 可验证的信任
 
@@ -415,6 +422,9 @@ WinAppGuard.exe --recover
 | [`docs/发布手册.md`](docs/发布手册.md) | 从构建、验证到发布的操作流程 |
 | [`docs/服务化设计.md`](docs/服务化设计.md) | 3.0 防护服务 + 界面客户端设计（已实现） |
 | [`docs/受保护模式设计.md`](docs/受保护模式设计.md) | 3.1 单所有者、ECDSA/DPAPI、协议 v2、ACL 与生命周期 |
+| [`docs/3.6-流量记录设计.md`](docs/3.6-流量记录设计.md) | 3.6 流量页的聚合、排序与清空 |
+| [`docs/3.7-用户态FlowIDS设计.md`](docs/3.7-用户态FlowIDS设计.md) | 3.7 用户态 Flow IDS：规则、阈值、存储与边界 |
+| [`docs/3.7-VM验收.md`](docs/3.7-VM验收.md) | 3.7 自动验收与 VM 实测结果 |
 
 ## 参与贡献
 

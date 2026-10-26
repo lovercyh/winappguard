@@ -1386,6 +1386,18 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "01-connections.png"));
 
+            TrySelectTab(form, "_tabIds");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "06-ids.png"));
+
+            TrySelectTab(form, "_tabTraffic");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "07-traffic.png"));
+
+            TrySelectTab(form, "_tabDns");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "08-dns.png"));
+
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
@@ -1465,6 +1477,21 @@ internal static class Program
                     (ushort)(50000 + i), TcpState.Established, sample.Path);
 
                 item.Signature = new SignatureInfo(sample.State, sample.Signer, $"{sample.Name}：示例签名信息");
+
+                var traffic = sample.Name switch
+                {
+                    "chrome.exe" => (1_208_336L, 18_800_512L),
+                    "steam.exe" => (308_064L, 12_274_688L),
+                    "douyin.exe" => (890_048L, 45_767_104L),
+                    "bdservicehost.exe" => (128_064L, 2_274_688L),
+                    "game.exe" => (20_480L, 0L),
+                    "Code.exe" => (445_728L, 3_874_368L),
+                    "OneDrive.exe" => (1_582_912L, 5_194_304L),
+                    "svchost.exe" => (58_288L, 208_896L),
+                    _ => (5_120L, 0L),
+                };
+
+                item.ApplyTraffic(traffic.Item1, traffic.Item2);
                 scanned.Add(item);
             }
         }
@@ -1588,7 +1615,219 @@ internal static class Program
         {
             hint.Text = "已选中 chrome.exe（共 4 条连接）—— 当前状态：未阻止；白名单：已放行　签名：Google LLC";
         }
+
+        FillDocsTelemetrySampleData(form);
     }
+
+    /// <summary>
+    /// 3.5–3.7 新增页面的样本：流量、DNS、IDS。
+    /// 只灌内存字段，不读服务、不写盘；截图模式本来就把后台服务关掉了。
+    /// </summary>
+    private static void FillDocsTelemetrySampleData(MainForm form)
+    {
+        var now = new DateTime(2026, 10, 26, 12, 18, 49, DateTimeKind.Local);
+        var started = now.AddHours(-2).ToUniversalTime();
+
+        TrySetField(form, "_serviceAvailable", true);
+
+        // ---- 流量页 ----
+        TrySetField(form, "_trafficStartedUtc", (DateTime?)started);
+        TrySetField(form, "_trafficServiceAvailable", true);
+        TrySetField(form, "_trafficRecords", new List<TrafficDto>
+        {
+            new()
+            {
+                Key = @"c:\program files\google\chrome\application\chrome.exe",
+                Path = @"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                Name = "chrome.exe",
+                IsPathKnown = true,
+                BytesOut = 8_412_336,
+                BytesIn = 146_800_512,
+                LastSeenUtc = now.ToUniversalTime(),
+            },
+            new()
+            {
+                Key = @"c:\program files (x86)\steam\steam.exe",
+                Path = @"C:\Program Files (x86)\Steam\steam.exe",
+                Name = "steam.exe",
+                IsPathKnown = true,
+                BytesOut = 1_208_064,
+                BytesIn = 92_274_688,
+                LastSeenUtc = now.AddMinutes(-2).ToUniversalTime(),
+            },
+            new()
+            {
+                Key = @"c:\program files (x86)\bytedance\douyin\douyin.exe",
+                Path = @"C:\Program Files (x86)\ByteDance\douyin\douyin.exe",
+                Name = "douyin.exe",
+                IsPathKnown = true,
+                BytesOut = 2_690_048,
+                BytesIn = 318_767_104,
+                LastSeenUtc = now.AddMinutes(-4).ToUniversalTime(),
+            },
+            new()
+            {
+                Key = @"c:\users\dev\appdata\local\programs\microsoft vs code\code.exe",
+                Path = @"C:\Users\dev\AppData\Local\Programs\Microsoft VS Code\Code.exe",
+                Name = "Code.exe",
+                IsPathKnown = true,
+                BytesOut = 3_145_728,
+                BytesIn = 18_874_368,
+                LastSeenUtc = now.AddMinutes(-6).ToUniversalTime(),
+            },
+            new()
+            {
+                Key = @"c:\program files\microsoft onedrive\onedrive.exe",
+                Path = @"C:\Program Files\Microsoft OneDrive\OneDrive.exe",
+                Name = "OneDrive.exe",
+                IsPathKnown = true,
+                BytesOut = 12_582_912,
+                BytesIn = 4_194_304,
+                LastSeenUtc = now.AddMinutes(-8).ToUniversalTime(),
+            },
+            new()
+            {
+                Key = "pid:808",
+                Path = null,
+                Name = "PID 808",
+                IsPathKnown = false,
+                BytesOut = 524_288,
+                BytesIn = 96_256,
+                LastSeenUtc = now.AddMinutes(-11).ToUniversalTime(),
+            },
+        });
+
+        InvokePrivate(form, "RebuildTrafficView", null);
+
+        // ---- DNS 页 ----
+        TrySetField(form, "_dnsCollecting", true);
+        TrySetField(form, "_dnsSignature", null!);
+        TrySetField(form, "_dnsRecords", new List<DnsDto>
+        {
+            MakeDocsDns(now.AddSeconds(-8), 3000, "chrome.exe", @"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "www.google.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-12), 3000, "chrome.exe", @"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "fonts.gstatic.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-19), 3001, "steam.exe", @"C:\Program Files (x86)\Steam\steam.exe",
+                "api.steampowered.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-25), 3001, "steam.exe", @"C:\Program Files (x86)\Steam\steam.exe",
+                "steamcommunity.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-33), 3002, "douyin.exe", @"C:\Program Files (x86)\ByteDance\douyin\douyin.exe",
+                "api.amemv.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-41), 3003, "Code.exe", @"C:\Users\dev\AppData\Local\Programs\Microsoft VS Code\Code.exe",
+                "update.code.visualstudio.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-55), 3004, "OneDrive.exe", @"C:\Program Files\Microsoft OneDrive\OneDrive.exe",
+                "login.live.com", "OK"),
+            MakeDocsDns(now.AddSeconds(-70), 3005, "tool.exe", @"C:\Users\dev\Downloads\tool.exe",
+                "telemetry.example.invalid", "NXDOMAIN"),
+        });
+
+        InvokePrivate(form, "RebindDnsGrid", null);
+
+        // ---- IDS 页 ----
+        TrySetField(form, "_idsServiceAvailable", true);
+        TrySetField(form, "_idsSignature", null!);
+        TrySetField(form, "_idsSettings", new IdsSettingsDto
+        {
+            Enabled = true,
+            Sensitivity = "standard",
+            RetentionDays = 30,
+        });
+        TrySetField(form, "_idsStatus", new IdsStatusDto
+        {
+            Enabled = true,
+            Collecting = true,
+            Sensitivity = "standard",
+            FlowCount = 137,
+            EventsSeen = 4_821,
+            AlertsNew = 3,
+            AlertsTotal = 4,
+            LastAlertUtc = now.AddMinutes(-3).ToUniversalTime(),
+            SuppressionCount = 1,
+        });
+        TrySetField(form, "_idsSuppressions", new List<IdsSuppressionDto>
+        {
+            new()
+            {
+                Id = "suppress-demo",
+                RuleId = "dns",
+                ProcessName = "browser.exe",
+                Target = "ads.example.com",
+                UntilUtc = now.AddHours(20).ToUniversalTime(),
+            },
+        });
+        TrySetField(form, "_idsAlerts", new List<IdsAlertDto>
+        {
+            new()
+            {
+                Id = "demo-1",
+                TimeUtc = now.AddMinutes(-3).ToUniversalTime(),
+                Severity = "high",
+                RuleId = "lateral",
+                RuleName = "lateral",
+                Pid = 4212,
+                ProcessName = "game.exe",
+                ProcessPath = @"C:\Program Files\SomeGame\game.exe",
+                Target = "private-admin-ports",
+                Evidence = "privateHosts=4; ports=445,3389; window=600s",
+                Status = "new",
+            },
+            new()
+            {
+                Id = "demo-2",
+                TimeUtc = now.AddMinutes(-9).ToUniversalTime(),
+                Severity = "medium",
+                RuleId = "scan",
+                RuleName = "scan",
+                Pid = 808,
+                ProcessName = "PID 808",
+                Target = "host:203.0.113.9",
+                Evidence = "sameHost=203.0.113.9; ports=24; window=60s",
+                Status = "new",
+            },
+            new()
+            {
+                Id = "demo-3",
+                TimeUtc = now.AddMinutes(-16).ToUniversalTime(),
+                Severity = "medium",
+                RuleId = "dns",
+                RuleName = "dns",
+                Pid = 5120,
+                ProcessName = "tool.exe",
+                ProcessPath = @"C:\Users\dev\Downloads\tool.exe",
+                Target = "example.invalid",
+                Evidence = "parent=example.invalid; unique=24; long=11; nxdomain=18/24",
+                Status = "new",
+            },
+            new()
+            {
+                Id = "demo-4",
+                TimeUtc = now.AddMinutes(-31).ToUniversalTime(),
+                Severity = "medium",
+                RuleId = "beaconing",
+                RuleName = "beaconing",
+                Pid = 6120,
+                ProcessName = "OneDrive.exe",
+                ProcessPath = @"C:\Program Files\Microsoft OneDrive\OneDrive.exe",
+                Target = "13.107.42.12:443",
+                Evidence = "connections=18; mean=60.0s; jitter=0.08; avg=412B",
+                Status = "ack",
+            },
+        });
+
+        InvokePrivate(form, "RebuildIdsView", null);
+    }
+
+    private static DnsDto MakeDocsDns(
+        DateTime time, int pid, string process, string path, string query, string status) => new()
+    {
+        TimeUtc = time.ToUniversalTime(),
+        Pid = pid,
+        ProcessName = process,
+        ProcessPath = path,
+        QueryName = query,
+        Status = status,
+    };
 
     /// <summary>
     /// 灌白名单样本（三种放行状态各来一个）。

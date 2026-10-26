@@ -9374,6 +9374,10 @@ internal static class Program
             var before = QueryTrafficFromService(out var trafficError);
             TrafficDto? ownBefore = before is null ? null : FindOwnTraffic(before);
 
+            using var serviceProcess = TryGetServiceProcess();
+            var cpuBefore = TryReadCpu(serviceProcess);
+            var wallBefore = DateTime.UtcNow;
+
             if (before is null)
             {
                 W($"    读取流量失败：{trafficError}");
@@ -9397,6 +9401,21 @@ internal static class Program
                 CheckAssertion(results, "本进程下载字节增量约为 4 MiB",
                     delta >= 2_500_000 && delta <= 6_000_000);
 
+                var wall = DateTime.UtcNow - wallBefore;
+                var cpuAfter = TryReadCpu(serviceProcess);
+
+                if (cpuBefore is { } cpuStart && cpuAfter is { } cpuEnd && wall.TotalMilliseconds > 0)
+                {
+                    var percent = (cpuEnd - cpuStart).TotalMilliseconds
+                                  / (wall.TotalMilliseconds * Environment.ProcessorCount) * 100;
+
+                    W($"    服务 CPU（下载期间，{Environment.ProcessorCount} 核）= {percent:0.0}%");
+                }
+                else
+                {
+                    W("    服务 CPU：无法读取（权限或服务已退出）");
+                }
+
                 if (after is not null)
                 {
                     W("    流量前 5 名：");
@@ -9407,7 +9426,8 @@ internal static class Program
                 }
 
                 var afterStatus = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
-                W($"    流量事件数（本次服务运行累计）= {afterStatus?.TrafficEventsSeen ?? 0}");
+                W($"    流量事件数（本次服务运行累计）= {afterStatus?.TrafficEventsSeen ?? 0}" +
+                  $"（本次测试新增 {Math.Max(0, (afterStatus?.TrafficEventsSeen ?? 0) - status.TrafficEventsSeen)}）");
             }
 
             // ---------------- DNS ----------------
@@ -9550,6 +9570,30 @@ internal static class Program
         return response is { Ok: true, Traffic: not null }
             ? response.Traffic
             : null;
+    }
+
+    private static Process? TryGetServiceProcess()
+    {
+        try
+        {
+            return Process.GetProcessesByName("WinAppGuardSvc").FirstOrDefault();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static TimeSpan? TryReadCpu(Process? process)
+    {
+        try
+        {
+            return process?.TotalProcessorTime;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static List<DnsDto>? QueryDnsFromService(out string? error)

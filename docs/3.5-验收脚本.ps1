@@ -84,7 +84,16 @@ $service = Get-Service $serviceName -ErrorAction SilentlyContinue
 Assert-True '服务已运行' ($null -ne $service -and $service.Status -eq 'Running')
 
 Write-Host ''
-Write-Host '===== 3. 流量 + DNS 端到端实测 =====' -ForegroundColor Cyan
+Write-Host '===== 3. ETW Network 独立实测 =====' -ForegroundColor Cyan
+
+if (Test-Path $selfCheck) {
+    & $selfCheck --etw-network-test --no-pause
+    $etwExit = $LASTEXITCODE
+    Assert-True '--etw-network-test 全部通过' ($etwExit -eq 0) "退出码 $etwExit"
+}
+
+Write-Host ''
+Write-Host '===== 4. 流量 + DNS 端到端实测 =====' -ForegroundColor Cyan
 
 if (Test-Path $selfCheck) {
     & $selfCheck --service-35-test --no-pause
@@ -93,7 +102,7 @@ if (Test-Path $selfCheck) {
 }
 
 Write-Host ''
-Write-Host '===== 4. 临时锁网实测（会短暂断网） =====' -ForegroundColor Cyan
+Write-Host '===== 5. 临时锁网实测（会短暂断网） =====' -ForegroundColor Cyan
 
 if (Test-Path $selfCheck) {
     & $selfCheck --service-lockdown-test --no-pause
@@ -102,13 +111,14 @@ if (Test-Path $selfCheck) {
 }
 
 Write-Host ''
-Write-Host '===== 5. ETW 会话 =====' -ForegroundColor Cyan
+Write-Host '===== 6. ETW 会话 =====' -ForegroundColor Cyan
 
 $logman = & logman query -ets 2>&1 | Out-String
 Assert-True 'DNS ETW 会话存在（WinAppGuard-Dns）' ([bool]($logman -match 'WinAppGuard-Dns'))
+Assert-True '流量 ETW 会话存在（WinAppGuard-Net）' ([bool]($logman -match 'WinAppGuard-Net'))
 
 Write-Host ''
-Write-Host '===== 6. 服务日志 =====' -ForegroundColor Cyan
+Write-Host '===== 7. 服务日志 =====' -ForegroundColor Cyan
 
 $logDir = Join-Path $env:ProgramData 'WinAppGuard\logs'
 $logFile = Get-ChildItem $logDir -Filter 'winappguard-*.log' -ErrorAction SilentlyContinue |
@@ -128,7 +138,7 @@ else {
 }
 
 Write-Host ''
-Write-Host '===== 7. 需要人工确认的界面项 =====' -ForegroundColor Cyan
+Write-Host '===== 8. 需要人工确认的界面项 =====' -ForegroundColor Cyan
 Write-Host '  1) 「联网连接」页：边下载边看「上传 / 下载 / 总计」三列是否增长；'
 Write-Host '     与任务管理器「性能 → 以太网」的量级对比（允许误差，界面注明仅 TCP）。'
 Write-Host '  2) 用一个提权程序联网（例如管理员 PowerShell 里 Invoke-WebRequest），'

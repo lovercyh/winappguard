@@ -164,13 +164,15 @@ internal sealed class PocRunner : IDisposable
 
         try
         {
-            Console.WriteLine($"beacon：每 2 秒连接 127.0.0.1:{port}，共 8 次…");
-            for (var i = 0; i < 8; i++)
+            var beaconTarget = GetLocalIPv4() ?? IPAddress.Loopback;
+
+            Console.WriteLine($"beacon：每 5 秒连接 {beaconTarget}:{port}，共 6 次…");
+            for (var i = 0; i < 6; i++)
             {
                 try
                 {
                     using var client = new TcpClient();
-                    client.Connect(IPAddress.Loopback, port);
+                    client.Connect(beaconTarget, port);
                     var stream = client.GetStream();
                     stream.Write(new byte[64]);
                     stream.Flush();
@@ -180,7 +182,7 @@ internal sealed class PocRunner : IDisposable
                     // 本机测试，失败不影响规则验证。
                 }
 
-                Thread.Sleep(2000);
+                Thread.Sleep(5000);
             }
 
             Console.WriteLine("scan：连接 127.0.0.2..127.0.0.16 同一端口…");
@@ -221,30 +223,65 @@ internal sealed class PocRunner : IDisposable
                 TryConnect(IPAddress.Loopback, 20000 + i, 100);
             }
 
-            Console.WriteLine("lateral：尝试 6 个内网地址的 445/3389/5985…");
-            var localAddress = GetLocalIPv4();
+            Console.WriteLine("lateral：在本机管理端口建监听，再连 6 个回环地址…");
+            var lateralListeners = new List<TcpListener>();
+            var lateralPort = 0;
 
-            if (localAddress is not null)
+            foreach (var candidate in new ushort[] { 3389, 5985, 445, 135, 139 })
             {
-                var prefix = localAddress.GetAddressBytes();
-                var targets = new List<IPAddress>();
-
-                for (var i = 1; i <= 6; i++)
+                try
                 {
-                    var bytes = (byte[])prefix.Clone();
-                    bytes[3] = (byte)i;
-                    targets.Add(new IPAddress(bytes));
+                    var lateralListener = new TcpListener(IPAddress.Any, candidate);
+                    lateralListener.Start();
+                    lateralListeners.Add(lateralListener);
+                    lateralPort = candidate;
+                    break;
                 }
-
-                foreach (var target in targets)
+                catch (Exception)
                 {
-                    foreach (var adminPort in new ushort[] { 445, 3389, 5985 })
-                    {
-                        TryConnect(target, adminPort, 100);
-                    }
+                    // 端口被占用，换下一个。
                 }
             }
 
+            if (lateralPort > 0)
+            {
+                try
+                {
+                    for (var i = 1; i <= 6; i++)
+                    {
+                        TryConnect(new IPAddress(new byte[] { 127, 0, 0, (byte)i }), lateralPort, 200);
+                    }
+                }
+                finally
+                {
+                    foreach (var lateralListener in lateralListeners)
+                    {
+                        lateralListener.Stop();
+                    }
+                }
+            }
+            else
+            {
+                // 所有管理端口都被占用时，退回真实内网地址的失败尝试。
+                var localAddress = GetLocalIPv4();
+
+                if (localAddress is not null)
+                {
+                    var prefix = localAddress.GetAddressBytes();
+
+                    for (var i = 1; i <= 6; i++)
+                    {
+                        var bytes = (byte[])prefix.Clone();
+                        bytes[3] = (byte)i;
+                        var target = new IPAddress(bytes);
+
+                        foreach (var adminPort in new ushort[] { 445, 3389, 5985 })
+                        {
+                            TryConnect(target, adminPort, 100);
+                        }
+                    }
+                }
+            }
             Console.WriteLine("dns：查询 30 个随机长域名…");
             for (var i = 0; i < 30; i++)
             {
@@ -492,9 +529,9 @@ internal sealed class PocRunner : IDisposable
                 _flows[key] = flow;
             }
 
-            var newBurst = isConnect || (now - flow.LastSeenUtc) > TimeSpan.FromSeconds(2);
-
-            if (newBurst)
+            // 只有 TCP 的连接/接受事件才作为「扫描/beacon」的连接样本；
+            // 持续数据流和 UDP 组播不算，否则浏览器/Windows 发现协议会大量误报。
+            if (isConnect && isTcp)
             {
                 flow.Connections.Add(now);
 
@@ -503,7 +540,6 @@ internal sealed class PocRunner : IDisposable
                     flow.Connections.RemoveAt(0);
                 }
 
-                // 只有连接尝试/新 burst 才拿来做扫描判断；持续大流量不算。
                 _endpoints.Add(new EndpointHit(now, pid, remote, remotePort));
             }
 
@@ -643,11 +679,16 @@ internal sealed class PocRunner : IDisposable
     {
         foreach (var flow in _flows.Values)
         {
+            if (flow.Protocol != "TCP" || IsNoisyEndpoint(flow.Remote, flow.RemotePort))
+            {
+                continue;
+            }
+
             var times = flow.Connections
                 .Where(time => now - time <= BeaconWindow)
                 .ToList();
 
-            if (times.Count < 5)
+            if (times.Count < 6)
             {
                 continue;
             }
@@ -659,7 +700,7 @@ internal sealed class PocRunner : IDisposable
                 intervals.Add((times[i] - times[i - 1]).TotalSeconds);
             }
 
-            if (intervals.Any(value => value < 1.0 || value > 120))
+            if (intervals.Any(value => value < 5.0 || value > 300))
             {
                 continue;
             }
@@ -667,15 +708,22 @@ internal sealed class PocRunner : IDisposable
             var mean = intervals.Average();
             var variance = intervals.Sum(value => (value - mean) * (value - mean)) / intervals.Count;
             var cv = mean > 0 ? Math.Sqrt(variance) / mean : double.MaxValue;
+            var averageBytes = (flow.BytesOut + flow.BytesIn) / Math.Max(1, times.Count);
 
-            if (mean is >= 1.0 and <= 120 && cv <= 0.35)
+            // 正常浏览会反复连同一个 CDN；beacon 通常每次只发很少的数据。
+            if (averageBytes > 256 * 1024)
+            {
+                continue;
+            }
+
+            if (mean is >= 5.0 and <= 300 && cv <= 0.35)
             {
                 AddAlert(
                     "中",
                     "beaconing",
                     flow.Pid,
                     $"{flow.Remote}:{flow.RemotePort}",
-                    $"连接 {times.Count} 次，平均间隔 {mean:0.0}s，抖动 {cv:0.00}");
+                    $"连接 {times.Count} 次，平均间隔 {mean:0.0}s，抖动 {cv:0.00}，平均每次 {FormatBytes((ulong)averageBytes)}");
             }
         }
     }
@@ -688,20 +736,43 @@ internal sealed class PocRunner : IDisposable
 
         foreach (var group in recent)
         {
-            var distinct = group
-                .Select(hit => $"{hit.Remote}:{hit.RemotePort}")
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
+            var hits = group.ToList();
 
-            if (distinct >= 10)
+            var vertical = hits
+                .GroupBy(hit => hit.Remote)
+                .Select(host => new
+                {
+                    Host = host.Key,
+                    Ports = host.Select(hit => hit.RemotePort).Distinct().Count(),
+                })
+                .FirstOrDefault(item => item.Ports >= 15);
+
+            var horizontal = hits
+                .GroupBy(hit => hit.RemotePort)
+                .Where(port => port.Key is not 80 and not 443)
+                .Select(port => new
+                {
+                    Port = port.Key,
+                    Hosts = port.Select(hit => hit.Remote).Distinct().Count(),
+                })
+                .FirstOrDefault(item => item.Hosts >= 15);
+
+            if (vertical is null && horizontal is null)
             {
-                AddAlert(
-                    distinct >= 30 ? "高" : "中",
-                    "scan",
-                    group.Key,
-                    "多个远端端点",
-                    $"60 秒内连接 {distinct} 个不同端点");
+                continue;
             }
+
+            var count = Math.Max(vertical?.Ports ?? 0, horizontal?.Hosts ?? 0);
+            var evidence = vertical is not null
+                ? $"同一主机 {vertical.Host} 的 {vertical.Ports} 个不同端口"
+                : $"同一端口 {horizontal!.Port} 上的 {horizontal.Hosts} 台不同主机";
+
+            AddAlert(
+                count >= 30 ? "高" : "中",
+                "scan",
+                group.Key,
+                "多个远端端点",
+                $"60 秒内：{evidence}");
         }
     }
 
@@ -734,12 +805,21 @@ internal sealed class PocRunner : IDisposable
 
     private void EvaluateDns(DateTime now)
     {
+        // 按「同一父域」分组：正常系统进程会查很多不同域名，
+        // 但不会在同一个父域下瞬间产生几十个随机子域；DGA/tunneling 才会。
         var recent = _dns
             .Where(item => now - item.TimeUtc <= DnsWindow)
-            .GroupBy(item => item.Pid);
+            .GroupBy(item => (item.Pid, Parent: ParentDomain(item.QueryName)));
 
         foreach (var group in recent)
         {
+            var parent = group.Key.Parent;
+
+            if (parent.Length == 0)
+            {
+                continue;
+            }
+
             var names = group
                 .Select(item => item.QueryName)
                 .Where(name => name.Length > 0)
@@ -756,13 +836,12 @@ internal sealed class PocRunner : IDisposable
                 AddAlert(
                     "中",
                     "dns",
-                    group.Key,
-                    "DNS 异常",
-                    $"唯一域名 {names.Count}，长域名 {longNames}，NXDOMAIN {nxdomain}/{total}");
+                    group.Key.Pid,
+                    parent,
+                    $"父域下唯一域名 {names.Count}，长域名 {longNames}，NXDOMAIN {nxdomain}/{total}");
             }
         }
     }
-
     private void EvaluateExfiltration(DateTime now)
     {
         foreach (var flow in _flows.Values)
@@ -831,6 +910,47 @@ internal sealed class PocRunner : IDisposable
                || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
                || (bytes[0] == 192 && bytes[1] == 168)
                || bytes[0] == 127;
+    }
+
+    /// <summary>组播/广播/链路本地/常见发现协议端口：不能拿来做 beaconing 判断。</summary>
+    private static bool IsNoisyEndpoint(string address, ushort port)
+    {
+        if (port is 53 or 5353 or 5355 or 1900 or 3702 or 137 or 138)
+        {
+            return true;
+        }
+
+        if (!IPAddress.TryParse(address, out var ip))
+        {
+            return false;
+        }
+
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var bytes = ip.GetAddressBytes();
+            return bytes[0] is >= 224 and <= 239
+                   || (bytes[0] == 255 && bytes[1] == 255 && bytes[2] == 255 && bytes[3] == 255)
+                   || (bytes[0] == 169 && bytes[1] == 254);
+        }
+
+        var v6 = ip.GetAddressBytes();
+        return v6[0] == 0xff || (v6[0] == 0xfe && (v6[1] & 0xc0) == 0x80);
+    }
+
+    private static string ParentDomain(string name)
+    {
+        var trimmed = name.Trim().TrimEnd('.');
+
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var parts = trimmed.Split('.');
+
+        return parts.Length >= 2
+            ? $"{parts[^2]}.{parts[^1]}".ToLowerInvariant()
+            : trimmed.ToLowerInvariant();
     }
 
     private static double CpuPercent(TimeSpan cpu, TimeSpan wall)

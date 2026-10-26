@@ -67,8 +67,16 @@ $svcVersion = Get-ProductVersion $serviceExe
 Write-Host "  界面：$uiVersion"
 Write-Host "  服务：$svcVersion"
 
+$distUiVersion = Get-ProductVersion (Join-Path $scriptDir 'WinAppGuard.exe')
+$distSvcVersion = Get-ProductVersion (Join-Path $scriptDir 'WinAppGuardSvc.exe')
+
+Write-Host "  验收包界面：$distUiVersion"
+Write-Host "  验收包服务：$distSvcVersion"
+
 Assert-True '界面版本是 3.5' ($uiVersion -like '3.5*') "$uiVersion"
 Assert-True '服务版本是 3.5' ($svcVersion -like '3.5*') "$svcVersion"
+Assert-True '已安装的界面与验收包一致' ($uiVersion -eq $distUiVersion) "安装=$uiVersion 包=$distUiVersion"
+Assert-True '已安装的服务与验收包一致' ($svcVersion -eq $distSvcVersion) "安装=$svcVersion 包=$distSvcVersion"
 Assert-True '自检工具存在' (Test-Path $selfCheck) $selfCheck
 Assert-True '服务已安装' ($null -ne (Get-Service $serviceName -ErrorAction SilentlyContinue))
 

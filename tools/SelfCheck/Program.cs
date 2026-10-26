@@ -9348,7 +9348,7 @@ internal static class Program
         var results = new List<(string Title, bool Passed)>();
 
         W("################################################################");
-        W("#   3.5 服务端实测（流量 TCP 扩展统计 / DNS ETW）                #");
+        W("#   3.5 服务端实测（流量 ETW Network / DNS ETW）                 #");
         W("################################################################");
         W();
 
@@ -9754,7 +9754,7 @@ internal static class Program
 
     /// <summary>
     /// 在回环上起一个限速 HTTP 服务，让连接持续约 8 秒 ——
-    /// 短于采样周期的连接会被 TCP 扩展统计漏掉，验收必须避开这个坑。
+    /// 短于采样周期的连接会被漏掉，验收必须避开这个坑。
     /// </summary>
     private static long DownloadLoopbackPayload(long totalBytes, out string? error)
     {
@@ -9997,7 +9997,7 @@ internal static class Program
 
     /// <summary>
     /// 3.5：每程序流量 —— 字节格式化 / 行数据回填 / 排序 / 协议字段 / 英文列头。
-    /// 真实 TCP 扩展统计的数字必须在 VM 里测，离线只钉住纯逻辑。
+    /// 真实 ETW 数字必须在 VM 里测，离线只钉住纯逻辑。
     /// </summary>
     private static void RunTrafficTest()
     {

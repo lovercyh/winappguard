@@ -148,7 +148,7 @@ else {
 Write-Host ''
 Write-Host '===== 8. 需要人工确认的界面项 =====' -ForegroundColor Cyan
 Write-Host '  1) 「联网连接」页：边下载边看「上传 / 下载 / 总计」三列是否增长；'
-Write-Host '     与任务管理器「性能 → 以太网」的量级对比（允许误差，界面注明仅 TCP）。'
+Write-Host '     与任务管理器「性能 → 以太网」的量级对比（允许误差，界面注明 TCP + UDP / 近似值）。'
 Write-Host '  2) 用一个提权程序联网（例如管理员 PowerShell 里 Invoke-WebRequest），'
 Write-Host '     确认它的路径由服务补全，不再显示「（无法获取）」。'
 Write-Host '  3) 「DNS」页：打开几个网站，确认域名/PID/程序出现；'

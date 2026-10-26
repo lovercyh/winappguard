@@ -133,8 +133,8 @@ Write-Host ''
 Write-Host '===== 8. ETW 会话 =====' -ForegroundColor Cyan
 
 $logman = & logman query -ets 2>&1 | Out-String
-Assert-True 'DNS ETW 会话存在（WinAppGuard-Dns）' ([bool]($logman -match 'WinAppGuard-Dns'))
-Assert-True '流量 ETW 会话存在（WinAppGuard-Net）' ([bool]($logman -match 'WinAppGuard-Net'))
+Assert-True 'DNS ETW 会话存在（WinAppGuard-Dns）' ([bool]($logman -match 'WinAppGuard-Dns\s'))
+Assert-True '流量 ETW 会话存在（WinAppGuard-Net）' ([bool]($logman -match 'WinAppGuard-Net\s'))
 
 Write-Host ''
 Write-Host '===== 9. 服务日志 =====' -ForegroundColor Cyan

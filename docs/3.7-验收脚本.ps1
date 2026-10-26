@@ -1,4 +1,4 @@
-# 3.7 自动验收（VM）
+﻿# 3.7 自动验收（VM）
 #
 # 用法（管理员 PowerShell）：
 #   powershell -ExecutionPolicy Bypass -File .\3.7-验收脚本.ps1

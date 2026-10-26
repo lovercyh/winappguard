@@ -185,6 +185,8 @@ internal sealed class PocRunner : IDisposable
                 Thread.Sleep(5000);
             }
 
+            DumpFlowDiagnostics(beaconTarget, port);
+
             Console.WriteLine("scan：连接 127.0.0.2..127.0.0.16 同一端口…");
             for (var i = 2; i <= 16; i++)
             {
@@ -371,6 +373,29 @@ internal sealed class PocRunner : IDisposable
         return true;
     }
 
+    private void DumpFlowDiagnostics(IPAddress target, int port)
+    {
+        lock (_gate)
+        {
+            var related = _flows
+                .Where(pair => pair.Value.RemotePort == port
+                               || string.Equals(pair.Value.Remote, target.ToString(), StringComparison.OrdinalIgnoreCase))
+                .Take(10)
+                .ToList();
+
+            Console.WriteLine(
+                $"    [debug] 目标 {target}:{port}  相关 flow={related.Count}  " +
+                $"connect={_events[12] + _events[15] + _events[28] + _events[31]}");
+
+            foreach (var pair in related)
+            {
+                Console.WriteLine(
+                    $"      {pair.Key}  conns={pair.Value.Connections.Count}  " +
+                    $"out={pair.Value.BytesOut}  in={pair.Value.BytesIn}  " +
+                    $"last={pair.Value.LastSeenUtc:HH:mm:ss.fff}");
+            }
+        }
+    }
     private void AcceptLoop(TcpListener listener, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
@@ -815,7 +840,7 @@ internal sealed class PocRunner : IDisposable
         {
             var parent = group.Key.Parent;
 
-            if (parent.Length == 0)
+            if (parent.Length == 0 || IsSystemProcess(GetProcessName(group.Key.Pid)))
             {
                 continue;
             }
@@ -896,6 +921,13 @@ internal sealed class PocRunner : IDisposable
         }
     }
 
+    private static bool IsSystemProcess(string processName)
+        => processName.Equals("svchost.exe", StringComparison.OrdinalIgnoreCase)
+           || processName.Equals("WinAppGuardSvc.exe", StringComparison.OrdinalIgnoreCase)
+           || processName.Equals("System", StringComparison.OrdinalIgnoreCase)
+           || processName.Equals("services.exe", StringComparison.OrdinalIgnoreCase)
+           || processName.Equals("lsass.exe", StringComparison.OrdinalIgnoreCase)
+           || processName.Equals("dns.exe", StringComparison.OrdinalIgnoreCase);
     private static bool IsPrivate(string address)
     {
         if (!IPAddress.TryParse(address, out var ip)

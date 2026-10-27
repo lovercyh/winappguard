@@ -135,6 +135,20 @@ public static class ServiceProtocol
         /// <summary>3.7：清空告警（写，需提权）。</summary>
         public const string IdsClear = "write.ids.clear";
 
+        // ---- 4.0：反端口扫描与临时 IP 封禁 ----
+
+        /// <summary>4.0：读取反扫描状态、事件、临时封禁和设置（只读）。</summary>
+        public const string QueryAntiScan = "query.antiscan";
+
+        /// <summary>4.0：修改反扫描开关、敏感度、自动封禁与 TTL（写，需提权）。</summary>
+        public const string ConfigureAntiScan = "write.antiscan.configure";
+
+        /// <summary>4.0：解除一个来源 IP 的临时封禁（写，需提权）。</summary>
+        public const string ReleaseAntiScanBlock = "write.antiscan.release";
+
+        /// <summary>4.0：清空扫描事件并解除全部临时封禁（写，需提权）。</summary>
+        public const string ClearAntiScan = "write.antiscan.clear";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

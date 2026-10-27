@@ -148,6 +148,9 @@ internal sealed class ControlServer : IDisposable
         // 3.7：IDS 只消费上面两个 ETW 会话的回调，不新开会话。
         IdsHost.Start();
 
+        // 4.0：反扫描使用 Npcap（用户安装），与上面两个 ETW 会话无关。
+        AntiScanHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -181,6 +184,8 @@ internal sealed class ControlServer : IDisposable
 
         // 3.7：先摘 IDS 回调，再停 ETW 会话。
         IdsHost.Stop();
+
+        AntiScanHost.Stop();
 
         TrafficHost.Stop();
 
@@ -549,6 +554,15 @@ internal sealed class ControlServer : IDisposable
 
             ServiceProtocol.Commands.IdsClear => IdsHost.Clear(request),
 
+            // 4.0：反扫描；写命令（write.antiscan.*）已由上面的提权检查统一拦截。
+            ServiceProtocol.Commands.QueryAntiScan => AntiScanHost.Query(request),
+
+            ServiceProtocol.Commands.ConfigureAntiScan => AntiScanHost.Configure(request),
+
+            ServiceProtocol.Commands.ReleaseAntiScanBlock => AntiScanHost.Release(request),
+
+            ServiceProtocol.Commands.ClearAntiScan => AntiScanHost.Clear(request),
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -628,6 +642,12 @@ internal sealed class ControlServer : IDisposable
         status.IdsAlertsNew = ids.AlertsNew;
         status.IdsFlowCount = ids.FlowCount;
         status.IdsEventsSeen = ids.EventsSeen;
+
+        var antiScan = AntiScanHost.GetStatus();
+        status.AntiScanEnabled = antiScan.Enabled;
+        status.AntiScanCollecting = antiScan.Collecting;
+        status.AntiScanNpcapAvailable = antiScan.NpcapAvailable;
+        status.AntiScanBlockedCount = antiScan.BlockedCount;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

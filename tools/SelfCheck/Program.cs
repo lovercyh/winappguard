@@ -16,6 +16,7 @@ using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics;
+using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Diagnostics.Ids;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
@@ -156,6 +157,7 @@ internal static class Program
                         && !args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
@@ -330,6 +332,14 @@ internal static class Program
             {
                 RunServiceIdsTest();
             }
+            else if (args.Contains("--service-antiscan-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceAntiScanTest();
+            }
+            else if (args.Contains("--wfp-inbound-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunWfpInboundTest();
+            }
             else if (args.Contains("--service-lockdown-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceLockdownTest();
@@ -409,6 +419,10 @@ internal static class Program
             else if (args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunIdsTest();
+            }
+            else if (args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAntiScanTest();
             }
             else if (args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1398,6 +1412,10 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "08-dns.png"));
 
+            TrySelectTab(form, "_tabAntiScan");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "09-protection.png"));
+
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
@@ -1816,6 +1834,72 @@ internal static class Program
         });
 
         InvokePrivate(form, "RebuildIdsView", null);
+
+        // ---- 防护页（4.0） ----
+        TrySetField(form, "_antiEvents", new List<AntiScanEventDto>
+        {
+            new()
+            {
+                Id = "scan-1",
+                TimeUtc = now.AddMinutes(-4).ToUniversalTime(),
+                SourceAddress = "203.0.113.42",
+                DistinctPorts = 42,
+                DistinctHosts = 1,
+                SynCount = 42,
+                WindowSeconds = 60,
+                Severity = "high",
+                Action = "blocked",
+                BlockedUntilUtc = now.AddMinutes(6).ToUniversalTime(),
+            },
+            new()
+            {
+                Id = "scan-2",
+                TimeUtc = now.AddMinutes(-12).ToUniversalTime(),
+                SourceAddress = "198.51.100.7",
+                DistinctPorts = 21,
+                DistinctHosts = 1,
+                SynCount = 21,
+                WindowSeconds = 60,
+                Severity = "medium",
+                Action = "alert",
+            },
+        });
+
+        TrySetField(form, "_antiBlocks", new List<AntiScanBlockDto>
+        {
+            new()
+            {
+                Address = "203.0.113.42",
+                BlockedUntilUtc = now.AddMinutes(6).ToUniversalTime(),
+                Reason = "inbound port scan",
+                EventId = "scan-1",
+            },
+        });
+
+        TrySetField(form, "_antiSettings", new AntiScanSettingsDto
+        {
+            Enabled = true,
+            AutoBlock = true,
+            Sensitivity = "standard",
+            BlockMinutes = 10,
+        });
+
+        TrySetField(form, "_antiStatus", new AntiScanStatusDto
+        {
+            Enabled = true,
+            NpcapAvailable = true,
+            NpcapVersion = "1.90",
+            Collecting = true,
+            EventsSeen = 2_418,
+            EventCount = 2,
+            BlockedCount = 1,
+            AutoBlock = true,
+            Sensitivity = "standard",
+            BlockMinutes = 10,
+            LastEventUtc = now.AddMinutes(-4).ToUniversalTime(),
+        });
+
+        InvokePrivate(form, "RebuildAntiScanView", null);
     }
 
     private static DnsDto MakeDocsDns(
@@ -4295,6 +4379,72 @@ internal static class Program
                             !HasCjk(idsGrid.EmptyText));
                     }
 
+                    if (TryGetField<TabPage>(form, "_tabAntiScan", out var antiTab)
+                        && TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
+                            form, "_antiEventGrid", out var antiEventGrid)
+                        && TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
+                            form, "_antiBlockGrid", out var antiBlockGrid))
+                    {
+                        var antiHeaders = antiEventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Select(column => column.HeaderText)
+                            .Concat(antiBlockGrid.Columns.Cast<DataGridViewColumn>()
+                                .Select(column => column.HeaderText))
+                            .ToList();
+
+                        W($"    4.0 防护页签 = {antiTab.Text} | 列头 = {string.Join(" | ", antiHeaders)}");
+                        CheckAssertion(results, "英文：防护页签与列头无中文",
+                            !HasCjk(antiTab.Text) && antiHeaders.All(text => !HasCjk(text)));
+                        CheckAssertion(results, "英文：防护空状态无中文",
+                            !HasCjk(antiEventGrid.EmptyText)
+                            && !HasCjk(antiBlockGrid.EmptyText));
+
+                        if (TryGetField<TextBox>(form, "_antiSearchBox", out var antiSearch))
+                        {
+                            W($"    防护搜索占位 = {antiSearch.PlaceholderText}");
+                            CheckAssertion(results, "英文：防护搜索占位无中文",
+                                !HasCjk(antiSearch.PlaceholderText));
+                        }
+
+                        if (TryGetField<Label>(form, "_antiStatusLabel", out var antiStatus))
+                        {
+                            W($"    防护状态行 = {antiStatus.Text}");
+                            CheckAssertion(results, "英文：防护状态行无中文",
+                                !HasCjk(antiStatus.Text));
+                        }
+
+                        if (TryGetField<ComboBox>(form, "_antiSeverityFilter", out var antiSeverity))
+                        {
+                            var items = antiSeverity.Items.Cast<object>()
+                                .Select(item => item?.ToString() ?? string.Empty)
+                                .ToList();
+
+                            W("    防护筛选 = " + string.Join(" | ", items));
+                            CheckAssertion(results, "英文：防护筛选无中文",
+                                items.All(text => !HasCjk(text)));
+                        }
+
+                        if (TryGetField<Button>(form, "_antiReleaseButton", out var antiRelease)
+                            && TryGetField<Button>(form, "_antiReleaseAllButton", out var antiReleaseAll)
+                            && TryGetField<Button>(form, "_antiSettingsButton", out var antiSettings))
+                        {
+                            var buttons = new[] { antiRelease, antiReleaseAll, antiSettings };
+                            var truncated = buttons
+                                .Select(button => new
+                                {
+                                    Button = button,
+                                    Need = TextRenderer.MeasureText(button.Text, button.Font).Width + 16,
+                                })
+                                .Where(item => item.Need > item.Button.Width)
+                                .Select(item => item.Button.Text)
+                                .ToList();
+
+                            W("    防护按钮 = " + string.Join(" | ", buttons.Select(button => button.Text)));
+                            CheckAssertion(results, "英文：防护按钮无中文且不截断",
+                                truncated.Count == 0
+                                && buttons.All(button => !HasCjk(button.Text)));
+                        }
+                    }
+
                     if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
                             form, "_rulesGrid", out var rulesEmpty))
                     {
@@ -4511,8 +4661,7 @@ internal static class Program
                         CheckAssertion(results, "英文：IDS 设置对话框可构造", false);
                     }
 
-                    var idsSuppressType = assembly.GetType("WinAppGuard.Forms.IdsSuppressForm");
-                    var idsSuppressCtor = idsSuppressType?
+                    var idsSuppressType = assembly.GetType("WinAppGuard.Forms.IdsSuppressForm");                    var idsSuppressCtor = idsSuppressType?
                         .GetConstructors(System.Reflection.BindingFlags.NonPublic
                                          | System.Reflection.BindingFlags.Instance)
                         .SingleOrDefault(constructor => constructor.GetParameters().Length == 3);
@@ -4540,6 +4689,46 @@ internal static class Program
                     else
                     {
                         CheckAssertion(results, "英文：IDS 抑制对话框可构造", false);
+                    }
+
+                    var antiSettingsType = assembly.GetType("WinAppGuard.Forms.AntiScanSettingsForm");
+                    var antiSettingsCtor = antiSettingsType?
+                        .GetConstructors(System.Reflection.BindingFlags.NonPublic
+                                         | System.Reflection.BindingFlags.Instance)
+                        .SingleOrDefault(constructor => constructor.GetParameters().Length == 3);
+
+                    if (antiSettingsCtor is not null)
+                    {
+                        using var antiDialog = (Form)antiSettingsCtor.Invoke(new object[]
+                        {
+                            new AntiScanSettingsDto
+                            {
+                                Enabled = true,
+                                AutoBlock = true,
+                                Sensitivity = "standard",
+                                BlockMinutes = 10,
+                                Allowlist = new List<string> { "192.0.2.10" },
+                            },
+                            true,
+                            "1.90",
+                        });
+
+                        var leftovers = Walk(antiDialog)
+                            .Where(control => HasCjk(control.Text))
+                            .Select(control => $"{control.GetType().Name}:{control.Text}")
+                            .ToList();
+
+                        if (leftovers.Count > 0)
+                        {
+                            W("    防护设置对话框残留：" + string.Join(" / ", leftovers));
+                        }
+
+                        CheckAssertion(results, "英文：防护设置对话框无中文",
+                            leftovers.Count == 0 && !HasCjk(antiDialog.Text));
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "英文：防护设置对话框可构造", false);
                     }
 
                     var sampleRule = new FirewallRuleItem
@@ -10012,6 +10201,235 @@ internal static class Program
     /// 3.6：服务端清空流量计数（需要管理员/所有者）。
     /// 会清空本次运行的流量统计，验收脚本应放在最后跑。
     /// </summary>
+    private static void RunWfpInboundTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var address = IPAddress.Parse("203.0.113.252");
+
+        W("################################################################");
+        W("#   4.0 WFP 入站临时封禁（真实过滤器；需要管理员）              #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            AntiScanWfp.Remove(address);
+            AntiScanWfp.Add(address);
+
+            using (var engine = WfpEngine.Open())
+            {
+                var found = engine.ListOurFilters().Any(filter =>
+                    filter.LayerKey == WfpNativeMethods.LayerAleAuthRecvAcceptV4
+                    && filter.Description?.StartsWith(
+                        "AppGuard|1|AntiScanBlockIp|", StringComparison.Ordinal) == true);
+
+                CheckAssertion(results, "入站 accept 层过滤器已创建", found);
+            }
+
+            CheckAssertion(results, "重复封禁是幂等的", AddTwice(address));
+
+            AntiScanWfp.Remove(address);
+
+            using (var engine = WfpEngine.Open())
+            {
+                var found = engine.ListOurFilters().Any(filter =>
+                    filter.LayerKey == WfpNativeMethods.LayerAleAuthRecvAcceptV4
+                    && filter.Description?.StartsWith(
+                        "AppGuard|1|AntiScanBlockIp|", StringComparison.Ordinal) == true);
+
+                CheckAssertion(results, "入站过滤器已删除", !found);
+            }
+
+            var v6 = IPAddress.Parse("2001:db8::41");
+            AntiScanWfp.Remove(v6);
+            AntiScanWfp.Add(v6);
+
+            using (var engine = WfpEngine.Open())
+            {
+                var found = engine.ListOurFilters().Any(filter =>
+                    filter.LayerKey == WfpNativeMethods.LayerAleAuthRecvAcceptV6
+                    && filter.Description?.StartsWith(
+                        "AppGuard|1|AntiScanBlockIp|", StringComparison.Ordinal) == true);
+
+                CheckAssertion(results, "入站 IPv6 accept 层过滤器已创建", found);
+            }
+
+            AntiScanWfp.Remove(v6);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "WFP 入站过滤测试执行完成", false);
+        }
+        finally
+        {
+            try
+            {
+                AntiScanWfp.Remove(address);
+            }
+            catch (Exception)
+            {
+                // 清理失败不影响结论。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: true);
+    }
+
+    private static bool AddTwice(IPAddress address)
+    {
+        try
+        {
+            AntiScanWfp.Add(address);
+            AntiScanWfp.Add(address);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static void RunServiceAntiScanTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        AntiScanSettingsDto? initialSettings = null;
+
+        W("################################################################");
+        W("#   4.0 反扫描服务端实测（Npcap / 设置 / 封禁；只在 VM 跑）       #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    服务版本 = {status.ServiceVersion}");
+        var parts = status.ServiceVersion.Split('.');
+        var versionOk = parts.Length >= 2
+                        && int.TryParse(parts[0], out var major)
+                        && int.TryParse(parts[1], out var minor)
+                        && (major > 4 || (major == 4 && minor >= 0));
+
+        CheckAssertion(results, "服务版本是 4.0 或更高", versionOk);
+        CheckAssertion(results, "状态里有反扫描字段",
+            status.AntiScanNpcapAvailable || status.AntiScanBlockedCount >= 0);
+
+        var snapshot = QueryAntiScanResponse(out var queryError);
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取反扫描失败：{snapshot?.Error ?? queryError}");
+            CheckAssertion(results, "读取反扫描快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        initialSettings = snapshot.AntiScanSettings;
+        var antiStatus = snapshot.AntiScanStatus;
+
+        W($"    Npcap 可用={antiStatus?.NpcapAvailable} 版本={antiStatus?.NpcapVersion}");
+        W($"    采集={antiStatus?.Collecting} 事件={antiStatus?.EventCount} 封禁={antiStatus?.BlockedCount}");
+
+        CheckAssertion(results, "检测到 Npcap", antiStatus?.NpcapAvailable == true);
+        CheckAssertion(results, "反扫描采集在跑", antiStatus?.Collecting == true);
+        CheckAssertion(results, "反扫描设置已返回", initialSettings is not null);
+
+        if (initialSettings is null)
+        {
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        try
+        {
+            var testAllowlist = "203.0.113.77";
+            var changed = CloneAntiScanSettings(initialSettings);
+            changed.Allowlist = (changed.Allowlist ?? new List<string>())
+                .Append(testAllowlist)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var configure = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.ConfigureAntiScan,
+                    AntiScanSettings = changed,
+                },
+                TimeSpan.FromSeconds(15),
+                out var configureError);
+
+            W($"    写入允许名单：ok={configure?.Ok}，错误={configure?.Error ?? configureError}");
+            CheckAssertion(results, "修改反扫描设置成功", configure is { Ok: true });
+
+            var after = QueryAntiScanResponse(out _);
+            CheckAssertion(results, "允许名单已保存",
+                after?.AntiScanSettings?.Allowlist?.Contains(testAllowlist, StringComparer.OrdinalIgnoreCase) == true);
+
+            var release = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.ReleaseAntiScanBlock,
+                    AntiScanAddress = "203.0.113.250",
+                },
+                TimeSpan.FromSeconds(15),
+                out var releaseError);
+
+            W($"    解除不存在的封禁：ok={release?.Ok}，影响={release?.Affected}，错误={release?.Error ?? releaseError}");
+            CheckAssertion(results, "解除不存在的封禁不报错", release is { Ok: true });
+
+            var clear = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ClearAntiScan },
+                TimeSpan.FromSeconds(15),
+                out var clearError);
+
+            W($"    清空反扫描记录：ok={clear?.Ok}，错误={clear?.Error ?? clearError}");
+            CheckAssertion(results, "清空反扫描记录成功", clear is { Ok: true });
+        }
+        finally
+        {
+            if (initialSettings is not null)
+            {
+                var restore = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.ConfigureAntiScan,
+                        AntiScanSettings = initialSettings,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var restoreError);
+
+                W($"    恢复初始设置：ok={restore?.Ok}，错误={restore?.Error ?? restoreError}");
+                CheckAssertion(results, "恢复初始反扫描设置", restore is { Ok: true });
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static ServiceResponse? QueryAntiScanResponse(out string? error)
+    {
+        return ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryAntiScan },
+            TimeSpan.FromSeconds(5),
+            out error);
+    }
+
+    private static AntiScanSettingsDto CloneAntiScanSettings(AntiScanSettingsDto settings) => new()
+    {
+        Enabled = settings.Enabled,
+        Sensitivity = settings.Sensitivity,
+        AutoBlock = settings.AutoBlock,
+        BlockMinutes = settings.BlockMinutes,
+        Allowlist = settings.Allowlist?.ToList() ?? new List<string>(),
+    };
+
     private static void RunServiceIdsTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -11252,6 +11670,336 @@ internal static class Program
         }
     }
 
+    private static void RunAntiScanTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = DateTime.UtcNow;
+        var standard = new AntiScanSettings();
+
+        W("################################################################");
+        W("#   4.0 反端口扫描（离线：阈值 / 冷却 / 状态 / 协议）            #");
+        W("################################################################");
+        W();
+
+        AntiScanFinding? Feed(
+            AntiScanAnalyzer analyzer,
+            AntiScanSettings settings,
+            int ports,
+            int hosts = 1,
+            int intervalMs = 1000,
+            string source = "198.51.100.9",
+            string localPrefix = "10.0.0.",
+            int portBase = 1000,
+            int timeOffsetSeconds = 0)
+        {
+            AntiScanFinding? found = null;
+
+            for (var i = 0; i < ports; i++)
+            {
+                var time = start.AddSeconds(timeOffsetSeconds).AddMilliseconds(i * intervalMs);
+                var local = IPAddress.Parse(localPrefix + (1 + (i % hosts)));
+                var syn = new InboundSyn(
+                    time,
+                    IPAddress.Parse(source),
+                    (ushort)(40000 + i),
+                    local,
+                    (ushort)(portBase + i));
+
+                var finding = analyzer.Observe(syn, time, settings);
+
+                if (finding is not null)
+                {
+                    found = finding;
+                }
+            }
+
+            return found;
+        }
+
+        var medium = Feed(new AntiScanAnalyzer(), standard, ports: 20);
+        CheckAssertion(results, "标准：20 个端口 / 60 秒触发中危",
+            medium is { Severity: AntiScanSeverity.Medium, DistinctPorts: 20 });
+
+        var high = Feed(new AntiScanAnalyzer(), standard, ports: 50);
+        CheckAssertion(results, "标准：50 个端口触发高危",
+            high is { Severity: AntiScanSeverity.High, DistinctPorts: 50 });
+
+        var fast = Feed(new AntiScanAnalyzer(), standard, ports: 20, intervalMs: 400);
+        CheckAssertion(results, "标准：10 秒内 20 个端口触发高危",
+            fast is { Severity: AntiScanSeverity.High });
+
+        var conservative20 = Feed(
+            new AntiScanAnalyzer(),
+            new AntiScanSettings { Sensitivity = "conservative" },
+            ports: 20);
+        CheckAssertion(results, "保守：20 个端口不触发", conservative20 is null);
+
+        var conservative40 = Feed(
+            new AntiScanAnalyzer(),
+            new AntiScanSettings { Sensitivity = "conservative" },
+            ports: 40);
+        CheckAssertion(results, "保守：40 个端口触发中危",
+            conservative40 is { Severity: AntiScanSeverity.Medium });
+
+        var horizontal = Feed(
+            new AntiScanAnalyzer(),
+            standard,
+            ports: 10,
+            hosts: 10,
+            localPrefix: "10.0.0.");
+        CheckAssertion(results, "水平扫描：同一来源 10 个本地地址触发中危",
+            horizontal is { Severity: AntiScanSeverity.Medium, DistinctHosts: 10 });
+
+        var loopback = Feed(
+            new AntiScanAnalyzer(),
+            standard,
+            ports: 30,
+            source: "127.0.0.1");
+        CheckAssertion(results, "回环来源被忽略", loopback is null);
+
+        var cooldownAnalyzer = new AntiScanAnalyzer();
+        var first = Feed(cooldownAnalyzer, standard, ports: 20);
+        var second = Feed(cooldownAnalyzer, standard, ports: 1, portBase: 2000, timeOffsetSeconds: 30);
+        CheckAssertion(results, "同级别 10 分钟内不重复告警",
+            first is not null && second is null);
+
+        var upgraded = Feed(
+            cooldownAnalyzer,
+            standard,
+            ports: 60,
+            intervalMs: 500,
+            portBase: 3000,
+            timeOffsetSeconds: 60);
+        CheckAssertion(results, "同来源升级为高危时不被冷却吞掉",
+            upgraded is { Severity: AntiScanSeverity.High });
+
+        cooldownAnalyzer.ResetSource("198.51.100.9");
+        var afterReset = Feed(cooldownAnalyzer, standard, ports: 1, portBase: 4000, timeOffsetSeconds: 90);
+        CheckAssertion(results, "ResetSource 后可再次触发",
+            afterReset is not null);
+
+        CheckAssertion(results, "事件计数为正",
+            cooldownAnalyzer.EventsSeen > 0);
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-AntiScanTest-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var statePath = Path.Combine(directory, "state.json");
+            var state = new AntiScanState
+            {
+                Settings = new AntiScanSettings
+                {
+                    Enabled = true,
+                    AutoBlock = true,
+                    Sensitivity = "conservative",
+                    BlockMinutes = 30,
+                    Allowlist = new List<string> { "192.0.2.10", "not-an-ip" },
+                },
+                Blocks =
+                {
+                    new AntiScanBlock
+                    {
+                        Address = "198.51.100.9",
+                        BlockedUntilUtc = start.AddMinutes(10),
+                        Reason = "inbound port scan",
+                    },
+                },
+            };
+
+            AntiScanStateFile.Save(statePath, state);
+            var loaded = AntiScanStateFile.Load(statePath);
+
+            CheckAssertion(results, "状态文件：设置 / 允许名单 / 封禁往返",
+                loaded.Settings.AutoBlock
+                && loaded.Settings.Sensitivity == "conservative"
+                && loaded.Settings.BlockMinutes == 30
+                && loaded.Settings.Allowlist.Count == 1
+                && loaded.Blocks.Count == 1
+                && loaded.Blocks[0].Address == "198.51.100.9");
+
+            File.WriteAllText(statePath, "{ broken", new UTF8Encoding(false));
+            var broken = AntiScanStateFile.Load(statePath);
+            CheckAssertion(results, "状态文件：坏文件回退默认值",
+                broken.Settings.Enabled && broken.Settings.BlockMinutes == 10);
+
+            var response = new ServiceResponse
+            {
+                Ok = true,
+                AntiScanSettings = new AntiScanSettingsDto
+                {
+                    Enabled = true,
+                    AutoBlock = true,
+                    Sensitivity = "standard",
+                    BlockMinutes = 10,
+                    Allowlist = new List<string> { "192.0.2.10" },
+                },
+                AntiScanStatus = new AntiScanStatusDto
+                {
+                    Enabled = true,
+                    NpcapAvailable = true,
+                    NpcapVersion = "1.90",
+                    Collecting = true,
+                    EventsSeen = 123,
+                    EventCount = 1,
+                    BlockedCount = 1,
+                },
+                AntiScanEvents = new List<AntiScanEventDto>
+                {
+                    new()
+                    {
+                        Id = "e1",
+                        SourceAddress = "198.51.100.9",
+                        DistinctPorts = 30,
+                        Severity = "high",
+                        Action = "blocked",
+                        BlockedUntilUtc = start.AddMinutes(10),
+                    },
+                },
+                AntiScanBlocks = new List<AntiScanBlockDto>
+                {
+                    new()
+                    {
+                        Address = "198.51.100.9",
+                        BlockedUntilUtc = start.AddMinutes(10),
+                        Reason = "inbound port scan",
+                    },
+                },
+            };
+
+            var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+            var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+
+            CheckAssertion(results, "协议 DTO：反扫描设置 / 状态 / 事件 / 封禁往返",
+                back?.AntiScanSettings is { AutoBlock: true, BlockMinutes: 10 }
+                && back.AntiScanStatus is { NpcapAvailable: true, EventsSeen: 123 }
+                && back.AntiScanEvents is { Count: 1 }
+                && back.AntiScanBlocks is { Count: 1 }
+                && back.AntiScanBlocks[0].Address == "198.51.100.9");
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响自检。
+            }
+        }
+
+        RunAntiScanUiChecks(results);
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunAntiScanUiChecks(List<(string Title, bool Passed)> results)
+    {
+        var previous = Localizer.Current;
+
+        try
+        {
+            Localizer.Initialize("zh");
+            MainForm.SuppressBackgroundServices = true;
+
+            using var form = new MainForm(isAutostart: false);
+            TrySetField(form, "_runtimeInitialized", true);
+
+            var now = new DateTime(2026, 10, 27, 12, 0, 0, DateTimeKind.Utc);
+
+            TrySetField(form, "_antiEvents", new List<AntiScanEventDto>
+            {
+                new()
+                {
+                    Id = "s1", TimeUtc = now, SourceAddress = "198.51.100.9",
+                    DistinctPorts = 30, DistinctHosts = 1, SynCount = 30,
+                    WindowSeconds = 60, Severity = "high", Action = "blocked",
+                    BlockedUntilUtc = now.AddMinutes(10),
+                },
+            });
+
+            TrySetField(form, "_antiBlocks", new List<AntiScanBlockDto>
+            {
+                new()
+                {
+                    Address = "198.51.100.9",
+                    BlockedUntilUtc = now.AddMinutes(10),
+                    Reason = "inbound port scan",
+                    EventId = "s1",
+                },
+            });
+
+            TrySetField(form, "_antiStatus", new AntiScanStatusDto
+            {
+                Enabled = true,
+                NpcapAvailable = true,
+                NpcapVersion = "1.90",
+                Collecting = true,
+                EventsSeen = 120,
+                EventCount = 1,
+                BlockedCount = 1,
+                AutoBlock = true,
+                Sensitivity = "standard",
+                BlockMinutes = 10,
+            });
+
+            TrySetField(form, "_antiSettings", new AntiScanSettingsDto
+            {
+                Enabled = true,
+                AutoBlock = true,
+                Sensitivity = "standard",
+                BlockMinutes = 10,
+            });
+
+            var rebuild = typeof(MainForm).GetMethod(
+                "RebuildAntiScanView",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            if (rebuild is null
+                || !TryGetField<DataGridView>(form, "_antiEventGrid", out var eventGrid)
+                || !TryGetField<DataGridView>(form, "_antiBlockGrid", out var blockGrid)
+                || !TryGetField<TextBox>(form, "_antiSearchBox", out var search)
+                || !TryGetField<Label>(form, "_antiStatusLabel", out var status))
+            {
+                CheckAssertion(results, "找得到防护页控件", false);
+                return;
+            }
+
+            rebuild.Invoke(form, null);
+            Application.DoEvents();
+
+            CheckAssertion(results, "防护页显示 1 条事件 / 1 条封禁",
+                eventGrid.Rows.Count == 1 && blockGrid.Rows.Count == 1);
+
+            W($"    防护状态行 = {status.Text}");
+            CheckAssertion(results, "防护状态行包含 Npcap / 事件 / 封禁",
+                status.Text.Contains("反扫描", StringComparison.Ordinal)
+                && status.Text.Contains("Npcap 1.90", StringComparison.Ordinal)
+                && status.Text.Contains("事件 1", StringComparison.Ordinal)
+                && status.Text.Contains("临时封禁 1", StringComparison.Ordinal));
+
+            search.Text = "198.51.100.9";
+            Application.DoEvents();
+            CheckAssertion(results, "防护搜索来源 IP 生效",
+                eventGrid.Rows.Count == 1 && blockGrid.Rows.Count == 1);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "防护页检查执行完成", false);
+        }
+        finally
+        {
+            MainForm.SuppressBackgroundServices = false;
+            Localizer.Initialize(previous == Localizer.LanguageMode.English ? "en" : "zh");
+        }
+    }
+
     private static void RunTrafficRecordsTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -11451,6 +12199,37 @@ internal static class Program
                         idsClear.Right <= (idsSearch.Parent?.ClientSize.Width ?? 0));
                     CheckAssertion(results, "IDS 顶部按钮不重叠",
                         idsAck.Right <= idsClear.Left && idsAck.Left > idsSearch.Right);
+                }
+
+                if (TryGetField<TabPage>(form, "_tabAntiScan", out var antiTab)
+                    && TryGetField<DataGridView>(form, "_antiEventGrid", out var antiGrid)
+                    && TryGetField<TextBox>(form, "_antiSearchBox", out var antiSearch)
+                    && TryGetField<Button>(form, "_antiSettingsButton", out var antiSettings))
+                {
+                    if (TryGetField<TabControl>(form, "_tabControl", out var antiTabs))
+                    {
+                        antiTabs.SelectedTab = antiTab;
+                    }
+
+                    form.PerformLayout();
+                    Application.DoEvents();
+
+                    var antiFixedWidth = antiGrid.Columns.Cast<DataGridViewColumn>()
+                        .Where(column => column.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
+                        .Sum(column => column.Width);
+
+                    var antiFillMin = antiGrid.Columns.Cast<DataGridViewColumn>()
+                        .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                        .Sum(column => column.MinimumWidth);
+
+                    W($"    980 宽防护：列宽合计 {antiFixedWidth + antiFillMin}px / " +
+                      $"客户区 {antiGrid.ClientSize.Width}px；设置按钮右边缘 {antiSettings.Right}px / " +
+                      $"顶栏 {antiSearch.Parent?.Width}px");
+
+                    CheckAssertion(results, "最小宽度下防护列不溢出",
+                        antiFixedWidth + antiFillMin <= antiGrid.ClientSize.Width);
+                    CheckAssertion(results, "最小宽度下防护顶部按钮不越界",
+                        antiSettings.Right <= (antiSearch.Parent?.ClientSize.Width ?? 0));
                 }
             }
         }

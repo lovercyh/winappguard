@@ -13,9 +13,10 @@ of most tools in its class. Instead of asking you to browse a list of installed 
 it shows you **live TCP connections** — so you start with *"what is online right now?"*
 and finish with *"blocked."*
 
-> WinAppGuard does not handle any traffic itself. The real work is done by an independent
+> WinAppGuard does not forward or modify traffic itself. The real work is done by an independent
 > filtering engine built on WFP: WinAppGuard only creates and removes WFP filters on your
 > behalf, while packet matching and blocking happen in the Windows kernel.
+> The 4.0 anti-scan reads inbound TCP headers only; it does not read payloads or drop packets inline.
 > Since 2.0 it no longer uses Windows Firewall, and it never changes any Windows Firewall setting.
 >
 > **Since 3.0 the product is split into a protection service and a UI.** Rule writes, the
@@ -27,6 +28,11 @@ and finish with *"blocked."*
 > — including other administrators — cannot change rules through the UI or IPC. The private key
 > is encrypted with user-scoped DPAPI; the service only stores the public key. See
 > [`docs/受保护模式设计.md`](docs/受保护模式设计.md) for details.
+>
+> **4.0 adds anti-port-scan.** It uses optional Npcap to inspect inbound TCP SYNs, detects port
+> scans, and can temporarily block the source IP. Automatic blocking is **off by default** and
+> only affects new connections. The installer can install the official Npcap GUI; it never
+> installs it silently. See [`docs/4.0-反端口扫描设计.md`](docs/4.0-反端口扫描设计.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
@@ -68,6 +74,10 @@ and finish with *"blocked."*
   connection metadata plus DNS records to flag periodic beaconing, port/host scans, lateral
   movement and DNS anomalies. Alerts stay local for 30 days and can be acknowledged, suppressed
   or cleared. No DPI, no HTTPS decryption, no packet capture, and no automatic blocking.
+- **Anti-port-scan (4.0)** — the *Protection* page uses optional Npcap to inspect inbound TCP SYN
+  packets and detect port scans. It can temporarily block the source IP for 5 / 10 / 30 / 60
+  minutes; automatic blocking is **off by default**, affects new connections only, and never cuts
+  existing sessions. Without Npcap the firewall works normally and anti-scan is unavailable.
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
@@ -118,6 +128,8 @@ This needs to be explicit.
   This guard applies to **blocking** only, never to allowing.
 - ❌ Its IDS is **detection only**: it never drops, blocks or rewrites traffic automatically,
   does not decrypt HTTPS, and does not fetch external threat intelligence.
+- ❌ Anti-port-scan only inspects **inbound TCP SYN**; no UDP scans, payload inspection or
+  permanent automatic blocking. It is unavailable when Npcap is not installed.
 - ⚠️ It **does** use the network by default, for exactly three purposes (below). There is
   **no telemetry, no analytics, and no update check**.
 
@@ -191,13 +203,15 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 
 ## Screenshots
 
-| IDS (detection only) | Traffic |
+| IDS (detection only) | Protection (anti-port-scan) |
 |---|---|
-| ![IDS tab](docs/screenshots/06-ids.png) | ![Traffic tab](docs/screenshots/07-traffic.png) |
-| **DNS** | **Blocklist** |
-| ![DNS tab](docs/screenshots/08-dns.png) | ![Blocklist tab](docs/screenshots/02-rules.png) |
-| **Strict-mode whitelist** | **Settings** |
-| ![Strict-mode whitelist](docs/screenshots/05-whitelist.png) | ![Settings tab](docs/screenshots/03-settings.png) |
+| ![IDS tab](docs/screenshots/06-ids.png) | ![Protection tab](docs/screenshots/09-protection.png) |
+| **Traffic** | **DNS** |
+| ![Traffic tab](docs/screenshots/07-traffic.png) | ![DNS tab](docs/screenshots/08-dns.png) |
+| **Blocklist** | **Strict-mode whitelist** |
+| ![Blocklist tab](docs/screenshots/02-rules.png) | ![Strict-mode whitelist](docs/screenshots/05-whitelist.png) |
+| **Settings** | |
+| ![Settings tab](docs/screenshots/03-settings.png) | |
 
 ![Block confirmation](docs/screenshots/04-confirm-block.png)
 
@@ -224,6 +238,13 @@ Download from [Releases](https://github.com/lovercyh/winappguard/releases):
 Double-clicking the installer asks for administrator rights once, then copies the files,
 registers the service (SYSTEM, automatic start), and creates a desktop shortcut.
 
+- The installer can optionally install official Npcap for anti-port-scan; skipping it leaves the
+  firewall fully usable and anti-scan unavailable.
+- Npcap is installed through its official GUI, never silently; `Npcap-LICENSE.txt` is kept in the
+  install directory.
+- Neither the installer nor the uninstaller is code-signed; SmartScreen will say "unknown
+  publisher" on first run. That is expected.
+
 ## Install / uninstall
 
 - **Double-click `WinAppGuardSetup.exe`** — installs if missing, repairs if already installed,
@@ -240,6 +261,7 @@ registers the service (SYSTEM, automatic start), and creates a desktop shortcut.
 - Windows 10 or Windows 11, x64
 - Administrator rights for installation and the CLI; the UI itself runs as a normal user
 - [.NET SDK 10](https://dotnet.microsoft.com/download) or newer, only if building from source
+- Npcap for anti-port-scan (optional; installed by the setup through its official GUI)
 
 ## How it works
 
@@ -259,6 +281,8 @@ registers the service (SYSTEM, automatic start), and creates a desktop shortcut.
 | Traffic accounting | ETW `Microsoft-Windows-Kernel-Network` TCP/UDP send/receive events, accumulated per PID; no packet capture and no payload inspection |
 | DNS records | ETW `Microsoft-Windows-DNS-Client`; only the domain, PID and result code, with the latest 2000 entries kept in memory |
 | Flow IDS | Reuses the two ETW sessions above and feeds connection tuples / counts / bytes / domains into an in-memory rule engine; raises alerts only, never inline blocking |
+| Anti-port-scan | Optional Npcap captures inbound TCP SYNs at NDIS (BPF-filtered) and counts distinct ports / hosts per source IP; no payload inspection |
+| Temporary IP block | A user-mode WFP `ALE_AUTH_RECV_ACCEPT_V4/V6` filter blocks new inbound connections from the source IP; it expires or can be released and never cuts existing connections |
 | Service / protected mode | `WinAppGuardSvc` runs as SYSTEM and is the only process that writes WFP. The UI talks to it over the `WinAppGuard.Control.v2` pipe; every request is signed with the owner's ECDSA P-256 key (nonce + request bytes), and the service only stores the public key |
 | Records | WFP net events for blocked connections (with filter ID → rule name); 3-second polling + DNS-cache snapshots for normal connections; JSONL files, 8 MB segments, 7-day retention by default |
 
@@ -452,6 +476,8 @@ Most project documentation is in Chinese.
 | [`docs/3.6-流量记录设计.md`](docs/3.6-流量记录设计.md) | 3.6 traffic page aggregation, sorting and clearing |
 | [`docs/3.7-用户态FlowIDS设计.md`](docs/3.7-用户态FlowIDS设计.md) | 3.7 user-mode Flow IDS: rules, thresholds, storage and limits |
 | [`docs/3.7-VM验收.md`](docs/3.7-VM验收.md) | 3.7 automated acceptance and VM measurements |
+| [`docs/4.0-反端口扫描设计.md`](docs/4.0-反端口扫描设计.md) | 4.0 Npcap capture, scan rules, WFP inbound blocking and limits |
+| [`docs/4.0-VM验收.md`](docs/4.0-VM验收.md) | 4.0 Npcap install, scan tests and soak acceptance |
 
 ## Contributing
 

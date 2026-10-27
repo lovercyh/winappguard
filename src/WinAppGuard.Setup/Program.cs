@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
+using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 
@@ -23,6 +25,9 @@ internal static class Program
     private const string ServiceExeName = "WinAppGuardSvc.exe";
     private const string UninstallerExeName = "WinAppGuardUninstall.exe";
 
+    private static bool _withNpcap;
+    private static bool _withoutNpcap;
+
     private static string InstallDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WinAppGuard");
 
@@ -37,6 +42,8 @@ internal static class Program
         {
             var allowOwnerMismatch = args.Contains(
                 "--allow-owner-mismatch", StringComparer.OrdinalIgnoreCase);
+            _withNpcap = args.Contains("--with-npcap", StringComparer.OrdinalIgnoreCase);
+            _withoutNpcap = args.Contains("--without-npcap", StringComparer.OrdinalIgnoreCase);
 
             if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))
             {
@@ -122,6 +129,8 @@ internal static class Program
         Console.WriteLine("  双击 WinAppGuardUninstall.exe        完整卸载（服务 / 规则 / 快捷方式 / 记录 / 设置 / 目录）");
         Console.WriteLine();
         Console.WriteLine("  WinAppGuardSetup.exe --install     安装（复制文件 + 创建服务 + 启动）");
+        Console.WriteLine("                       --with-npcap    同时安装 Npcap（会打开官方 GUI）");
+        Console.WriteLine("                       --without-npcap 跳过 Npcap（反扫描不可用）");
         Console.WriteLine("                       --allow-owner-mismatch  提权账户与登录账户不同时仍继续（所有者=提权账户）");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留密钥/规则/数据）");
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  同一所有者换一把新密钥（旧密钥删除）");
@@ -138,6 +147,8 @@ internal static class Program
         Console.WriteLine("  Double-click WinAppGuardUninstall.exe  full uninstall (service / rules / shortcut / records / settings / folder)");
         Console.WriteLine();
         Console.WriteLine("  WinAppGuardSetup.exe --install     install (copy files + create service + start)");
+        Console.WriteLine("                       --with-npcap    also install Npcap (opens the official GUI)");
+        Console.WriteLine("                       --without-npcap skip Npcap (anti-scan unavailable)");
         Console.WriteLine("                       --allow-owner-mismatch  continue when the elevated account differs (owner = elevated account)");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      repair (overwrite files + restart service; keep key/rules/data)");
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  issue a new key for the same owner (old key deleted)");
@@ -175,6 +186,8 @@ internal static class Program
 
         // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
+
+        MaybeInstallNpcap(payload);
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -239,10 +252,188 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>
+    /// 4.0：按用户选择安装 Npcap。
+    ///
+    /// A1 方案：随包放官方安装包，但**不静默安装**（免费版不支持 /S），
+    /// 只启动官方 GUI，并锁定推荐选项。用户可以在 Npcap 窗口里点安装/取消。
+    /// </summary>
+    private static void MaybeInstallNpcap(Payload payload)
+    {
+        if (_withoutNpcap)
+        {
+            Bilingual.Say("已按参数跳过 Npcap（反扫描不可用）。", "Npcap skipped by argument (anti-scan unavailable).");
+            return;
+        }
+
+        if (NpcapLocator.IsAvailable)
+        {
+            Bilingual.Say(
+                $"检测到 Npcap {NpcapLocator.GetVersion()}，跳过安装。",
+                $"Npcap {NpcapLocator.GetVersion()} is already installed; skipping.");
+            return;
+        }
+
+        if (!File.Exists(payload.NpcapInstaller))
+        {
+            Bilingual.Say(
+                "安装包未包含 Npcap，反扫描功能将不可用。",
+                "This package does not contain Npcap; anti-scan will be unavailable.");
+            return;
+        }
+
+        var install = _withNpcap;
+
+        if (!install)
+        {
+            if (Console.IsInputRedirected)
+            {
+                Bilingual.Say(
+                    "非交互安装：未指定 --with-npcap，跳过 Npcap（反扫描不可用）。",
+                    "Non-interactive install: Npcap was not requested; anti-scan will be unavailable.");
+                return;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("反端口扫描需要 Npcap（Windows 数据包捕获驱动）。");
+            Console.WriteLine("本安装包附带 Npcap 官方安装程序，未做任何修改。");
+            Console.WriteLine();
+            Console.WriteLine("安装 Npcap 时会打开官方安装窗口，请保持以下选项：");
+            Console.WriteLine("  [ ] Install Npcap in WinPcap API-compatible Mode");
+            Console.WriteLine("  [ ] Support loopback traffic");
+            Console.WriteLine("  [ ] Support raw 802.11 traffic");
+            Console.WriteLine("  [x] Restrict Npcap driver's access to Administrators only");
+            Console.WriteLine();
+            Console.WriteLine("是否现在安装 Npcap？[Y/n]");
+            Console.WriteLine("Install Npcap now? [Y/n]");
+            Console.Write("> ");
+
+            var answer = Console.ReadLine()?.Trim();
+            install = answer is null
+                      || answer.Length == 0
+                      || answer.Equals("y", StringComparison.OrdinalIgnoreCase)
+                      || answer.Equals("yes", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!install)
+        {
+            Bilingual.Say(
+                "已跳过 Npcap；防火墙主功能继续安装，反扫描不可用。",
+                "Npcap skipped; the firewall installs normally and anti-scan is unavailable.");
+            return;
+        }
+
+        if (!VerifyNpcapInstaller(payload.NpcapInstaller))
+        {
+            Bilingual.Fail(
+                "Npcap 安装包校验失败，已停止安装 Npcap。",
+                "The bundled Npcap installer failed verification; Npcap was not installed.");
+            return;
+        }
+
+        Bilingual.Say(
+            "正在打开 Npcap 官方安装程序…",
+            "Opening the official Npcap installer…");
+        Bilingual.Say(
+            "请在 Npcap 窗口里完成安装，然后回到本窗口。",
+            "Complete the Npcap setup, then return to this window.");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = payload.NpcapInstaller,
+                Arguments = "/winpcap_mode=disabled /loopback_support=disabled " +
+                            "/dot11_support=disabled /admin_only=enforced",
+                UseShellExecute = false,
+                CreateNoWindow = false,
+                WorkingDirectory = payload.DirectoryPath,
+            };
+
+            using var process = Process.Start(startInfo);
+
+            if (process is null)
+            {
+                Bilingual.Fail(
+                    "无法启动 Npcap 安装程序。",
+                    "Could not start the Npcap installer.");
+                return;
+            }
+
+            process.WaitForExit();
+            var code = process.ExitCode;
+
+            if (code is 0 or 3010)
+            {
+                var reboot = code == 3010
+                    ? "Npcap 安装成功，但需要重启后才会完全生效。"
+                    : "Npcap 安装完成。";
+
+                Bilingual.Say(reboot, code == 3010
+                    ? "Npcap installed; a reboot is required before it is fully active."
+                    : "Npcap installation completed.");
+            }
+            else if (code == 1)
+            {
+                Bilingual.Say(
+                    "Npcap 安装被取消；反扫描不可用。",
+                    "Npcap installation was cancelled; anti-scan is unavailable.");
+            }
+            else
+            {
+                Bilingual.Say(
+                    $"Npcap 安装未完成（退出码 {code}）；反扫描不可用。",
+                    $"Npcap installation did not complete (exit code {code}); anti-scan is unavailable.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Bilingual.Fail(
+                $"启动 Npcap 安装程序失败：{ex.Message}",
+                $"Failed to start the Npcap installer: {ex.Message}");
+        }
+
+        if (!NpcapLocator.IsAvailable)
+        {
+            Bilingual.Say(
+                "当前仍未检测到 Npcap；可以稍后重装 WinAppGuard 或手动安装 Npcap。",
+                "Npcap is still not detected; reinstall WinAppGuard later or install Npcap manually.");
+        }
+    }
+
+    private static bool VerifyNpcapInstaller(string path)
+    {
+        const string expectedHash =
+            "682B57E1C05EF375931975C9D6DED40888F4BFDF9F4B11571E654F962F1199B6";
+
+        try
+        {
+            var actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+
+            if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Authenticode 的 PE 签名提取目前没有 X509CertificateLoader 等价 API；
+            // 这里只读取签名者 Subject，真正的完整性由上面的固定 SHA-256 保证。
+#pragma warning disable SYSLIB0057
+            var cert = System.Security.Cryptography.X509Certificates.X509Certificate
+                .CreateFromSignedFile(path);
+#pragma warning restore SYSLIB0057
+
+            var subject = cert.Subject ?? string.Empty;
+            return subject.Contains("Nmap Software LLC", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private static int Repair(bool allowOwnerMismatch)
     {
         using var payload = LocatePayload();
-
         TryStopUiProcesses();
 
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
@@ -254,6 +445,8 @@ internal static class Program
         Directory.CreateDirectory(InstallDirectory);
         CopyPayload(payload);
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
+
+        MaybeInstallNpcap(payload);
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -1435,6 +1628,13 @@ internal static class Program
 
         CopyIfDifferent(payload.SetupInstaller, setupTarget);
         CopyIfDifferent(payload.SetupInstaller, uninstallTarget);
+
+        if (File.Exists(payload.NpcapLicense))
+        {
+            CopyIfDifferent(
+                payload.NpcapLicense,
+                Path.Combine(InstallDirectory, "Npcap-LICENSE.txt"));
+        }
     }
 
     private static void CopyIfDifferent(string source, string target)
@@ -1472,6 +1672,10 @@ internal static class Program
         internal string Service => Path.Combine(DirectoryPath, ServiceExeName);
 
         internal string SetupInstaller => Path.Combine(DirectoryPath, "WinAppGuardSetup.exe");
+
+        internal string NpcapInstaller => Path.Combine(DirectoryPath, EmbeddedPayload.NpcapInstallerName);
+
+        internal string NpcapLicense => Path.Combine(DirectoryPath, "Npcap-LICENSE.txt");
 
         public void Dispose()
         {

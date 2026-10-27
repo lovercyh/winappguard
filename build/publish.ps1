@@ -78,6 +78,19 @@ Copy-Item (Join-Path $distDir 'WinAppGuardSetup.exe') (Join-Path $distDir 'WinAp
 # 用户从 Releases 只需要下载 Setup + Uninstall；单独下载界面或服务是没用的。
 $payloadDir = Join-Path $root 'build\_payload'
 $payloadZip = Join-Path $root 'build\_payload.zip'
+$npcapInstaller = Join-Path $root 'third_party\npcap\npcap-1.90.exe'
+$npcapLicense = Join-Path $root 'third_party\npcap\LICENSE.txt'
+
+if (-not (Test-Path $npcapInstaller)) {
+    throw "缺少 Npcap 官方安装包：$npcapInstaller"
+}
+
+$npcapExpectedHash = '682B57E1C05EF375931975C9D6DED40888F4BFDF9F4B11571E654F962F1199B6'
+$npcapActualHash = (Get-FileHash $npcapInstaller -Algorithm SHA256).Hash
+
+if ($npcapActualHash -ne $npcapExpectedHash) {
+    throw "Npcap 安装包哈希不匹配：$npcapActualHash"
+}
 
 if (Test-Path $payloadDir) { Remove-Item $payloadDir -Recurse -Force }
 New-Item -ItemType Directory -Path $payloadDir | Out-Null
@@ -85,6 +98,8 @@ Copy-Item (Join-Path $distDir 'WinAppGuard.exe')     $payloadDir
 Copy-Item (Join-Path $distDir 'WinAppGuardSvc.exe')  $payloadDir
 # 安装器本体（未追加载荷的 base）：安装到 Program Files 后既能修复也能充当卸载器。
 Copy-Item (Join-Path $distDir 'WinAppGuardSetup.exe') $payloadDir
+Copy-Item $npcapInstaller (Join-Path $payloadDir 'npcap-1.90.exe')
+Copy-Item $npcapLicense (Join-Path $payloadDir 'Npcap-LICENSE.txt')
 
 if (Test-Path $payloadZip) { Remove-Item $payloadZip -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -134,7 +149,7 @@ if ($LASTEXITCODE -ne 0) { throw "发布自检工具失败，退出码 $LASTEXIT
 
 Copy-Item (Join-Path $selfCheckOut 'WinAppGuard.SelfCheck.exe') $distTools -Force
 
-foreach ($name in @('3.4-验收脚本.ps1', '3.5-验收脚本.ps1', '3.6-验收脚本.ps1', '3.7-验收脚本.ps1')) {
+foreach ($name in @('3.4-验收脚本.ps1', '3.5-验收脚本.ps1', '3.6-验收脚本.ps1', '3.7-验收脚本.ps1', '4.0-验收脚本.ps1')) {
     $acceptanceScript = Join-Path $root "docs\$name"
 
     if (Test-Path $acceptanceScript) {

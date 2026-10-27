@@ -126,6 +126,12 @@ internal static class WfpNativeMethods
     /// </summary>
     internal static readonly Guid LayerAleAuthConnectV6 = new("4a72393b-319f-44bc-84c3-ba54dcb3b6b4");
 
+    /// <summary>4.0：FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4，入站连接“接受”授权层。</summary>
+    internal static readonly Guid LayerAleAuthRecvAcceptV4 = new("e1cd9fe7-f4b5-4273-96c0-592e487b8650");
+
+    /// <summary>4.0：FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6。</summary>
+    internal static readonly Guid LayerAleAuthRecvAcceptV6 = new("a3b42c97-9f04-4672-b87e-cee9c483257f");
+
     /// <summary>FWPM_CONDITION_ALE_APP_ID：按程序身份（可执行文件路径）匹配。</summary>
     internal static readonly Guid ConditionAleAppId = new("d78e1e87-8644-4ea5-9437-d809ecefc971");
 

@@ -22,6 +22,8 @@ internal static class EmbeddedPayload
     private const string UiExeName = "WinAppGuard.exe";
     private const string ServiceExeName = "WinAppGuardSvc.exe";
     private const string SetupExeName = "WinAppGuardSetup.exe";
+    internal const string NpcapInstallerName = "npcap-1.90.exe";
+    private const string NpcapLicenseName = "Npcap-LICENSE.txt";
 
     /// <summary>
     /// 提取载荷。没有载荷返回 null。
@@ -77,7 +79,8 @@ internal static class EmbeddedPayload
             {
                 var name = Path.GetFileName(entry.FullName);
 
-                if (name is not (UiExeName or ServiceExeName or SetupExeName))
+                if (name is not (UiExeName or ServiceExeName or SetupExeName
+                    or NpcapInstallerName or NpcapLicenseName))
                 {
                     continue;
                 }

@@ -322,14 +322,19 @@ internal sealed class WfpEngine : IDisposable
         System.Net.IPAddress address,
         uint action,
         ulong weight,
-        bool persistent)
+        bool persistent,
+        bool inbound = false)
     {
         ThrowIfDisposed();
 
         var isV4 = address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
         var layerKey = isV4
-            ? WfpNativeMethods.LayerAleAuthConnectV4
-            : WfpNativeMethods.LayerAleAuthConnectV6;
+            ? (inbound
+                ? WfpNativeMethods.LayerAleAuthRecvAcceptV4
+                : WfpNativeMethods.LayerAleAuthConnectV4)
+            : (inbound
+                ? WfpNativeMethods.LayerAleAuthRecvAcceptV6
+                : WfpNativeMethods.LayerAleAuthConnectV6);
 
         var bytes = address.GetAddressBytes();
 

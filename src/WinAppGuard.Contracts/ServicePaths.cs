@@ -45,4 +45,10 @@ public static class ServicePaths
 
     /// <summary>3.7：IDS 设置、抑制和告警确认状态。</summary>
     public static string IdsStateFile => Path.Combine(IdsDirectory, "state.json");
+
+    /// <summary>4.0：反端口扫描设置与临时封禁状态（服务写，界面只读）。</summary>
+    public static string AntiScanDirectory => Path.Combine(DataDirectory, "antiscan");
+
+    /// <summary>4.0：反扫描设置、允许名单和未到期的临时封禁。</summary>
+    public static string AntiScanStateFile => Path.Combine(AntiScanDirectory, "state.json");
 }

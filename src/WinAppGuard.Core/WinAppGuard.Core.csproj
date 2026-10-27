@@ -16,7 +16,7 @@
     <AssemblyName>WinAppGuard.Core</AssemblyName>
     <RootNamespace>WinAppGuard</RootNamespace>
 
-    <Version>3.7</Version>
+    <Version>4.0</Version>
     <Company>lovercyh</Company>
     <Copyright>Copyright © 2026 lovercyh</Copyright>
   </PropertyGroup>

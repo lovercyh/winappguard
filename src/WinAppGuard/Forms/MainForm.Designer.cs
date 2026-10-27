@@ -102,6 +102,7 @@ partial class MainForm
     private TabPage _tabDns = null!;
     private TabPage _tabTraffic = null!;
     private TabPage _tabIds = null!;
+    private TabPage _tabAntiScan = null!;
 
     private Label _settingsNoticeLabel = null!;
     private GroupBox _autostartPanel = null!;
@@ -253,6 +254,7 @@ partial class MainForm
         _tabDns = new TabPage();
         _tabTraffic = new TabPage();
         _tabIds = new TabPage();
+        _tabAntiScan = new TabPage();
         _tabSettings = new TabPage();
         _settingsNoticeLabel = new Label();
         _autostartPanel = new GroupBox();
@@ -400,6 +402,11 @@ partial class MainForm
         _tabIds.Text = "IDS";
         _tabIds.UseVisualStyleBackColor = true;
 
+        _tabAntiScan.Name = "_tabAntiScan";
+        _tabAntiScan.Padding = new Padding(3);
+        _tabAntiScan.Text = "防护";
+        _tabAntiScan.UseVisualStyleBackColor = true;
+
         // ==================================================================
         // 标签页容器
         // ==================================================================
@@ -407,6 +414,7 @@ partial class MainForm
         _tabControl.Controls.Add(_tabConnections);
         _tabControl.Controls.Add(_tabTraffic);
         _tabControl.Controls.Add(_tabIds);
+        _tabControl.Controls.Add(_tabAntiScan);
         _tabControl.Controls.Add(_tabRules);
         _tabControl.Controls.Add(_tabWhitelist);
         _tabControl.Controls.Add(_tabAudit);

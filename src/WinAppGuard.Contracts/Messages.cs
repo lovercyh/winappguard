@@ -68,6 +68,17 @@ public sealed class ServiceRequest
 
     /// <summary>3.7：随设置一起批量取消的抑制 id（界面保存设置时用，避免多次 UAC）。</summary>
     public List<string>? IdsRemoveSuppressionIds { get; set; }
+
+    // ---- 4.0：反扫描 ----
+
+    /// <summary>修改反扫描设置（null = 不改）。</summary>
+    public AntiScanSettingsDto? AntiScanSettings { get; set; }
+
+    /// <summary>要解除封禁的来源 IP；<see cref="AntiScanReleaseAll"/> 为 true 时忽略。</summary>
+    public string? AntiScanAddress { get; set; }
+
+    /// <summary>true = 解除全部临时封禁。</summary>
+    public bool AntiScanReleaseAll { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -137,6 +148,16 @@ public sealed class ServiceResponse
 
     /// <summary>IDS 运行状态。</summary>
     public IdsStatusDto? IdsStatus { get; set; }
+
+    // ---- 4.0：反扫描 ----
+
+    public AntiScanStatusDto? AntiScanStatus { get; set; }
+
+    public List<AntiScanEventDto>? AntiScanEvents { get; set; }
+
+    public List<AntiScanBlockDto>? AntiScanBlocks { get; set; }
+
+    public AntiScanSettingsDto? AntiScanSettings { get; set; }
 }
 
 /// <summary>
@@ -266,6 +287,92 @@ public sealed class IdsStatusDto
     public DateTime? LastAlertUtc { get; set; }
 
     public int SuppressionCount { get; set; }
+}
+
+/// <summary>4.0：反扫描设置。</summary>
+public sealed class AntiScanSettingsDto
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>standard / conservative。</summary>
+    public string Sensitivity { get; set; } = "standard";
+
+    /// <summary>检测到高危扫描时是否自动临时封禁来源 IP；默认关闭。</summary>
+    public bool AutoBlock { get; set; }
+
+    /// <summary>临时封禁分钟数；5–60。</summary>
+    public int BlockMinutes { get; set; } = 10;
+
+    /// <summary>永不自动封禁的地址（IPv4/IPv6）。</summary>
+    public List<string>? Allowlist { get; set; }
+}
+
+/// <summary>4.0：一次入站扫描事件。</summary>
+public sealed class AntiScanEventDto
+{
+    public string Id { get; set; } = string.Empty;
+
+    public DateTime TimeUtc { get; set; }
+
+    public string SourceAddress { get; set; } = string.Empty;
+
+    public int DistinctPorts { get; set; }
+
+    public int DistinctHosts { get; set; }
+
+    public int SynCount { get; set; }
+
+    public int WindowSeconds { get; set; }
+
+    /// <summary>medium / high。</summary>
+    public string Severity { get; set; } = "medium";
+
+    /// <summary>alert / blocked。</summary>
+    public string Action { get; set; } = "alert";
+
+    public DateTime? BlockedUntilUtc { get; set; }
+}
+
+/// <summary>4.0：一条临时入站封禁。</summary>
+public sealed class AntiScanBlockDto
+{
+    public string Address { get; set; } = string.Empty;
+
+    public DateTime BlockedUntilUtc { get; set; }
+
+    public string Reason { get; set; } = string.Empty;
+
+    public string? EventId { get; set; }
+}
+
+/// <summary>4.0：反扫描运行状态。</summary>
+public sealed class AntiScanStatusDto
+{
+    public bool Enabled { get; set; }
+
+    public bool NpcapAvailable { get; set; }
+
+    public string? NpcapVersion { get; set; }
+
+    public string? NpcapPath { get; set; }
+
+    public bool Collecting { get; set; }
+
+    public long EventsSeen { get; set; }
+
+    public int EventCount { get; set; }
+
+    public int BlockedCount { get; set; }
+
+    public bool AutoBlock { get; set; }
+
+    public string Sensitivity { get; set; } = "standard";
+
+    public int BlockMinutes { get; set; }
+
+    public DateTime? LastEventUtc { get; set; }
+
+    public string? LastError { get; set; }
 }
 
 /// <summary>
@@ -407,6 +514,16 @@ public sealed class ServiceStatus
 
     /// <summary>IDS 观察到的网络事件数。</summary>
     public long IdsEventsSeen { get; set; }
+
+    // ---- 4.0：反扫描 ----
+
+    public bool AntiScanEnabled { get; set; }
+
+    public bool AntiScanCollecting { get; set; }
+
+    public bool AntiScanNpcapAvailable { get; set; }
+
+    public int AntiScanBlockedCount { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

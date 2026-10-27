@@ -12,8 +12,9 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 它不让你去翻程序列表，而是直接展示**当前正在联网的 TCP 连接** ——
 从「现在是哪个程序在联网」出发，到「已阻止」结束。
 
-> WinAppGuard 本身不处理任何流量。真正生效的是基于 WFP 的独立过滤引擎：
+> WinAppGuard 不转发、不修改任何流量。真正生效的是基于 WFP 的独立过滤引擎：
 > WinAppGuard 只负责按你的选择创建和清理 WFP 过滤器，数据包匹配与拦截由 Windows 内核 WFP 执行。
+> 4.0 的反扫描只读取入站 TCP 头做检测，不读载荷、不阻断数据包。
 > 从 2.0 起它不再使用 Windows 防火墙，也不再修改 Windows 防火墙的任何设置。
 >
 > **3.0 起拆成「防护服务 + 界面」**：规则写入、严格模式会话、审计采集都由服务
@@ -26,6 +27,11 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 > **3.7 新增用户态 Flow IDS**：用连接元数据与 DNS 检测周期性外联、端口/主机扫描、
 > 内网横向和 DNS 异常。**只检测、不阻断**，默认开启，告警本地保留 30 天。详见
 > [`docs/3.7-用户态FlowIDS设计.md`](docs/3.7-用户态FlowIDS设计.md)。
+>
+> **4.0 新增反端口扫描**：通过可选的 Npcap 采集入站 TCP SYN，检测端口扫描，
+> 并可临时封禁扫描来源 IP；**自动封禁默认关闭**，只封新连接。安装器可选安装
+> 官方 Npcap，不会静默安装。详见
+> [`docs/4.0-反端口扫描设计.md`](docs/4.0-反端口扫描设计.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
@@ -58,6 +64,9 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 - **IDS（只检测、不阻断）**：「IDS」页默认开启，用连接元数据与 DNS 检测
   **周期性外联、端口/主机扫描、内网横向、DNS 异常**；告警本地保留 30 天，
   可确认 / 抑制 / 清空。不做 DPI / HTTPS 解密，不抓包，不自动阻断。
+- **反端口扫描（4.0）**：「防护」页通过可选的 Npcap 检测入站 TCP SYN 端口扫描；
+  可临时封禁扫描来源 IP（5 / 10 / 30 / 60 分钟），自动封禁**默认关闭**，
+  只拦新连接、不切断已有连接。Npcap 未安装时反扫描不可用，不影响防火墙主功能。
 - **临时锁网**：严格模式面板 / 托盘菜单提供 **30 分钟 / 2 小时**；
   到点自动恢复，服务停止或崩溃也会立即恢复，不残留断网状态。
 - **提权/受保护进程路径**：界面读不到时由服务（SYSTEM）代查并补全，
@@ -97,6 +106,8 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 - ❌ **不**碰别人创建的过滤器或规则 —— 只看、只删自己子层 GUID 下的过滤器
 - ❌ **不**抓包、不做 DPI / HTTPS 解密：流量只是 ETW 字节计数，DNS 只记域名，
   不保存任何载荷或 URL 路径
+- ❌ 反扫描只检测**入站 TCP SYN**，不做 UDP 扫描、载荷检测或永久自动封禁；
+  Npcap 未安装时反扫描不可用
 - ❌ **不**阻止系统关键进程（`lsass.exe`、`svchost.exe`、它自己……）——
   这道护栏只管「阻止」，不管「允许」（放行永远不会把谁锁在外面）
 - ⚠️ 它**默认会联网**，但只有三个明确用途（见下）。**没有遥测、没有统计、没有更新检查**
@@ -160,13 +171,15 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 
 ## 界面
 
-| IDS（只检测、不阻断） | 流量 |
+| IDS（只检测、不阻断） | 防护（反端口扫描） |
 |---|---|
-| ![IDS 页](docs/screenshots/06-ids.png) | ![流量页](docs/screenshots/07-traffic.png) |
-| **DNS** | **黑名单** |
-| ![DNS 页](docs/screenshots/08-dns.png) | ![黑名单页](docs/screenshots/02-rules.png) |
-| **严格模式下白名单** | **设置** |
-| ![严格模式下白名单](docs/screenshots/05-whitelist.png) | ![设置页](docs/screenshots/03-settings.png) |
+| ![IDS 页](docs/screenshots/06-ids.png) | ![防护页](docs/screenshots/09-protection.png) |
+| **流量** | **DNS** |
+| ![流量页](docs/screenshots/07-traffic.png) | ![DNS 页](docs/screenshots/08-dns.png) |
+| **黑名单** | **严格模式下白名单** |
+| ![黑名单页](docs/screenshots/02-rules.png) | ![严格模式下白名单](docs/screenshots/05-whitelist.png) |
+| **设置** | |
+| ![设置页](docs/screenshots/03-settings.png) | |
 
 ![阻止确认框](docs/screenshots/04-confirm-block.png)
 
@@ -192,6 +205,8 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 复制文件 → 创建服务（SYSTEM、自动启动）→ 创建桌面快捷方式。
 
 - 目标机器**不需要安装 .NET**；安装器已内置界面、服务和卸载器。
+- 安装器可选安装官方 Npcap（反端口扫描需要）；不勾选也能正常使用防火墙，反扫描不可用。
+- Npcap 由官方 GUI 安装，不静默安装；安装目录会保留 `Npcap-LICENSE.txt`。
 - 安装包和卸载器**没有代码签名**，SmartScreen 首次运行会提示「未知发布者」，这是预期情况。
 - 下载后可用发布说明里的 SHA-256 校验文件是否被篡改。
 
@@ -206,6 +221,7 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 - Windows 10 / 11 x64
 - 安装与 CLI 需要管理员权限；界面用普通权限运行，改规则时弹一次 UAC
 - 运行发布包不需要 .NET；从源码构建需要 .NET SDK 10
+- 反端口扫描需要 Npcap（安装器可选安装；不安装不影响其它功能）
 
 ## 工作原理
 
@@ -225,6 +241,8 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 | 流量统计 | ETW `Microsoft-Windows-Kernel-Network` 的 TCP/UDP 收发事件，按 PID 累加；不抓包、不看载荷 |
 | DNS 记录 | ETW `Microsoft-Windows-DNS-Client`，只取域名、PID 和结果码；内存保留最近 2000 条 |
 | Flow IDS | 复用上面两个 ETW 会话，把连接五元组 / 次数 / 字节 / 域名交给内存规则引擎；只产生告警，不 inline 阻断 |
+| 反端口扫描 | 可选 Npcap 在 NDIS 层只抓入站 TCP SYN（BPF 过滤），按来源 IP 统计端口 / 主机数；不读载荷 |
+| 临时 IP 封禁 | 用户态 WFP `ALE_AUTH_RECV_ACCEPT_V4/V6` 过滤器，按远端 IP 拦新入站连接；到期或手动解除，不切断已有连接 |
 
 ## 可验证的信任
 
@@ -425,6 +443,8 @@ WinAppGuard.exe --recover
 | [`docs/3.6-流量记录设计.md`](docs/3.6-流量记录设计.md) | 3.6 流量页的聚合、排序与清空 |
 | [`docs/3.7-用户态FlowIDS设计.md`](docs/3.7-用户态FlowIDS设计.md) | 3.7 用户态 Flow IDS：规则、阈值、存储与边界 |
 | [`docs/3.7-VM验收.md`](docs/3.7-VM验收.md) | 3.7 自动验收与 VM 实测结果 |
+| [`docs/4.0-反端口扫描设计.md`](docs/4.0-反端口扫描设计.md) | 4.0 Npcap 采集、扫描规则、WFP 入站封禁与边界 |
+| [`docs/4.0-VM验收.md`](docs/4.0-VM验收.md) | 4.0 Npcap 安装、扫描测试与 soak 验收 |
 
 ## 参与贡献
 

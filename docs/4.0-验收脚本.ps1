@@ -1,18 +1,36 @@
 ﻿# 4.0 自动验收（VM）
 #
 # 用法（管理员 PowerShell）：
-#   powershell -ExecutionPolicy Bypass -File .\4.0-验收脚本.ps1
-#   powershell -ExecutionPolicy Bypass -File .\4.0-验收脚本.ps1 -SkipServiceRestart
+#   cd <项目>\dist-tools
+#   & .\4.0-验收脚本.ps1
+#   & .\4.0-验收脚本.ps1 -SkipServiceRestart
+#   & .\4.0-验收脚本.ps1 -LogPath "$env:USERPROFILE\Desktop\wag-4.0-验收.txt"
+#
+# 必须和 WinAppGuard.SelfCheck.exe 放在同一目录（dist-tools）；放错目录会直接报错退出，
+# 不会静默跳过 3–11 步。
 #
 # 只应在验收用的 VM 上跑；会重启服务、短暂断网，并清空反扫描事件 / 临时封禁 / 流量计数。
 # 不会修改规则、白名单或 Windows 防火墙设置。
 
 param(
-    [switch]$SkipServiceRestart
+    [switch]$SkipServiceRestart,
+    [string]$LogPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$script:transcriptStarted = $false
+
+if ($LogPath) {
+    try {
+        Start-Transcript -Path $LogPath -Force | Out-Null
+        $script:transcriptStarted = $true
+    }
+    catch {
+        Write-Host "  [警告] 无法写入日志文件：$LogPath（$($_.Exception.Message)）" -ForegroundColor Yellow
+    }
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $selfCheck = Join-Path $scriptDir 'WinAppGuard.SelfCheck.exe'
@@ -53,6 +71,33 @@ if (-not $admin) {
     throw '请用管理员 PowerShell 运行本脚本。'
 }
 
+# 自检工具必须和脚本在同一目录。放错目录（例如 docs）时直接失败，
+# 否则 3–11 步会被静默跳过，最后还会误报“只剩 3 项失败”。
+if (-not (Test-Path $selfCheck)) {
+    $candidates = @(
+        (Join-Path $scriptDir '..\dist-tools'),
+        (Join-Path $scriptDir '..\dist')
+    ) | ForEach-Object { [IO.Path]::GetFullPath($_) }
+
+    $found = $candidates | Where-Object { Test-Path (Join-Path $_ 'WinAppGuard.SelfCheck.exe') } |
+        Select-Object -First 1
+
+    if ($found) {
+        $selfCheck = Join-Path $found 'WinAppGuard.SelfCheck.exe'
+        $scriptDir = $found
+        Write-Host "  [提示] 脚本不在 dist-tools，已自动改用：$scriptDir" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host '  [失败] 找不到 WinAppGuard.SelfCheck.exe，验收无法继续。' -ForegroundColor Red
+        Write-Host '         请先 cd 到 dist-tools，再运行本脚本，例如：' -ForegroundColor Yellow
+        Write-Host '           cd <项目>\dist-tools' -ForegroundColor Yellow
+        Write-Host '           & .\4.0-验收脚本.ps1 -LogPath "$env:USERPROFILE\Desktop\wag-4.0-验收.txt"' -ForegroundColor Yellow
+
+        if ($script:transcriptStarted) { Stop-Transcript | Out-Null }
+        exit 2
+    }
+}
+
 Write-Host '===== 1. 安装、版本与 Npcap =====' -ForegroundColor Cyan
 
 $uiVersion = Get-ProductVersion $uiExe
@@ -61,18 +106,32 @@ $distUiVersion = Get-ProductVersion (Join-Path $scriptDir 'WinAppGuard.exe')
 $distSvcVersion = Get-ProductVersion (Join-Path $scriptDir 'WinAppGuardSvc.exe')
 $wpcap = Join-Path $env:SystemRoot 'System32\Npcap\wpcap.dll'
 
+$npcapVersion = $null
+foreach ($key in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\NpcapInst',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\NpcapInst')) {
+    if (Test-Path $key) {
+        $npcapVersion = (Get-ItemProperty $key).DisplayVersion
+        break
+    }
+}
+
+if (-not $npcapVersion -and (Test-Path $wpcap)) {
+    $npcapVersion = (Get-Item $wpcap).VersionInfo.FileVersion
+}
+
 Write-Host "  界面：$uiVersion"
 Write-Host "  服务：$svcVersion"
 Write-Host "  验收包界面：$distUiVersion"
 Write-Host "  验收包服务：$distSvcVersion"
-Write-Host "  Npcap：$(if (Test-Path $wpcap) { (Get-Item $wpcap).VersionInfo.FileVersion } else { '未安装' })"
+Write-Host "  Npcap：$(if (Test-Path $wpcap) { "$npcapVersion（$wpcap）" } else { '未安装' })"
+Write-Host "  脚本目录：$scriptDir"
 
 Assert-True '界面版本是 4.0' ($uiVersion -like '4.0*') "$uiVersion"
 Assert-True '服务版本是 4.0' ($svcVersion -like '4.0*') "$svcVersion"
 Assert-True '已安装的界面与验收包一致' ($uiVersion -eq $distUiVersion) "安装=$uiVersion 包=$distUiVersion"
 Assert-True '已安装的服务与验收包一致' ($svcVersion -eq $distSvcVersion) "安装=$svcVersion 包=$distSvcVersion"
 Assert-True 'Npcap 已安装（反扫描需要）' (Test-Path $wpcap) $wpcap
-Assert-True '自检工具存在' (Test-Path $selfCheck) $selfCheck
 Assert-True '服务已安装' ($null -ne (Get-Service $serviceName -ErrorAction SilentlyContinue))
 
 Write-Host ''
@@ -222,6 +281,8 @@ Write-Host '  6) 回归：连接页流量列、DNS 页、流量页、IDS 页、3
 Write-Host '  7) 24 小时 soak：CPU / 内存 / 反扫描事件数 / 临时封禁数 / 丢弃计数。'
 
 Write-Host ''
+if ($script:transcriptStarted) { Stop-Transcript | Out-Null }
+
 if ($script:failures.Count -eq 0) {
     Write-Host '===== 自动检查全部通过 =====' -ForegroundColor Green
     exit 0

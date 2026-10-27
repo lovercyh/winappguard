@@ -11816,6 +11816,11 @@ internal static class Program
         CheckAssertion(results, "pcap_pkthdr 托管布局是 16 字节（Windows timeval 为 32 位）",
             NpcapCapture.PacketHeaderSize == 16);
 
+        var npcapPath = NpcapLocator.FindWpcapPath();
+        W($"    Npcap = {npcapPath ?? "未安装"} / 版本 {NpcapLocator.GetVersion() ?? "?"}");
+        CheckAssertion(results, "Npcap 版本可读（未安装时跳过）",
+            npcapPath is null || !string.IsNullOrWhiteSpace(NpcapLocator.GetVersion()));
+
         var directory = Path.Combine(
             Path.GetTempPath(), "WinAppGuard-AntiScanTest-" + Guid.NewGuid().ToString("N"));
 

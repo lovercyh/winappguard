@@ -51,7 +51,7 @@ public sealed partial class MainForm
             Width = 1000,
             Height = 20,
             ForeColor = Color.FromArgb(191, 87, 0),
-            Text = "反端口扫描只检测入站 TCP SYN，不读载荷、不阻断已有连接；自动封禁默认关闭。",
+            Text = Localizer.T("反端口扫描只检测入站 TCP SYN，不读载荷、不阻断已有连接；自动封禁默认关闭。"),
             AutoEllipsis = true,
         };
 
@@ -59,7 +59,7 @@ public sealed partial class MainForm
         {
             Location = new Point(0, 26),
             Width = 180,
-            PlaceholderText = "搜索：来源 IP / 处置",
+            PlaceholderText = Localizer.T("搜索：来源 IP / 处置"),
         };
         _antiSearchBox.TextChanged += (_, _) => RebuildAntiScanView();
 
@@ -78,45 +78,74 @@ public sealed partial class MainForm
         _antiSeverityFilter.SelectedIndex = 0;
         _antiSeverityFilter.SelectedIndexChanged += (_, _) => RebuildAntiScanView();
 
+        // 按钮用 FlowLayoutPanel + AutoSize：150% DPI 下字体变大时按钮跟着变宽，
+        // 不会出现文字被截断（写死像素宽度在 13.5pt 字体下必然截断）。
+        var actions = new FlowLayoutPanel
+        {
+            Location = new Point(288, 22),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            FlowDirection = FlowDirection.LeftToRight,
+        };
+
         _antiRefreshButton = new Button
         {
-            Location = new Point(288, 23),
-            Width = 68,
-            Text = "刷新",
+            Text = Localizer.T("刷新"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(68, 27),
+            Margin = new Padding(0, 0, 8, 0),
         };
         _antiRefreshButton.Click += (_, _) => _ = RefreshAntiScanAsync();
 
         _antiReleaseButton = new Button
         {
-            Location = new Point(364, 23),
-            Width = 128,
-            Text = "解除选中",
+            Text = Localizer.T("解除选中"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(88, 27),
+            Margin = new Padding(0, 0, 8, 0),
         };
         _antiReleaseButton.Click += OnAntiScanReleaseClick;
 
         _antiReleaseAllButton = new Button
         {
-            Location = new Point(500, 23),
-            Width = 88,
-            Text = "解除全部",
+            Text = Localizer.T("解除全部"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(88, 27),
+            Margin = new Padding(0, 0, 8, 0),
         };
         _antiReleaseAllButton.Click += OnAntiScanReleaseAllClick;
 
         _antiClearButton = new Button
         {
-            Location = new Point(596, 23),
-            Width = 76,
-            Text = "清空…",
+            Text = Localizer.T("清空…"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(76, 27),
+            Margin = new Padding(0, 0, 8, 0),
         };
         _antiClearButton.Click += OnAntiScanClearClick;
 
         _antiSettingsButton = new Button
         {
-            Location = new Point(680, 23),
-            Width = 88,
-            Text = "设置…",
+            Text = Localizer.T("设置…"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(76, 27),
         };
         _antiSettingsButton.Click += OnAntiScanSettingsClick;
+
+        actions.Controls.AddRange(new Control[]
+        {
+            _antiRefreshButton,
+            _antiReleaseButton,
+            _antiReleaseAllButton,
+            _antiClearButton,
+            _antiSettingsButton,
+        });
 
         _antiStatusLabel = new Label
         {
@@ -133,7 +162,7 @@ public sealed partial class MainForm
             Width = 1000,
             Height = 22,
             ForeColor = SystemColors.GrayText,
-            Text = "Npcap 只用于抓取 TCP SYN；封禁使用 WFP 入站 accept 层，只拦新连接。",
+            Text = Localizer.T("Npcap 只用于抓取 TCP SYN；封禁使用 WFP 入站 accept 层，只拦新连接。"),
             AutoEllipsis = true,
         };
 
@@ -150,11 +179,7 @@ public sealed partial class MainForm
             notice,
             _antiSearchBox,
             _antiSeverityFilter,
-            _antiRefreshButton,
-            _antiReleaseButton,
-            _antiReleaseAllButton,
-            _antiClearButton,
-            _antiSettingsButton,
+            actions,
             _antiStatusLabel,
             hint,
         });
@@ -494,7 +519,7 @@ public sealed partial class MainForm
 
             _antiSettings = response.AntiScanSettings ?? updated;
             _antiStatus = response.AntiScanStatus ?? _antiStatus;
-            _antiSignatureReset();
+            ResetAntiScanSignatures();
             _ = RefreshAntiScanAsync();
 
             ShowTrayBalloon(
@@ -534,7 +559,7 @@ public sealed partial class MainForm
 
             _antiBlocks = response.AntiScanBlocks ?? _antiBlocks;
             _antiStatus = response.AntiScanStatus ?? _antiStatus;
-            _antiSignatureReset();
+            ResetAntiScanSignatures();
             RebuildAntiScanView();
 
             ShowTrayBalloon(
@@ -595,7 +620,7 @@ public sealed partial class MainForm
 
             _antiBlocks = response.AntiScanBlocks ?? new List<AntiScanBlockDto>();
             _antiStatus = response.AntiScanStatus ?? _antiStatus;
-            _antiSignatureReset();
+            ResetAntiScanSignatures();
             RebuildAntiScanView();
 
             ShowTrayBalloon(
@@ -649,7 +674,7 @@ public sealed partial class MainForm
             _antiEvents = new List<AntiScanEventDto>();
             _antiBlocks = new List<AntiScanBlockDto>();
             _antiStatus = response.AntiScanStatus ?? _antiStatus;
-            _antiSignatureReset();
+            ResetAntiScanSignatures();
             RebuildAntiScanView();
 
             ShowTrayBalloon(
@@ -665,7 +690,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void _antiSignatureReset()
+    private void ResetAntiScanSignatures()
     {
         _antiEventSignature = null;
         _antiBlockSignature = null;

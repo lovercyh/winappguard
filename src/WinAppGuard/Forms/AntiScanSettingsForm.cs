@@ -38,10 +38,16 @@ internal sealed class AntiScanSettingsForm : Form
             RowCount = 11,
         };
 
-        for (var i = 0; i < 11; i++)
+        // 行高：允许名单那一行必须给固定高度，否则 Dock=Fill 的多行文本框
+        // 在 AutoSize 行里会被压成 0 高。
+        for (var i = 0; i < 8; i++)
         {
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
+
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var npcap = new Label
         {
@@ -49,8 +55,10 @@ internal sealed class AntiScanSettingsForm : Form
                 ? Localizer.F("Npcap：已安装（{0}）", npcapVersion ?? "?")
                 : Localizer.T("Npcap：未安装，反扫描不可用。安装 WinAppGuard 时可选安装 Npcap。"),
             AutoSize = true,
+            // 限制最大宽度，长句按窗口宽度换行；不限制的话表格会按单行宽度撑大，
+            // 把右侧按钮挤出对话框。
+            MaximumSize = new Size(460, 0),
             ForeColor = npcapAvailable ? Color.FromArgb(0, 120, 0) : Color.FromArgb(191, 87, 0),
-            Dock = DockStyle.Fill,
         };
 
         _enabled = new CheckBox
@@ -130,8 +138,8 @@ internal sealed class AntiScanSettingsForm : Form
                 "封禁只拦新入站连接，不会切断已有连接；解除后立刻恢复。\n" +
                 "服务关闭或反扫描关闭时，临时封禁会解除。"),
             AutoSize = true,
+            MaximumSize = new Size(460, 0),
             ForeColor = SystemColors.GrayText,
-            Dock = DockStyle.Fill,
             Margin = new Padding(3, 10, 3, 3),
         };
 
@@ -174,6 +182,11 @@ internal sealed class AntiScanSettingsForm : Form
         layout.Controls.Add(buttons, 0, 10);
 
         Controls.Add(layout);
+
+        // 高度按内容算：不同语言 / DPI 下标签换行数不同，写死高度会把按钮挤出窗口。
+        var preferred = layout.GetPreferredSize(new Size(520, 0));
+        ClientSize = new Size(520, Math.Clamp(preferred.Height, 320, 760));
+
         AcceptButton = ok;
         CancelButton = cancel;
 

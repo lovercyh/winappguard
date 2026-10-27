@@ -1675,7 +1675,7 @@ internal static class Program
 
         internal string NpcapInstaller => Path.Combine(DirectoryPath, EmbeddedPayload.NpcapInstallerName);
 
-        internal string NpcapLicense => Path.Combine(DirectoryPath, "Npcap-LICENSE.txt");
+        internal string NpcapLicense => Path.Combine(DirectoryPath, EmbeddedPayload.NpcapLicenseName);
 
         public void Dispose()
         {

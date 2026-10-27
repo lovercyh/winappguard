@@ -23,7 +23,7 @@ internal static class EmbeddedPayload
     private const string ServiceExeName = "WinAppGuardSvc.exe";
     private const string SetupExeName = "WinAppGuardSetup.exe";
     internal const string NpcapInstallerName = "npcap-1.90.exe";
-    private const string NpcapLicenseName = "Npcap-LICENSE.txt";
+    internal const string NpcapLicenseName = "Npcap-LICENSE.txt";
 
     /// <summary>
     /// 提取载荷。没有载荷返回 null。

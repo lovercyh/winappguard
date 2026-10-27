@@ -39,8 +39,7 @@ public sealed class NpcapCapture : IDisposable
     public Action<string>? Log { get; set; }
 
     public bool IsRunning
-    {
-        get
+    {        get
         {
             lock (_gate)
             {
@@ -55,6 +54,12 @@ public sealed class NpcapCapture : IDisposable
     {
         get { lock (_gate) { return _lastError; } }
     }
+
+    /// <summary>
+    /// 自检用：pcap_pkthdr 在 Windows 上固定 16 字节（两个 32 位时间字段 + caplen + len）。
+    /// 这个布局一旦写错，caplen 会从错误偏移读出，导致越界读包缓冲。
+    /// </summary>
+    internal static int PacketHeaderSize => Marshal.SizeOf<PcapPacketHeader>();
 
     public bool Start()
     {
@@ -612,11 +617,18 @@ public sealed class NpcapCapture : IDisposable
         public IntPtr Instructions;
     }
 
+    /// <summary>
+    /// <c>struct pcap_pkthdr</c>。
+    ///
+    /// ⚠️ Windows 上 <c>timeval</c> 的两个字段是 **32 位 long**（LLP64），不是 C# 的
+    /// <c>long</c>（64 位）。这里必须用 <c>int</c>，否则结构体变成 24 字节，
+    /// <c>caplen</c> 会从错误偏移读出，随后 <c>Marshal.Copy</c> 会越界读包缓冲。
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct PcapPacketHeader
     {
-        public long TimestampSeconds;
-        public long TimestampMicroseconds;
+        public int TimestampSeconds;
+        public int TimestampMicroseconds;
         public uint CaptureLength;
         public uint OriginalLength;
     }

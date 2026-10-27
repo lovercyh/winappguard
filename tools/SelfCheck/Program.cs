@@ -4423,22 +4423,30 @@ internal static class Program
                                 items.All(text => !HasCjk(text)));
                         }
 
-                        if (TryGetField<Button>(form, "_antiReleaseButton", out var antiRelease)
+                        if (TryGetField<Button>(form, "_antiRefreshButton", out var antiRefresh)
+                            && TryGetField<Button>(form, "_antiReleaseButton", out var antiRelease)
                             && TryGetField<Button>(form, "_antiReleaseAllButton", out var antiReleaseAll)
+                            && TryGetField<Button>(form, "_antiClearButton", out var antiClear)
                             && TryGetField<Button>(form, "_antiSettingsButton", out var antiSettings))
                         {
-                            var buttons = new[] { antiRelease, antiReleaseAll, antiSettings };
+                            var buttons = new[]
+                            {
+                                antiRefresh, antiRelease, antiReleaseAll, antiClear, antiSettings,
+                            };
                             var truncated = buttons
                                 .Select(button => new
                                 {
                                     Button = button,
-                                    Need = TextRenderer.MeasureText(button.Text, button.Font).Width + 16,
+                                    // 防护页按钮是 AutoSize，WinForms 只会额外给约 7px 内边距；
+                                    // 留 6px 余量即可判断是否截断。
+                                    Need = TextRenderer.MeasureText(button.Text, button.Font).Width + 6,
                                 })
                                 .Where(item => item.Need > item.Button.Width)
                                 .Select(item => item.Button.Text)
                                 .ToList();
 
-                            W("    防护按钮 = " + string.Join(" | ", buttons.Select(button => button.Text)));
+                            W("    防护按钮 = " + string.Join(" | ", buttons.Select(button =>
+                                $"{button.Text}({button.Width}px)")));
                             CheckAssertion(results, "英文：防护按钮无中文且不截断",
                                 truncated.Count == 0
                                 && buttons.All(button => !HasCjk(button.Text)));
@@ -4725,6 +4733,30 @@ internal static class Program
 
                         CheckAssertion(results, "英文：防护设置对话框无中文",
                             leftovers.Count == 0 && !HasCjk(antiDialog.Text));
+
+                        antiDialog.PerformLayout();
+
+                        if (TryGetField<TextBox>(antiDialog, "_allowlist", out var allowBox)
+                            && antiDialog.AcceptButton is Control acceptButton)
+                        {
+                            var table = antiDialog.Controls[0];
+                            var tablePreferred = table.GetPreferredSize(Size.Empty);
+
+                            W($"    防护设置：允许名单框高 {allowBox.Height}px / " +
+                              $"客户端 {antiDialog.ClientSize.Width}x{antiDialog.ClientSize.Height}px / " +
+                              $"内容需要 {tablePreferred.Width}x{tablePreferred.Height}px");
+
+                            CheckAssertion(results, "防护设置：允许名单框有可用高度",
+                                allowBox.Height >= 60);
+                            CheckAssertion(results, "防护设置：内容不超出对话框",
+                                acceptButton.Right <= antiDialog.ClientSize.Width
+                                && acceptButton.Bottom <= antiDialog.ClientSize.Height
+                                && tablePreferred.Width <= antiDialog.ClientSize.Width);
+                        }
+                        else
+                        {
+                            CheckAssertion(results, "防护设置：找得到允许名单框与按钮", false);
+                        }
                     }
                     else
                     {
@@ -11781,6 +11813,9 @@ internal static class Program
         CheckAssertion(results, "事件计数为正",
             cooldownAnalyzer.EventsSeen > 0);
 
+        CheckAssertion(results, "pcap_pkthdr 托管布局是 16 字节（Windows timeval 为 32 位）",
+            NpcapCapture.PacketHeaderSize == 16);
+
         var directory = Path.Combine(
             Path.GetTempPath(), "WinAppGuard-AntiScanTest-" + Guid.NewGuid().ToString("N"));
 
@@ -12222,14 +12257,17 @@ internal static class Program
                         .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
                         .Sum(column => column.MinimumWidth);
 
+                    var actionsPanel = antiSettings.Parent;
+
                     W($"    980 宽防护：列宽合计 {antiFixedWidth + antiFillMin}px / " +
-                      $"客户区 {antiGrid.ClientSize.Width}px；设置按钮右边缘 {antiSettings.Right}px / " +
+                      $"客户区 {antiGrid.ClientSize.Width}px；按钮组右边缘 {actionsPanel?.Right}px / " +
                       $"顶栏 {antiSearch.Parent?.Width}px");
 
                     CheckAssertion(results, "最小宽度下防护列不溢出",
                         antiFixedWidth + antiFillMin <= antiGrid.ClientSize.Width);
                     CheckAssertion(results, "最小宽度下防护顶部按钮不越界",
-                        antiSettings.Right <= (antiSearch.Parent?.ClientSize.Width ?? 0));
+                        actionsPanel is not null
+                        && actionsPanel.Right <= (antiSearch.Parent?.ClientSize.Width ?? 0));
                 }
             }
         }

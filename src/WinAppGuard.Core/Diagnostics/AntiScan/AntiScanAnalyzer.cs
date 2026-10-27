@@ -131,7 +131,11 @@ public sealed class AntiScanAnalyzer
                 state.Hits.RemoveRange(0, state.Hits.Count - MaxHitsPerSource);
             }
 
-            PruneStateLocked(state, now);
+            if (state.Hits.Count % 64 == 0
+                || now - state.LastPruneUtc >= TimeSpan.FromSeconds(1))
+            {
+                PruneStateLocked(state, now);
+            }
 
             var ports = state.Hits
                 .Where(hit => now - hit.TimeUtc <= Window)
@@ -145,7 +149,7 @@ public sealed class AntiScanAnalyzer
                 .Distinct()
                 .Count();
 
-            var synCount = state.Hits.Count;
+            var synCount = state.Hits.Count(hit => now - hit.TimeUtc <= Window);
 
             var fastPorts = state.Hits
                 .Where(hit => now - hit.TimeUtc <= FastWindow)
@@ -224,6 +228,7 @@ public sealed class AntiScanAnalyzer
     private void PruneStateLocked(SourceState state, DateTime now)
     {
         state.Hits.RemoveAll(hit => now - hit.TimeUtc > Window);
+        state.LastPruneUtc = now;
     }
 
     private void RemoveOldestSourceLocked()
@@ -283,6 +288,7 @@ public sealed class AntiScanAnalyzer
     {
         public IPAddress Address = IPAddress.None;
         public DateTime LastSeenUtc;
+        public DateTime LastPruneUtc;
         public List<Hit> Hits = new();
     }
 

@@ -78,6 +78,8 @@ and finish with *"blocked."*
   packets and detect port scans. It can temporarily block the source IP for 5 / 10 / 30 / 60
   minutes; automatic blocking is **off by default**, affects new connections only, and never cuts
   existing sessions. Without Npcap the firewall works normally and anti-scan is unavailable.
+  The status bar shows `Npcap: connected / not connected`; clicking it while disconnected installs
+  Npcap from the bundled official installer.
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /

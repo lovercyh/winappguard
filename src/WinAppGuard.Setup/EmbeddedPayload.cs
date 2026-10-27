@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using WinAppGuard.Core.Diagnostics.AntiScan;
 
 namespace WinAppGuard.Setup;
 
@@ -22,8 +23,8 @@ internal static class EmbeddedPayload
     private const string UiExeName = "WinAppGuard.exe";
     private const string ServiceExeName = "WinAppGuardSvc.exe";
     private const string SetupExeName = "WinAppGuardSetup.exe";
-    internal const string NpcapInstallerName = "npcap-1.90.exe";
-    internal const string NpcapLicenseName = "Npcap-LICENSE.txt";
+    internal const string NpcapInstallerName = NpcapInstaller.FileName;
+    internal const string NpcapLicenseName = NpcapInstaller.LicenseFileName;
 
     /// <summary>
     /// 提取载荷。没有载荷返回 null。

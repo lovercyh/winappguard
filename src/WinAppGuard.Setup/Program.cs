@@ -274,7 +274,7 @@ internal static class Program
             return;
         }
 
-        if (!File.Exists(payload.NpcapInstaller))
+        if (!File.Exists(payload.NpcapSetup))
         {
             Bilingual.Say(
                 "安装包未包含 Npcap，反扫描功能将不可用。",
@@ -323,11 +323,11 @@ internal static class Program
             return;
         }
 
-        if (!VerifyNpcapInstaller(payload.NpcapInstaller))
+        if (!NpcapInstaller.Verify(payload.NpcapSetup, out var verifyReason))
         {
             Bilingual.Fail(
-                "Npcap 安装包校验失败，已停止安装 Npcap。",
-                "The bundled Npcap installer failed verification; Npcap was not installed.");
+                $"Npcap 安装包校验失败（{verifyReason}），已停止安装 Npcap。",
+                $"The bundled Npcap installer failed verification ({verifyReason}); Npcap was not installed.");
             return;
         }
 
@@ -342,9 +342,8 @@ internal static class Program
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = payload.NpcapInstaller,
-                Arguments = "/winpcap_mode=disabled /loopback_support=disabled " +
-                            "/dot11_support=disabled /admin_only=enforced",
+                FileName = payload.NpcapSetup,
+                Arguments = NpcapInstaller.Arguments,
                 UseShellExecute = false,
                 CreateNoWindow = false,
                 WorkingDirectory = payload.DirectoryPath,
@@ -398,36 +397,6 @@ internal static class Program
             Bilingual.Say(
                 "当前仍未检测到 Npcap；可以稍后重装 WinAppGuard 或手动安装 Npcap。",
                 "Npcap is still not detected; reinstall WinAppGuard later or install Npcap manually.");
-        }
-    }
-
-    private static bool VerifyNpcapInstaller(string path)
-    {
-        const string expectedHash =
-            "682B57E1C05EF375931975C9D6DED40888F4BFDF9F4B11571E654F962F1199B6";
-
-        try
-        {
-            var actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
-
-            if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            // Authenticode 的 PE 签名提取目前没有 X509CertificateLoader 等价 API；
-            // 这里只读取签名者 Subject，真正的完整性由上面的固定 SHA-256 保证。
-#pragma warning disable SYSLIB0057
-            var cert = System.Security.Cryptography.X509Certificates.X509Certificate
-                .CreateFromSignedFile(path);
-#pragma warning restore SYSLIB0057
-
-            var subject = cert.Subject ?? string.Empty;
-            return subject.Contains("Nmap Software LLC", StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception)
-        {
-            return false;
         }
     }
 
@@ -1629,11 +1598,20 @@ internal static class Program
         CopyIfDifferent(payload.SetupInstaller, setupTarget);
         CopyIfDifferent(payload.SetupInstaller, uninstallTarget);
 
-        if (File.Exists(payload.NpcapLicense))
+        if (File.Exists(payload.NpcapLicenseFile))
         {
             CopyIfDifferent(
-                payload.NpcapLicense,
-                Path.Combine(InstallDirectory, "Npcap-LICENSE.txt"));
+                payload.NpcapLicenseFile,
+                Path.Combine(InstallDirectory, NpcapInstaller.LicenseFileName));
+        }
+
+        // 4.0：把官方安装包一并装进 Program Files，界面上的「Npcap：未连接」可以直接
+        // 以管理员身份重新拉起它（和安装时同一份文件、同样锁定参数）。
+        if (File.Exists(payload.NpcapSetup))
+        {
+            CopyIfDifferent(
+                payload.NpcapSetup,
+                Path.Combine(InstallDirectory, NpcapInstaller.FileName));
         }
     }
 
@@ -1673,9 +1651,9 @@ internal static class Program
 
         internal string SetupInstaller => Path.Combine(DirectoryPath, "WinAppGuardSetup.exe");
 
-        internal string NpcapInstaller => Path.Combine(DirectoryPath, EmbeddedPayload.NpcapInstallerName);
+        internal string NpcapSetup => Path.Combine(DirectoryPath, NpcapInstaller.FileName);
 
-        internal string NpcapLicense => Path.Combine(DirectoryPath, EmbeddedPayload.NpcapLicenseName);
+        internal string NpcapLicenseFile => Path.Combine(DirectoryPath, NpcapInstaller.LicenseFileName);
 
         public void Dispose()
         {

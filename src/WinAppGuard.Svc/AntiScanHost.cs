@@ -194,6 +194,10 @@ internal static class AntiScanHost
                 .ToList();
             nowEnabled = _state.Settings.Enabled;
 
+            // 界面点了「Npcap：未连接（点击重试）」或刚装完 Npcap 时会重新下发一次设置：
+            // 立刻清掉退避计时，让 EnsureCapture 当场再试一次，而不是再等 30 秒。
+            _nextCaptureRetryUtc = DateTime.MinValue;
+
             if (wasEnabled != nowEnabled)
             {
                 _analyzer.Clear();

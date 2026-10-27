@@ -450,6 +450,9 @@ public partial class MainForm : Form
         // 状态栏在"服务未运行"时是可点的：点一下启动服务（否则用户只能去装服务）。
         _serviceStatusLabel.Click += OnServiceStatusLabelClick;
 
+        // 4.0：Npcap 未连接时可点击 —— 未安装就拉起随包安装程序，已安装但没采到就让服务重连。
+        _npcapStatusLabel.Click += OnNpcapStatusLabelClick;
+
         _rulesNoticeDefault = _rulesNoticeLabel.Text;
 
         // 探测防护服务（异步：服务没装/没起时不能拖慢启动）。
@@ -1035,11 +1038,8 @@ public partial class MainForm : Form
             ? Localizer.F("启动模式：开机自启（{0}）", AppConstants.AutostartArgument)
             : Localizer.T("启动模式：手动启动");
 
-        var isAdmin = AdminHelper.IsRunningAsAdmin();
-        _adminStatusLabel.Text = isAdmin
-            ? Localizer.T("管理员权限：已获得")
-            : Localizer.T("管理员权限：按需提权（修改规则 / 严格模式时弹一次 UAC）");
-        _adminStatusLabel.ForeColor = isAdmin ? Color.FromArgb(0, 120, 0) : Color.Firebrick;
+        _npcapStatusLabel.Text = Localizer.T("Npcap：检测中…");
+        _npcapStatusLabel.ForeColor = SystemColors.GrayText;
     }
 
     /// <summary>
@@ -5035,6 +5035,8 @@ public partial class MainForm : Form
     /// <summary>更新服务状态标签（自检直接调用它验证两种状态）。</summary>
     internal void UpdateServiceStatusLabel(ServiceStatus? status)
     {
+        UpdateNpcapStatusLabel(status);
+
         if (status is null)
         {
             // 3.1：先说明“为什么连不上”——不是所有者 / 密钥不可用 / 未初始化，
@@ -5102,7 +5104,7 @@ public partial class MainForm : Form
             _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
             _serviceStatusLabel.IsLink = installed;
             _serviceStatusLabel.ToolTipText = Localizer.T(installed
-                ? "防护服务没有运行：点击这里启动（需要管理员权限）。\n" +
+                ? "防护服务没有运行：点击这里启动。\n" +
                   "规则页面在服务恢复前只读；查看连接和导出仍然可用。"
                 : "防护服务未安装：规则页面只读。\n" +
                   "请运行 WinAppGuardSetup.exe --install 安装服务。");

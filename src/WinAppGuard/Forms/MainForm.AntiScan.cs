@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Localization;
 
 namespace WinAppGuard.Forms;
@@ -35,6 +37,257 @@ public sealed partial class MainForm
     private bool _antiServiceAvailable = true;
     private string? _antiEventSignature;
     private string? _antiBlockSignature;
+    private DateTime _npcapConnectingUntilUtc = DateTime.MinValue;
+    private bool _npcapInstallerRunning;
+
+    /// <summary>
+    /// 状态栏的「Npcap」项：只反映采集是否真的在跑，不把"装了驱动"说成"已连接"。
+    ///
+    /// 未连接时整项可点：没安装 → 拉起随包官方安装程序；已安装但没采到 → 让服务立刻重连。
+    /// </summary>
+    private void UpdateNpcapStatusLabel(ServiceStatus? status) => ApplyNpcapStatus(
+        status?.AntiScanEnabled ?? true,
+        NpcapLocator.IsAvailable || status?.AntiScanNpcapAvailable == true,
+        status?.AntiScanCollecting == true,
+        status is not null);
+
+    private void ApplyNpcapStatus(bool enabled, bool installed, bool collecting, bool serviceOnline)
+    {
+        var connecting = _npcapConnectingUntilUtc > DateTime.UtcNow || _npcapInstallerRunning;
+
+        if (!enabled)
+        {
+            _npcapStatusLabel.Text = Localizer.T("Npcap：未连接（反扫描已关闭）");
+            _npcapStatusLabel.ForeColor = SystemColors.GrayText;
+            _npcapStatusLabel.IsLink = false;
+            _npcapStatusLabel.ToolTipText = Localizer.T("反端口扫描已在设置里关闭，开启后才会连接 Npcap。");
+            return;
+        }
+
+        if (collecting)
+        {
+            var version = NpcapLocator.GetVersion();
+            _npcapStatusLabel.Text = version is null
+                ? Localizer.T("Npcap：已连接")
+                : Localizer.F("Npcap：已连接（{0}）", version);
+            _npcapStatusLabel.ForeColor = Color.FromArgb(0, 120, 0);
+            _npcapStatusLabel.IsLink = false;
+            _npcapStatusLabel.ToolTipText = Localizer.T("反端口扫描正在通过 Npcap 采集入站 TCP SYN。");
+            return;
+        }
+
+        if (!installed)
+        {
+            _npcapStatusLabel.Text = Localizer.T("Npcap：未连接（点击安装）");
+            _npcapStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
+            _npcapStatusLabel.IsLink = true;
+            _npcapStatusLabel.ToolTipText = Localizer.T(
+                "反端口扫描需要 Npcap。点击后用随包官方安装程序安装（会弹一次 UAC）。");
+            return;
+        }
+
+        if (connecting)
+        {
+            _npcapStatusLabel.Text = Localizer.T("Npcap：连接中…");
+            _npcapStatusLabel.ForeColor = SystemColors.GrayText;
+            _npcapStatusLabel.IsLink = false;
+            _npcapStatusLabel.ToolTipText = Localizer.T("已请求服务重新开始采集，稍候会自动更新。");
+            return;
+        }
+
+        if (!serviceOnline)
+        {
+            _npcapStatusLabel.Text = Localizer.T("Npcap：未连接（服务离线）");
+            _npcapStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
+            _npcapStatusLabel.IsLink = false;
+            _npcapStatusLabel.ToolTipText = Localizer.T("防护服务没有运行，无法连接 Npcap。请先启动服务。");
+            return;
+        }
+
+        _npcapStatusLabel.Text = Localizer.T("Npcap：未连接（点击重试）");
+        _npcapStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
+        _npcapStatusLabel.IsLink = true;
+        _npcapStatusLabel.ToolTipText = Localizer.T("Npcap 已安装，但采集没有运行：点击让服务重新连接。");
+    }
+
+    private void OnNpcapStatusLabelClick(object? sender, EventArgs e)
+    {
+        if (_npcapInstallerRunning)
+        {
+            return;
+        }
+
+        var installed = NpcapLocator.IsAvailable || _antiStatus?.NpcapAvailable == true;
+
+        if (!installed)
+        {
+            _ = InstallNpcapFromBundleAsync();
+            return;
+        }
+
+        RetryNpcapCapture();
+    }
+
+    /// <summary>已安装但没采到：重新下发当前设置，服务会立刻重试一次。</summary>
+    private void RetryNpcapCapture()
+    {
+        if (!_serviceAvailable)
+        {
+            ShowTrayBalloon(
+                Localizer.T("服务未运行"),
+                Localizer.T("先启动防护服务，再连接 Npcap。"));
+            return;
+        }
+
+        try
+        {
+            var snapshot = QueryAntiScanSnapshot();
+
+            if (snapshot is null)
+            {
+                ShowTrayBalloon(
+                    Localizer.T("服务未运行"),
+                    Localizer.T("先启动防护服务，再连接 Npcap。"));
+                return;
+            }
+
+            var settings = snapshot.Value.Settings ?? _antiSettings ?? new AntiScanSettingsDto();
+
+            // 关闭状态点重试没有意义，顺手帮用户打开。
+            settings.Enabled = true;
+
+            var response = CallService(
+                ServiceProtocol.Commands.ConfigureAntiScan,
+                new ServiceRequest { AntiScanSettings = settings },
+                Localizer.T("重新连接 Npcap"));
+
+            _antiSettings = response?.AntiScanSettings ?? settings;
+            _antiStatus = response?.AntiScanStatus ?? _antiStatus;
+            _npcapConnectingUntilUtc = DateTime.UtcNow.AddSeconds(20);
+            ApplyNpcapStatus(
+                true,
+                NpcapLocator.IsAvailable || _antiStatus?.NpcapAvailable == true,
+                _antiStatus?.Collecting == true,
+                _serviceAvailable);
+
+            _ = RefreshAntiScanAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError(
+                Localizer.T("重新连接 Npcap 失败"),
+                ex,
+                "Failed to reconnect Npcap");
+        }
+    }
+
+    /// <summary>未安装：调用随包官方安装程序（和安装 WinAppGuard 时同一份文件、同一组锁定参数）。</summary>
+    private async Task InstallNpcapFromBundleAsync()
+    {
+        var directory = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        var installer = Path.Combine(directory, NpcapInstaller.FileName);
+
+        if (!File.Exists(installer))
+        {
+            ShowNpcapError(
+                Localizer.T("找不到 Npcap 安装包"),
+                Localizer.F(
+                    "安装目录里没有 {0}。请用发布包里的 WinAppGuardSetup.exe 重新运行 --repair，或手动安装 Npcap。",
+                    NpcapInstaller.FileName));
+            return;
+        }
+
+        _npcapInstallerRunning = true;
+        ApplyNpcapStatus(
+            true,
+            NpcapLocator.IsAvailable || _antiStatus?.NpcapAvailable == true,
+            _antiStatus?.Collecting == true,
+            _serviceAvailable);
+
+        int? exitCode;
+        string? error;
+
+        try
+        {
+            (exitCode, error) = await Task.Run(() =>
+            {
+                if (!NpcapInstaller.Verify(installer, out var reason))
+                {
+                    return ((int?)null, (string?)reason);
+                }
+
+                return (NpcapInstaller.RunElevated(installer, out var runError), runError);
+            });
+        }
+        finally
+        {
+            _npcapInstallerRunning = false;
+        }
+
+        if (error is not null)
+        {
+            ShowNpcapError(Localizer.T("Npcap 安装失败"), error);
+            ProbeServiceStatus();
+            return;
+        }
+
+        if (exitCode is null)
+        {
+            // 用户在 UAC 里点了取消，或安装器自己取消了：不当成错误。
+            ShowTrayBalloon(
+                Localizer.T("已取消 Npcap 安装"),
+                Localizer.T("反端口扫描暂时不可用，其它功能不受影响。"));
+            ProbeServiceStatus();
+            return;
+        }
+
+        switch (exitCode.Value)
+        {
+            case 0:
+                ShowTrayBalloon(
+                    Localizer.T("Npcap 安装完成"),
+                    Localizer.T("反扫描会在几秒内自动连接。"));
+                break;
+            case 3010:
+                ShowTrayBalloon(
+                    Localizer.T("Npcap 已安装，需要重启"),
+                    Localizer.T("重启后反端口扫描才会生效。"));
+                break;
+            case 1:
+                ShowTrayBalloon(
+                    Localizer.T("已取消 Npcap 安装"),
+                    Localizer.T("反端口扫描暂时不可用，其它功能不受影响。"));
+                break;
+            default:
+                ShowTrayBalloon(
+                    Localizer.T("Npcap 安装未完成"),
+                    Localizer.F("安装器退出码 {0}；反端口扫描暂时不可用。", exitCode.Value));
+                break;
+        }
+
+        if (exitCode.Value is 0 or 3010)
+        {
+            _npcapConnectingUntilUtc = DateTime.UtcNow.AddSeconds(30);
+            RetryNpcapCapture();
+        }
+
+        ProbeServiceStatus();
+    }
+
+    /// <summary>纯文字错误提示（没有异常对象时用；仍然写本地日志）。</summary>
+    private void ShowNpcapError(string title, string message)
+    {
+        LocalLog.Error(
+            LocalLog.Pick(title, "Npcap operation failed."),
+            new InvalidOperationException(message));
+
+        UiMessageBox.Show(
+            this,
+            $"{title}：\n\n{message}",
+            AppConstants.AppName,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+    }
 
     private void InitializeAntiScanPage()
     {

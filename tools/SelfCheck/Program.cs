@@ -1592,10 +1592,12 @@ internal static class Program
             versionLabel.Text = $"版本 v{productVersion}";
         }
 
-        if (TryGetField<ToolStripStatusLabel>(form, "_adminStatusLabel", out var adminLabel))
+        // 状态栏 Npcap 项：截图里显示"已连接"，和防护页的状态行保持一致。
+        if (TryGetField<ToolStripStatusLabel>(form, "_npcapStatusLabel", out var npcapLabel))
         {
-            adminLabel.Text = "管理员权限：已获得";
-            adminLabel.ForeColor = Color.FromArgb(0, 120, 0);
+            npcapLabel.Text = "Npcap：已连接（1.90）";
+            npcapLabel.ForeColor = Color.FromArgb(0, 120, 0);
+            npcapLabel.IsLink = false;
         }
 
         if (TryGetField<ToolStripStatusLabel>(form, "_statusRulesLabel", out var statusRulesLabel))
@@ -4566,7 +4568,14 @@ internal static class Program
 
                     CheckAssertion(results, "英文：状态栏计数无中文",
                         !HasCjk(Localizer.F("已阻止程序：{0} 个", 1))
-                        && !HasCjk(Localizer.F("服务：运行中 · {0} 条规则", 1)));
+                        && !HasCjk(Localizer.F("服务：运行中 · {0} 条规则", 1))
+                        && !HasCjk(Localizer.T("Npcap：检测中…"))
+                        && !HasCjk(Localizer.F("Npcap：已连接（{0}）", "1.90"))
+                        && !HasCjk(Localizer.T("Npcap：未连接（点击安装）"))
+                        && !HasCjk(Localizer.T("Npcap：未连接（点击重试）"))
+                        && !HasCjk(Localizer.T("Npcap：未连接（服务离线）"))
+                        && !HasCjk(Localizer.T("Npcap：未连接（反扫描已关闭）"))
+                        && !HasCjk(Localizer.T("Npcap：连接中…")));
 
                     // 直接构造确认框（不弹窗），检查标题、详情、警告、按钮、时长选项。
                     var confirmCtor = typeof(ConfirmForm)
@@ -4949,6 +4958,47 @@ internal static class Program
         CheckAssertion(results, "服务正常时显示「运行中」和规则总数",
             (label.Text ?? string.Empty).Contains("运行中", StringComparison.Ordinal)
             && (label.Text ?? string.Empty).Contains("4 条规则", StringComparison.Ordinal));
+
+        // 4.0：状态栏的 Npcap 项只认"采集真的在跑"，不把"驱动已装"说成已连接。
+        if (TryGetField<ToolStripStatusLabel>(form, "_npcapStatusLabel", out var npcapLabel))
+        {
+            InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { null });
+            W($"    Npcap（服务离线）= {npcapLabel.Text}");
+            CheckAssertion(results, "Npcap 状态：服务离线时不冒充已连接",
+                !(npcapLabel.Text ?? string.Empty).Contains("已连接", StringComparison.Ordinal));
+
+            var installedOnly = new ServiceStatus
+            {
+                ServiceVersion = "4.0",
+                AntiScanEnabled = true,
+                AntiScanNpcapAvailable = true,
+                AntiScanCollecting = false,
+            };
+
+            InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { installedOnly });
+            W($"    Npcap（已安装未采集）= {npcapLabel.Text}");
+            CheckAssertion(results, "Npcap 状态：已安装未采集显示可点重试",
+                (npcapLabel.Text ?? string.Empty).Contains("点击重试", StringComparison.Ordinal)
+                && npcapLabel.IsLink);
+
+            var collecting = new ServiceStatus
+            {
+                ServiceVersion = "4.0",
+                AntiScanEnabled = true,
+                AntiScanNpcapAvailable = true,
+                AntiScanCollecting = true,
+            };
+
+            InvokePrivate(form, "UpdateServiceStatusLabel", new object?[] { collecting });
+            W($"    Npcap（采集在跑）= {npcapLabel.Text}");
+            CheckAssertion(results, "Npcap 状态：采集在跑显示已连接",
+                (npcapLabel.Text ?? string.Empty).Contains("已连接", StringComparison.Ordinal)
+                && !npcapLabel.IsLink);
+        }
+        else
+        {
+            CheckAssertion(results, "找得到 Npcap 状态标签 _npcapStatusLabel", false);
+        }
 
         PrintSummary(results, showFirewallResidue: false);
     }
@@ -11820,6 +11870,32 @@ internal static class Program
         W($"    Npcap = {npcapPath ?? "未安装"} / 版本 {NpcapLocator.GetVersion() ?? "?"}");
         CheckAssertion(results, "Npcap 版本可读（未安装时跳过）",
             npcapPath is null || !string.IsNullOrWhiteSpace(NpcapLocator.GetVersion()));
+
+        // 随包安装包的校验常量如果写错，安装器/界面都会拒绝安装，而这一步能在开发机上提前发现。
+        var bundledCandidates = new[]
+        {
+            Path.Combine(Environment.CurrentDirectory, NpcapInstaller.FileName),
+            Path.Combine(
+                Environment.CurrentDirectory, "third_party", "npcap", NpcapInstaller.FileName),
+            Path.Combine(AppContext.BaseDirectory, NpcapInstaller.FileName),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "WinAppGuard",
+                NpcapInstaller.FileName),
+        };
+
+        var bundled = bundledCandidates.FirstOrDefault(File.Exists);
+
+        if (bundled is null)
+        {
+            W("    随包 Npcap：当前目录没有安装包，跳过校验");
+        }
+        else
+        {
+            var verified = NpcapInstaller.Verify(bundled, out var verifyReason);
+            W($"    随包 Npcap 校验：{bundled} → {(verified ? "通过" : verifyReason)}");
+            CheckAssertion(results, "随包 Npcap 安装包校验（SHA-256 + 签名者）", verified);
+        }
 
         var directory = Path.Combine(
             Path.GetTempPath(), "WinAppGuard-AntiScanTest-" + Guid.NewGuid().ToString("N"));

@@ -139,8 +139,11 @@ internal sealed class ControlServer : IDisposable
         ServiceLog.Info("WAG-AUDIT-002", "Startup: starting audit capture.");
         AuditHost.StartIfEnabled();
 
-        // 3.5：流量采集与服务同生命周期（内存累计，不落盘）。
+        // 3.5：网络 ETW 会话仍在，但 4.1 起只为 IDS 提供 flow（不再算流量）。
         TrafficHost.Start();
+
+        // 4.1：精确流量统计走独立的 Npcap 会话。
+        TrafficCaptureHost.Start();
 
         // 3.5：DNS 采集（ETW 实时会话；失败由看门狗重试）。
         DnsHost.Start();
@@ -186,6 +189,8 @@ internal sealed class ControlServer : IDisposable
         IdsHost.Stop();
 
         AntiScanHost.Stop();
+
+        TrafficCaptureHost.Stop();
 
         TrafficHost.Stop();
 
@@ -377,19 +382,8 @@ internal sealed class ControlServer : IDisposable
         TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
     }
 
-    /// <summary>3.6：清空流量计数并返回新的统计起点。</summary>
-    private static ServiceResponse ClearTraffic(ServiceRequest request)
-    {
-        var affected = TrafficHost.Clear();
-
-        return new ServiceResponse
-        {
-            Id = request.Id,
-            Ok = true,
-            Affected = affected,
-            TrafficStartedUtc = TrafficHost.StartedUtc,
-        };
-    }
+    /// <summary>3.6：清空流量计数并返回新的统计起点（4.1 起为 Npcap 精确计数）。</summary>
+    private static ServiceResponse ClearTraffic(ServiceRequest request) => TrafficCaptureHost.Clear(request);
 
     /// <summary>
     /// 3.5：批量 PID → 路径。只返回当前仍存在且服务能打开的进程。
@@ -517,16 +511,14 @@ internal sealed class ControlServer : IDisposable
             },
 
             // 3.5：流量快照是只读数据，不碰 WFP，也不要求提权。
-            ServiceProtocol.Commands.QueryTraffic => new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = true,
-                Traffic = TrafficHost.Snapshot(),
-                TrafficStartedUtc = TrafficHost.StartedUtc,
-            },
+            // 4.1：数据源换成 Npcap 精确计数（ETW 不再参与）。
+            ServiceProtocol.Commands.QueryTraffic => TrafficCaptureHost.Query(request),
 
             // 3.6：清空流量计数（write. 前缀，提权检查在上面统一做）。
             ServiceProtocol.Commands.ClearTraffic => ClearTraffic(request),
+
+            // 4.1：暂停 / 继续精确流量统计（只对本次运行有效）。
+            ServiceProtocol.Commands.ConfigureTraffic => TrafficCaptureHost.Configure(request),
 
             // 3.5：DNS 记录同样是只读；清空是 write.dns.clear（提权检查在上面统一做）。
             ServiceProtocol.Commands.QueryDns => new ServiceResponse
@@ -632,8 +624,12 @@ internal sealed class ControlServer : IDisposable
         status.AuditRetentionDays = audit.RetentionDays;
         status.AuditCollecting = AuditHost.Collecting;
         status.AuditEventsWritten = AuditHost.EventsWritten;
-        status.TrafficCollecting = TrafficHost.Collecting;
+        var traffic = TrafficCaptureHost.GetStatus();
+        status.TrafficCollecting = traffic.Collecting;
         status.TrafficEventsSeen = TrafficHost.EventsSeen;
+        status.TrafficPps = traffic.Pps;
+        status.TrafficDropped = traffic.Dropped;
+        status.TrafficSampled = traffic.Sampled;
         status.DnsCollecting = DnsHost.Collecting;
 
         var ids = IdsHost.GetStatus();

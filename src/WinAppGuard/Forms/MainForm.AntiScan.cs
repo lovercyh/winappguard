@@ -170,6 +170,24 @@ public sealed partial class MainForm
                 _antiStatus?.Collecting == true,
                 _serviceAvailable);
 
+            // 精确流量是独立的 Npcap 会话：同样清掉退避，装完驱动后不用等 30 秒。
+            if (_trafficStatus?.Paused != true)
+            {
+                var traffic = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.ConfigureTraffic,
+                        TrafficPaused = false,
+                    },
+                    TimeSpan.FromSeconds(5),
+                    out _);
+
+                if (traffic is { Ok: true })
+                {
+                    _trafficStatus = traffic.TrafficStatus ?? _trafficStatus;
+                }
+            }
+
             _ = RefreshAntiScanAsync();
         }
         catch (Exception ex)

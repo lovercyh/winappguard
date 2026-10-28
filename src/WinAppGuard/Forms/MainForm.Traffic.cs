@@ -6,23 +6,28 @@ using WinAppGuard.Models;
 namespace WinAppGuard.Forms;
 
 /// <summary>
-/// 3.6：「流量」页 —— 按程序汇总**服务本次运行以来**的上传/下载/总计。
+/// 4.1：「流量」页 —— 按程序展示 **Npcap 按包精确统计** 的入站/出站与实时速率。
 ///
-/// 数据来自 3.5 的 <c>query.traffic</c>；本页只做过滤、排序和展示，不在界面里算总量。
-/// 「本次运行」指服务本次启动，服务重启或点「清空」后从 0 开始。
+/// 4.1 起这里只有一个数据源：Npcap。ETW 不再提供任何流量数字（它只服务 IDS）。
+/// 字节口径是 IP 载荷（TCP/UDP 头 + 数据），含重传、不含回环；
+/// 归属不到的流量单独显示为「未归属」。
 /// </summary>
 public sealed partial class MainForm
 {
-    private const int TrafficRefreshIntervalMs = 3000;
+    private const int TrafficRefreshIntervalMs = 1000;
 
     private TextBox _trafficSearchBox = null!;
     private Label _trafficSummaryLabel = null!;
     private Button _trafficRefreshButton = null!;
+    private Button _trafficPauseButton = null!;
     private Button _trafficClearButton = null!;
+    private TrafficChart _trafficChart = null!;
     private DataGridViewBuffered _trafficGrid = null!;
     private System.Windows.Forms.Timer? _trafficTimer;
 
     private List<TrafficDto> _trafficRecords = new();
+    private TrafficSeriesDto? _trafficSeries;
+    private TrafficStatusDto? _trafficStatus;
     private DateTime? _trafficStartedUtc;
     private bool _trafficLoading;
     private bool _trafficServiceAvailable = true;
@@ -36,8 +41,10 @@ public sealed partial class MainForm
         None,
         Name,
         Path,
-        Upload,
         Download,
+        Upload,
+        DownRate,
+        UpRate,
         Total,
         LastSeen,
     }
@@ -47,52 +54,101 @@ public sealed partial class MainForm
         var top = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 72,
+            Height = 96,
             Padding = new Padding(0, 4, 0, 0),
+        };
+
+        var notice = new Label
+        {
+            Location = new Point(0, 0),
+            Width = 1000,
+            Height = 20,
+            ForeColor = Color.FromArgb(191, 87, 0),
+            Text = Localizer.T(
+                "精确统计（Npcap）：按网卡上真实出现的字节计数，含重传与被拒绝的入站包，不含回环。"),
+            AutoEllipsis = true,
         };
 
         _trafficSearchBox = new TextBox
         {
-            Location = new Point(0, 8),
-            Width = 260,
-            PlaceholderText = "搜索：程序 / 路径",
+            Location = new Point(0, 26),
+            Width = 200,
+            PlaceholderText = Localizer.T("搜索：程序 / 路径"),
         };
         _trafficSearchBox.TextChanged += (_, _) => RebuildTrafficView();
 
         _trafficRefreshButton = new Button
         {
-            Location = new Point(272, 6),
-            Width = 76,
-            Text = "刷新",
+            Text = Localizer.T("刷新"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(68, 27),
+            Margin = new Padding(0, 0, 8, 0),
         };
         _trafficRefreshButton.Click += (_, _) => _ = RefreshTrafficAsync();
 
+        _trafficPauseButton = new Button
+        {
+            Text = Localizer.T("暂停统计"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(88, 27),
+            Margin = new Padding(0, 0, 8, 0),
+        };
+        _trafficPauseButton.Click += OnTrafficPauseClick;
+
         _trafficClearButton = new Button
         {
-            Location = new Point(356, 6),
-            Width = 96,
-            Text = "清空…",
+            Text = Localizer.T("清空…"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(76, 27),
         };
         _trafficClearButton.Click += OnTrafficClearClick;
 
+        var actions = new FlowLayoutPanel
+        {
+            Location = new Point(210, 22),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            FlowDirection = FlowDirection.LeftToRight,
+        };
+        actions.Controls.AddRange(new Control[]
+        {
+            _trafficRefreshButton, _trafficPauseButton, _trafficClearButton,
+        });
+
         _trafficSummaryLabel = new Label
         {
-            Location = new Point(0, 42),
+            Location = new Point(0, 60),
             Width = 1000,
+            Height = 32,
             ForeColor = SystemColors.GrayText,
             AutoEllipsis = true,
         };
 
         top.Resize += (_, _) =>
-            _trafficSummaryLabel.Width = Math.Max(200, top.ClientSize.Width - 8);
+        {
+            var width = Math.Max(200, top.ClientSize.Width - 8);
+            notice.Width = width;
+            _trafficSummaryLabel.Width = width;
+        };
 
         top.Controls.AddRange(new Control[]
         {
+            notice,
             _trafficSearchBox,
-            _trafficRefreshButton,
-            _trafficClearButton,
+            actions,
             _trafficSummaryLabel,
         });
+
+        _trafficChart = new TrafficChart
+        {
+            Dock = DockStyle.Top,
+            Height = 150,
+            Margin = new Padding(0),
+        };
 
         _trafficGrid = new DataGridViewBuffered
         {
@@ -109,20 +165,24 @@ public sealed partial class MainForm
             BackgroundColor = SystemColors.Window,
         };
 
-        AddTrafficColumn("程序", nameof(TrafficRow.Name), 140, TrafficSortColumn.Name);
-        AddTrafficColumn("路径", nameof(TrafficRow.PathText), 240, TrafficSortColumn.Path);
-        AddTrafficColumn("上传", nameof(TrafficRow.OutText), 75, TrafficSortColumn.Upload);
-        AddTrafficColumn("下载", nameof(TrafficRow.InText), 75, TrafficSortColumn.Download);
-        AddTrafficColumn("总计", nameof(TrafficRow.TotalText), 85, TrafficSortColumn.Total);
-        AddTrafficColumn("最后活动", nameof(TrafficRow.LastSeenText), 120, TrafficSortColumn.LastSeen);
+        AddTrafficColumn("程序", nameof(TrafficRow.Name), 120, TrafficSortColumn.Name);
+        AddTrafficColumn("路径", nameof(TrafficRow.PathText), 160, TrafficSortColumn.Path);
+        AddTrafficColumn("入站", nameof(TrafficRow.InText), 76, TrafficSortColumn.Download);
+        AddTrafficColumn("出站", nameof(TrafficRow.OutText), 76, TrafficSortColumn.Upload);
+        AddTrafficColumn("下行", nameof(TrafficRow.InRateText), 76, TrafficSortColumn.DownRate);
+        AddTrafficColumn("上行", nameof(TrafficRow.OutRateText), 76, TrafficSortColumn.UpRate);
+        AddTrafficColumn("总计", nameof(TrafficRow.TotalText), 78, TrafficSortColumn.Total);
+        AddTrafficColumn("最后活动", nameof(TrafficRow.LastSeenText), 100, TrafficSortColumn.LastSeen);
         AddTrafficColumn("备注", nameof(TrafficRow.Note), 100, TrafficSortColumn.None, fill: true);
 
         _trafficGrid.ColumnHeaderMouseClick += OnTrafficColumnHeaderClick;
+        _trafficGrid.SelectionChanged += (_, _) => UpdateTrafficSummary(_trafficGrid.Rows.Count);
         _trafficGrid.EmptyText =
-            "还没有流量记录。\r\n服务本次运行以来还没有统计到任何程序的流量。";
+            "还没有流量记录。\r\nNpcap 采集还没有看到 TCP / UDP 流量。";
 
         // 停靠顺序：先加 Fill，再加 Top（后加的优先占边）。
         _tabTraffic.Controls.Add(_trafficGrid);
+        _tabTraffic.Controls.Add(_trafficChart);
         _tabTraffic.Controls.Add(top);
 
         _tabControl.SelectedIndexChanged += (_, _) =>
@@ -200,11 +260,19 @@ public sealed partial class MainForm
                 _trafficServiceAvailable = true;
                 _trafficRecords = result.Value.Records;
                 _trafficStartedUtc = result.Value.StartedUtc;
+                _trafficSeries = result.Value.Series;
+                _trafficStatus = result.Value.Status;
+
+                _trafficChart.SetSeries(
+                    _trafficSeries?.BytesIn ?? new List<long>(),
+                    _trafficSeries?.BytesOut ?? new List<long>());
+
                 RebuildTrafficView();
             }
             else
             {
                 _trafficServiceAvailable = false;
+                _trafficChart.SetSeries(Array.Empty<long>(), Array.Empty<long>());
                 UpdateTrafficSummary(_trafficGrid.Rows.Count);
             }
         }
@@ -238,7 +306,9 @@ public sealed partial class MainForm
             return response is { Ok: true }
                 ? new TrafficRecordsResult(
                     response.Traffic ?? new List<TrafficDto>(),
-                    response.TrafficStartedUtc)
+                    response.TrafficStartedUtc,
+                    response.TrafficSeries,
+                    response.TrafficStatus)
                 : null;
         }
         catch (Exception)
@@ -249,7 +319,9 @@ public sealed partial class MainForm
 
     private readonly record struct TrafficRecordsResult(
         List<TrafficDto> Records,
-        DateTime? StartedUtc);
+        DateTime? StartedUtc,
+        TrafficSeriesDto? Series,
+        TrafficStatusDto? Status);
 
     private void RebuildTrafficView()
     {
@@ -267,8 +339,10 @@ public sealed partial class MainForm
         {
             TrafficSortColumn.Name => Order(rows, row => row.Name, StringComparer.OrdinalIgnoreCase),
             TrafficSortColumn.Path => Order(rows, row => row.PathText, StringComparer.OrdinalIgnoreCase),
-            TrafficSortColumn.Upload => Order(rows, row => row.BytesOut),
             TrafficSortColumn.Download => Order(rows, row => row.BytesIn),
+            TrafficSortColumn.Upload => Order(rows, row => row.BytesOut),
+            TrafficSortColumn.DownRate => Order(rows, row => row.RateIn),
+            TrafficSortColumn.UpRate => Order(rows, row => row.RateOut),
             TrafficSortColumn.LastSeen => Order(rows, row => row.LastSeenUtc),
             _ => Order(rows, row => row.Total),
         };
@@ -277,11 +351,11 @@ public sealed partial class MainForm
             .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // 数据没变就不重绑，避免每 3 秒把选中/滚动冲掉。
+        // 数据没变就不重绑，避免每秒把选中/滚动冲掉。
         var signature = string.Join(
             "|",
             list.Take(100).Select(row =>
-                $"{row.Key}/{row.BytesIn}/{row.BytesOut}/{row.LastSeenUtc.Ticks}"));
+                $"{row.Key}/{row.BytesIn}/{row.BytesOut}/{row.RateIn}/{row.RateOut}/{row.LastSeenUtc.Ticks}"));
 
         if (!string.Equals(signature, _trafficSignature, StringComparison.Ordinal))
         {
@@ -325,18 +399,31 @@ public sealed partial class MainForm
             ? long.MaxValue
             : record.BytesOut + record.BytesIn;
 
+        var unattributed = string.Equals(
+            record.Key, "unattributed", StringComparison.OrdinalIgnoreCase);
+
         return new TrafficRow
         {
             Key = record.Key,
-            Name = string.IsNullOrEmpty(record.Name)
-                ? Localizer.T("（未知程序）")
-                : record.Name,
+            Name = unattributed
+                ? Localizer.T("未归属（PID 未知）")
+                : string.IsNullOrEmpty(record.Name)
+                    ? Localizer.T("（未知程序）")
+                    : record.Name,
             PathText = pathKnown ? record.Path! : Localizer.T("（无法获取）"),
             BytesOut = record.BytesOut,
             BytesIn = record.BytesIn,
+            RateIn = record.RateIn,
+            RateOut = record.RateOut,
+            TcpBytesIn = record.TcpBytesIn,
+            TcpBytesOut = record.TcpBytesOut,
+            UdpBytesIn = record.UdpBytesIn,
+            UdpBytesOut = record.UdpBytesOut,
             Total = total,
             LastSeenUtc = record.LastSeenUtc,
-            Note = pathKnown ? string.Empty : Localizer.T("路径未知"),
+            Note = unattributed
+                ? Localizer.T("未归属")
+                : pathKnown ? string.Empty : Localizer.T("路径未知"),
         };
     }
 
@@ -382,8 +469,10 @@ public sealed partial class MainForm
     {
         nameof(TrafficRow.Name) => TrafficSortColumn.Name,
         nameof(TrafficRow.PathText) => TrafficSortColumn.Path,
-        nameof(TrafficRow.OutText) => TrafficSortColumn.Upload,
         nameof(TrafficRow.InText) => TrafficSortColumn.Download,
+        nameof(TrafficRow.OutText) => TrafficSortColumn.Upload,
+        nameof(TrafficRow.InRateText) => TrafficSortColumn.DownRate,
+        nameof(TrafficRow.OutRateText) => TrafficSortColumn.UpRate,
         nameof(TrafficRow.TotalText) => TrafficSortColumn.Total,
         nameof(TrafficRow.LastSeenText) => TrafficSortColumn.LastSeen,
         _ => TrafficSortColumn.None,
@@ -400,8 +489,10 @@ public sealed partial class MainForm
         {
             TrafficSortColumn.Name => nameof(TrafficRow.Name),
             TrafficSortColumn.Path => nameof(TrafficRow.PathText),
-            TrafficSortColumn.Upload => nameof(TrafficRow.OutText),
             TrafficSortColumn.Download => nameof(TrafficRow.InText),
+            TrafficSortColumn.Upload => nameof(TrafficRow.OutText),
+            TrafficSortColumn.DownRate => nameof(TrafficRow.InRateText),
+            TrafficSortColumn.UpRate => nameof(TrafficRow.OutRateText),
             TrafficSortColumn.Total => nameof(TrafficRow.TotalText),
             TrafficSortColumn.LastSeen => nameof(TrafficRow.LastSeenText),
             _ => null,
@@ -425,18 +516,68 @@ public sealed partial class MainForm
             ? Localizer.F("显示 {0} / 共 {1} 个程序", shown, total)
             : Localizer.F("共 {0} 个程序", total);
 
-        var text = _trafficStartedUtc is { } startedUtc
-            ? Localizer.F(
-                "统计自 {0}（服务本次运行） · {1} · 合计 上传 {2} / 下载 {3}",
-                startedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
-                countText,
-                TcpConnectionItem.FormatTrafficBytes(outBytes),
-                TcpConnectionItem.FormatTrafficBytes(inBytes))
-            : Localizer.F(
-                "统计起点未知（服务本次运行） · {0} · 合计 上传 {1} / 下载 {2}",
-                countText,
-                TcpConnectionItem.FormatTrafficBytes(outBytes),
-                TcpConnectionItem.FormatTrafficBytes(inBytes));
+        var parts = new List<string>
+        {
+            Localizer.T("精确统计（Npcap）"),
+        };
+
+        if (_trafficStatus is { } status)
+        {
+            parts.Add(status.Paused
+                ? Localizer.T("已暂停")
+                : status.Collecting
+                    ? Localizer.T("采集中")
+                    : Localizer.T("采集未运行"));
+
+            if (!string.IsNullOrWhiteSpace(status.NpcapVersion))
+            {
+                parts.Add(Localizer.F("Npcap {0}", status.NpcapVersion!));
+            }
+
+            if (status.Pps > 0)
+            {
+                parts.Add(Localizer.F("{0} 包/秒", status.Pps));
+            }
+
+            if (status.Dropped > 0)
+            {
+                parts.Add(Localizer.F("丢包 {0}，数据可能不完整", status.Dropped));
+            }
+
+            if (status.Sampled)
+            {
+                parts.Add(Localizer.T("采样估算"));
+            }
+
+            if (!string.IsNullOrWhiteSpace(status.LastError))
+            {
+                parts.Add(status.LastError!);
+            }
+        }
+
+        if (_trafficStartedUtc is { } startedUtc)
+        {
+            parts.Add(Localizer.F("统计自 {0}", startedUtc.ToLocalTime().ToString("HH:mm:ss")));
+        }
+
+        parts.Add(countText);
+        parts.Add(Localizer.F(
+            "合计 入站 {0} / 出站 {1}",
+            TcpConnectionItem.FormatTrafficBytes(inBytes),
+            TcpConnectionItem.FormatTrafficBytes(outBytes)));
+
+        var text = string.Join(" · ", parts);
+
+        if (_trafficGrid.CurrentRow?.DataBoundItem is TrafficRow selected)
+        {
+            text += " · " + Localizer.F(
+                "选中：{0} TCP 入 {1} / 出 {2} · UDP 入 {3} / 出 {4}",
+                selected.Name,
+                TcpConnectionItem.FormatTrafficBytes(selected.TcpBytesIn),
+                TcpConnectionItem.FormatTrafficBytes(selected.TcpBytesOut),
+                TcpConnectionItem.FormatTrafficBytes(selected.UdpBytesIn),
+                TcpConnectionItem.FormatTrafficBytes(selected.UdpBytesOut));
+        }
 
         if (!_trafficServiceAvailable && total > 0)
         {
@@ -460,10 +601,53 @@ public sealed partial class MainForm
 
     private void UpdateTrafficButtons()
     {
+        var available = _trafficServiceAvailable;
+        var paused = _trafficStatus?.Paused == true;
+
         _trafficRefreshButton.Enabled = !_trafficLoading;
+        _trafficPauseButton.Enabled = available && !_trafficLoading;
+        _trafficPauseButton.Text = paused
+            ? Localizer.T("继续统计")
+            : Localizer.T("暂停统计");
         _trafficClearButton.Enabled = !_trafficLoading
-                                      && _trafficServiceAvailable
+                                      && available
                                       && _trafficRecords.Count > 0;
+    }
+
+    private void OnTrafficPauseClick(object? sender, EventArgs e)
+    {
+        var paused = _trafficStatus?.Paused != true;
+
+        try
+        {
+            var response = CallService(
+                ServiceProtocol.Commands.ConfigureTraffic,
+                new ServiceRequest { TrafficPaused = paused },
+                Localizer.T(paused ? "暂停精确流量统计" : "继续精确流量统计"));
+
+            if (response is null)
+            {
+                return;
+            }
+
+            _trafficStatus = response.TrafficStatus ?? _trafficStatus;
+            _trafficSeries = response.TrafficSeries ?? _trafficSeries;
+            _trafficRecords = response.Traffic ?? _trafficRecords;
+            _trafficSignature = null;
+
+            _trafficChart.SetSeries(
+                _trafficSeries?.BytesIn ?? new List<long>(),
+                _trafficSeries?.BytesOut ?? new List<long>());
+
+            RebuildTrafficView();
+        }
+        catch (Exception ex)
+        {
+            ShowError(
+                Localizer.T(paused ? "暂停精确流量统计失败" : "继续精确流量统计失败"),
+                ex,
+                "Failed to change precise traffic state");
+        }
     }
 
     private void OnTrafficClearClick(object? sender, EventArgs e)
@@ -475,7 +659,7 @@ public sealed partial class MainForm
             details: new[]
             {
                 new KeyValuePair<string, string>(
-                    "将要做的", "把所有程序的上传 / 下载计数归零"),
+                    "将要做的", "把所有程序的入站 / 出站计数和速率曲线归零"),
                 new KeyValuePair<string, string>(
                     "影响", "只影响流量记录；规则、白名单和临时锁网都不变"),
             },
@@ -504,16 +688,19 @@ public sealed partial class MainForm
             }
 
             _trafficRecords = new List<TrafficDto>();
+            _trafficSeries = response.TrafficSeries;
+            _trafficStatus = response.TrafficStatus ?? _trafficStatus;
             _trafficStartedUtc = response.TrafficStartedUtc ?? DateTime.UtcNow;
             _trafficSignature = null;
             _trafficGrid.DataSource = new List<TrafficRow>();
+            _trafficChart.SetSeries(Array.Empty<long>(), Array.Empty<long>());
             RebuildTrafficView();
 
             LocalLog.Operation(LocalLog.Pick(
                 $"流量统计已清空：{response.Affected} 个程序",
                 $"Traffic counters cleared ({response.Affected} programs)."));
 
-            ShowTrayBalloon("流量统计已清空", "所有程序的上传 / 下载计数已归零。");
+            ShowTrayBalloon("流量统计已清空", "所有程序的入站 / 出站计数已归零。");
         }
         catch (Exception ex)
         {
@@ -533,6 +720,18 @@ public sealed partial class MainForm
 
         public long BytesIn { get; init; }
 
+        public long RateIn { get; init; }
+
+        public long RateOut { get; init; }
+
+        public long TcpBytesIn { get; init; }
+
+        public long TcpBytesOut { get; init; }
+
+        public long UdpBytesIn { get; init; }
+
+        public long UdpBytesOut { get; init; }
+
         public long Total { get; init; }
 
         public DateTime LastSeenUtc { get; init; }
@@ -543,8 +742,17 @@ public sealed partial class MainForm
 
         public string InText => TcpConnectionItem.FormatTrafficBytes(BytesIn);
 
+        public string InRateText => FormatRate(RateIn);
+
+        public string OutRateText => FormatRate(RateOut);
+
         public string TotalText => TcpConnectionItem.FormatTrafficBytes(Total);
 
         public string LastSeenText => LastSeenUtc.ToLocalTime().ToString("MM-dd HH:mm:ss");
+
+        private static string FormatRate(long bytesPerSecond)
+            => bytesPerSecond <= 0
+                ? "—"
+                : TcpConnectionItem.FormatTrafficBytes(bytesPerSecond) + "/s";
     }
 }

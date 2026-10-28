@@ -79,6 +79,11 @@ public sealed class ServiceRequest
 
     /// <summary>true = 解除全部临时封禁。</summary>
     public bool AntiScanReleaseAll { get; set; }
+
+    // ---- 4.1：精确流量 ----
+
+    /// <summary>暂停 / 继续精确流量统计（null = 不改）。只对本次服务运行有效。</summary>
+    public bool? TrafficPaused { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -134,6 +139,12 @@ public sealed class ServiceResponse
 
     /// <summary>3.5：最近的 DNS 查询记录。</summary>
     public List<DnsDto>? DnsRecords { get; set; }
+
+    /// <summary>4.1：精确流量的运行状态（Npcap 采集）。</summary>
+    public TrafficStatusDto? TrafficStatus { get; set; }
+
+    /// <summary>4.1：最近 5 分钟的全局速率序列（1 秒粒度）。</summary>
+    public TrafficSeriesDto? TrafficSeries { get; set; }
 
     // ---- 3.7：IDS ----
 
@@ -376,14 +387,16 @@ public sealed class AntiScanStatusDto
 }
 
 /// <summary>
-/// 3.5：一个程序（或一个拿不到路径的 PID）本次服务运行以来的 TCP 流量。
+/// 一个程序（或一个拿不到路径的 PID）本次服务运行以来的流量。
 ///
-/// 只统计 TCP，且是「服务看到连接之后」的字节数：短连接、UDP、已被系统
-/// 回收的连接都可能漏计。界面必须把这条限制写出来，不能把它当精确账单。
+/// 4.1 起数据来自 Npcap 的按包精确计数（不再使用 ETW 的近似值）：
+///   - 字节口径是 **IP 载荷**（TCP/UDP 头 + 数据），与 iperf3 报告值可对齐；
+///   - 含重传、含被本程序拒绝的入站包（包确实到了网卡）；
+///   - 不含回环流量；IP 分片的后续分片归「未归属」。
 /// </summary>
 public sealed class TrafficDto
 {
-    /// <summary>聚合键：程序完整路径（小写），或 <c>pid:123</c>。</summary>
+    /// <summary>聚合键：程序完整路径（小写）、<c>pid:123</c>，或 <c>unattributed</c>。</summary>
     public string Key { get; set; } = string.Empty;
 
     /// <summary>程序完整路径；拿不到时为 null。</summary>
@@ -398,14 +411,83 @@ public sealed class TrafficDto
     /// <summary>这些字节属于哪些 PID（界面按 PID 匹配当前连接）。</summary>
     public List<int>? Pids { get; set; }
 
-    /// <summary>下载字节数（TCP 数据字节）。</summary>
+    /// <summary>下载字节数（入站总量）。</summary>
     public long BytesIn { get; set; }
 
-    /// <summary>上传字节数（TCP 数据字节）。</summary>
+    /// <summary>上传字节数（出站总量）。</summary>
     public long BytesOut { get; set; }
+
+    /// <summary>4.1：TCP 入站字节。</summary>
+    public long TcpBytesIn { get; set; }
+
+    /// <summary>4.1：TCP 出站字节。</summary>
+    public long TcpBytesOut { get; set; }
+
+    /// <summary>4.1：UDP 入站字节。</summary>
+    public long UdpBytesIn { get; set; }
+
+    /// <summary>4.1：UDP 出站字节。</summary>
+    public long UdpBytesOut { get; set; }
+
+    /// <summary>4.1：入站包数。</summary>
+    public long PacketsIn { get; set; }
+
+    /// <summary>4.1：出站包数。</summary>
+    public long PacketsOut { get; set; }
+
+    /// <summary>4.1：最近 3 秒的入站速率（字节/秒）。</summary>
+    public long RateIn { get; set; }
+
+    /// <summary>4.1：最近 3 秒的出站速率（字节/秒）。</summary>
+    public long RateOut { get; set; }
+
+    /// <summary>4.1：本次统计是否启用过采样放大（精度下降）。</summary>
+    public bool Sampled { get; set; }
+
+    /// <summary>4.1：数据来源，固定 <c>npcap</c>。</summary>
+    public string Source { get; set; } = "npcap";
 
     /// <summary>最后一次统计到流量的时间（UTC）。</summary>
     public DateTime LastSeenUtc { get; set; }
+}
+
+/// <summary>4.1：精确流量采集的运行状态。</summary>
+public sealed class TrafficStatusDto
+{
+    /// <summary>采集是否在跑。</summary>
+    public bool Collecting { get; set; }
+
+    /// <summary>用户是否按下了「暂停统计」。</summary>
+    public bool Paused { get; set; }
+
+    /// <summary>最近一次测得的包速率（包/秒）。</summary>
+    public long Pps { get; set; }
+
+    /// <summary>累计 pcap 丢包数（0 = 数据完整）。</summary>
+    public long Dropped { get; set; }
+
+    /// <summary>是否因速率过高启用了采样（此时数值是估算）。</summary>
+    public bool Sampled { get; set; }
+
+    /// <summary>Npcap 版本；未安装为 null。4.1 起安装器已强制安装。</summary>
+    public string? NpcapVersion { get; set; }
+
+    /// <summary>不可用时给界面看的原因。</summary>
+    public string? LastError { get; set; }
+}
+
+/// <summary>4.1：最近 5 分钟的全局速率序列（每秒一个点，旧的在前）。</summary>
+public sealed class TrafficSeriesDto
+{
+    public DateTime StartUtc { get; set; }
+
+    public int IntervalMs { get; set; } = 1000;
+
+    public List<long>? BytesIn { get; set; }
+
+    public List<long>? BytesOut { get; set; }
+
+    public bool Sampled { get; set; }
 }
 
 /// <summary>一条规则的 IPC 表示（与界面表格字段对应）。</summary>
@@ -494,6 +576,15 @@ public sealed class ServiceStatus
 
     /// <summary>3.5：本次服务运行解析到的网络数据事件数（诊断/验收用）。</summary>
     public long TrafficEventsSeen { get; set; }
+
+    /// <summary>4.1：精确流量采集的包速率（包/秒）。</summary>
+    public long TrafficPps { get; set; }
+
+    /// <summary>4.1：pcap 累计丢包数（0 = 数据完整）。</summary>
+    public long TrafficDropped { get; set; }
+
+    /// <summary>4.1：是否因速率过高启用了采样（数值为估算）。</summary>
+    public bool TrafficSampled { get; set; }
 
     /// <summary>3.5：DNS ETW 采集是否在跑（启动失败/被系统停止时为 false）。</summary>
     public bool DnsCollecting { get; set; }

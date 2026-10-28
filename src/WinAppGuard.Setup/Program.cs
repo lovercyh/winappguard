@@ -5,6 +5,7 @@ using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics.AntiScan;
+using WinAppGuard.Core.Diagnostics.Traffic;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 
@@ -128,9 +129,9 @@ internal static class Program
         Console.WriteLine("  双击 WinAppGuardSetup.exe            安装（未装）或修复（已装），并创建桌面快捷方式");
         Console.WriteLine("  双击 WinAppGuardUninstall.exe        完整卸载（服务 / 规则 / 快捷方式 / 记录 / 设置 / 目录）");
         Console.WriteLine();
-        Console.WriteLine("  WinAppGuardSetup.exe --install     安装（复制文件 + 创建服务 + 启动）");
-        Console.WriteLine("                       --with-npcap    同时安装 Npcap（会打开官方 GUI）");
-        Console.WriteLine("                       --without-npcap 跳过 Npcap（反扫描不可用）");
+        Console.WriteLine("  WinAppGuardSetup.exe --install     安装（先装 Npcap，再复制文件 + 创建服务 + 启动）");
+        Console.WriteLine("                       --with-npcap    无人值守时确认安装 Npcap（会打开官方 GUI）");
+        Console.WriteLine("                       --without-npcap 跳过 Npcap（仅自动化/特殊环境；流量统计与反扫描不可用）");
         Console.WriteLine("                       --allow-owner-mismatch  提权账户与登录账户不同时仍继续（所有者=提权账户）");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留密钥/规则/数据）");
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  同一所有者换一把新密钥（旧密钥删除）");
@@ -140,15 +141,17 @@ internal static class Program
         Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard（密钥始终删除）");
         Console.WriteLine();
         Console.WriteLine("安装器旁边必须同时有 WinAppGuard.exe 和 WinAppGuardSvc.exe。");
+        Console.WriteLine("4.1 起 Npcap 为必需组件：拒绝安装会以退出码 8 结束，且不修改任何系统设置；");
+        Console.WriteLine("Npcap 安装失败为退出码 9。--without-npcap 仅供自动化/特殊环境。");
         Console.WriteLine("3.1 起只有安装时的提权账户（所有者）能使用界面/服务；其他账户会被拒绝。");
         Console.WriteLine();
 
         Console.WriteLine("  Double-click WinAppGuardSetup.exe      install (if missing) or repair, and create a desktop shortcut");
         Console.WriteLine("  Double-click WinAppGuardUninstall.exe  full uninstall (service / rules / shortcut / records / settings / folder)");
         Console.WriteLine();
-        Console.WriteLine("  WinAppGuardSetup.exe --install     install (copy files + create service + start)");
-        Console.WriteLine("                       --with-npcap    also install Npcap (opens the official GUI)");
-        Console.WriteLine("                       --without-npcap skip Npcap (anti-scan unavailable)");
+        Console.WriteLine("  WinAppGuardSetup.exe --install     install (Npcap first, then copy files + create service + start)");
+        Console.WriteLine("                       --with-npcap    confirm Npcap in unattended mode (opens the official GUI)");
+        Console.WriteLine("                       --without-npcap skip Npcap (automation only; traffic stats and anti-scan unavailable)");
         Console.WriteLine("                       --allow-owner-mismatch  continue when the elevated account differs (owner = elevated account)");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      repair (overwrite files + restart service; keep key/rules/data)");
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  issue a new key for the same owner (old key deleted)");
@@ -158,6 +161,8 @@ internal static class Program
         Console.WriteLine("                       --keep-data  keep %ProgramData%\\WinAppGuard (the key is always deleted)");
         Console.WriteLine();
         Console.WriteLine("WinAppGuard.exe and WinAppGuardSvc.exe must be next to the installer.");
+        Console.WriteLine("Since 4.1 Npcap is required: declining exits with code 8 and changes nothing;");
+        Console.WriteLine("an Npcap failure exits with code 9. --without-npcap is for automation only.");
         Console.WriteLine("Since 3.1 only the elevated install account (owner) can use the UI/service; other accounts are rejected.");
     }
 
@@ -176,6 +181,14 @@ internal static class Program
 
         using var payload = LocatePayload();
 
+        // 4.1：Npcap 是必需组件，先装它；拒绝安装时系统还没被改过，不需要回滚。
+        var npcapResult = EnsureNpcap(payload);
+
+        if (npcapResult != 0)
+        {
+            return npcapResult;
+        }
+
         // 覆盖安装时界面可能正开着，占用 exe；先结束它，否则复制会失败。
         TryStopUiProcesses();
 
@@ -186,8 +199,6 @@ internal static class Program
 
         // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
-
-        MaybeInstallNpcap(payload);
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -243,6 +254,8 @@ internal static class Program
         TryMigrateUserDataToService();
         TryRecoverLegacyStrictMode();
 
+        ReportNpcapProbe();
+
         Bilingual.Say("服务已启动。", "Service started.");
         Console.WriteLine();
         Bilingual.Say($"完成。界面程序：{Path.Combine(InstallDirectory, UiExeName)}", $"Done. UI: {Path.Combine(InstallDirectory, UiExeName)}");
@@ -253,17 +266,24 @@ internal static class Program
     }
 
     /// <summary>
-    /// 4.0：按用户选择安装 Npcap。
+    /// 4.1：Npcap 是**必需组件**——流量统计与反端口扫描都依赖它。
     ///
-    /// A1 方案：随包放官方安装包，但**不静默安装**（免费版不支持 /S），
-    /// 只启动官方 GUI，并锁定推荐选项。用户可以在 Npcap 窗口里点安装/取消。
+    /// 顺序约定（用户批准）：
+    ///   1. 已安装 → 直接继续；
+    ///   2. 未安装 → 先说明后果，再启动官方 GUI（免费版不支持 /S，只能弹窗）；
+    ///   3. 用户拒绝 / 安装器返回 1 / UAC 取消 → 返回 8，**不修改任何系统状态**；
+    ///   4. 其它失败 / 装完找不到 wpcap.dll → 返回 9。
+    ///
+    /// 必须在复制文件、创建服务之前调用，这样拒绝安装时不需要回滚。
     /// </summary>
-    private static void MaybeInstallNpcap(Payload payload)
+    private static int EnsureNpcap(Payload payload)
     {
         if (_withoutNpcap)
         {
-            Bilingual.Say("已按参数跳过 Npcap（反扫描不可用）。", "Npcap skipped by argument (anti-scan unavailable).");
-            return;
+            Bilingual.Say(
+                "已按参数跳过 Npcap：流量统计与反端口扫描将不可用。",
+                "Npcap skipped by argument: traffic statistics and anti-port-scan will be unavailable.");
+            return 0;
         }
 
         if (NpcapLocator.IsAvailable)
@@ -271,15 +291,15 @@ internal static class Program
             Bilingual.Say(
                 $"检测到 Npcap {NpcapLocator.GetVersion()}，跳过安装。",
                 $"Npcap {NpcapLocator.GetVersion()} is already installed; skipping.");
-            return;
+            return 0;
         }
 
         if (!File.Exists(payload.NpcapSetup))
         {
-            Bilingual.Say(
-                "安装包未包含 Npcap，反扫描功能将不可用。",
-                "This package does not contain Npcap; anti-scan will be unavailable.");
-            return;
+            Bilingual.Fail(
+                "安装包未包含 Npcap（4.1 起为必需组件），安装中止。",
+                "This package does not contain Npcap (required since 4.1); installation aborted.");
+            return 9;
         }
 
         var install = _withNpcap;
@@ -288,15 +308,18 @@ internal static class Program
         {
             if (Console.IsInputRedirected)
             {
-                Bilingual.Say(
-                    "非交互安装：未指定 --with-npcap，跳过 Npcap（反扫描不可用）。",
-                    "Non-interactive install: Npcap was not requested; anti-scan will be unavailable.");
-                return;
+                Bilingual.Fail(
+                    "非交互安装必须显式指定 --with-npcap 或 --without-npcap。",
+                    "Non-interactive install must pass --with-npcap or --without-npcap.");
+                return 8;
             }
 
             Console.WriteLine();
-            Console.WriteLine("反端口扫描需要 Npcap（Windows 数据包捕获驱动）。");
-            Console.WriteLine("本安装包附带 Npcap 官方安装程序，未做任何修改。");
+            Console.WriteLine("WinAppGuard 4.1 起把 Npcap 作为必需组件：");
+            Console.WriteLine("  · 流量统计（按包精确计数）和反端口扫描都依赖它；");
+            Console.WriteLine("  · Npcap 是官方数据包捕获驱动，本安装包不解包、不改动它；");
+            Console.WriteLine("  · 程序只用它读取包头（长度 / 端口 / 标志），不读内容、不保存数据包；");
+            Console.WriteLine("  · 如果不同意安装，安装会退出，**不会修改任何系统设置**。");
             Console.WriteLine();
             Console.WriteLine("安装 Npcap 时会打开官方安装窗口，请保持以下选项：");
             Console.WriteLine("  [ ] Install Npcap in WinPcap API-compatible Mode");
@@ -304,8 +327,8 @@ internal static class Program
             Console.WriteLine("  [ ] Support raw 802.11 traffic");
             Console.WriteLine("  [x] Restrict Npcap driver's access to Administrators only");
             Console.WriteLine();
-            Console.WriteLine("是否现在安装 Npcap？[Y/n]");
-            Console.WriteLine("Install Npcap now? [Y/n]");
+            Console.WriteLine("是否继续安装 Npcap？[Y/n]");
+            Console.WriteLine("Continue with the Npcap installation? [Y/n]");
             Console.Write("> ");
 
             var answer = Console.ReadLine()?.Trim();
@@ -318,17 +341,17 @@ internal static class Program
         if (!install)
         {
             Bilingual.Say(
-                "已跳过 Npcap；防火墙主功能继续安装，反扫描不可用。",
-                "Npcap skipped; the firewall installs normally and anti-scan is unavailable.");
-            return;
+                "已取消安装：系统没有被修改。",
+                "Installation cancelled: no system changes were made.");
+            return 8;
         }
 
         if (!NpcapInstaller.Verify(payload.NpcapSetup, out var verifyReason))
         {
             Bilingual.Fail(
-                $"Npcap 安装包校验失败（{verifyReason}），已停止安装 Npcap。",
-                $"The bundled Npcap installer failed verification ({verifyReason}); Npcap was not installed.");
-            return;
+                $"Npcap 安装包校验失败（{verifyReason}），安装中止。",
+                $"The bundled Npcap installer failed verification ({verifyReason}); installation aborted.");
+            return 9;
         }
 
         Bilingual.Say(
@@ -354,9 +377,9 @@ internal static class Program
             if (process is null)
             {
                 Bilingual.Fail(
-                    "无法启动 Npcap 安装程序。",
-                    "Could not start the Npcap installer.");
-                return;
+                    "无法启动 Npcap 安装程序，安装中止。",
+                    "Could not start the Npcap installer; installation aborted.");
+                return 9;
             }
 
             process.WaitForExit();
@@ -364,25 +387,27 @@ internal static class Program
 
             if (code is 0 or 3010)
             {
-                var reboot = code == 3010
-                    ? "Npcap 安装成功，但需要重启后才会完全生效。"
-                    : "Npcap 安装完成。";
-
-                Bilingual.Say(reboot, code == 3010
-                    ? "Npcap installed; a reboot is required before it is fully active."
-                    : "Npcap installation completed.");
+                Bilingual.Say(
+                    code == 3010
+                        ? "Npcap 安装成功；需要重启后才会完全生效。"
+                        : "Npcap 安装完成。",
+                    code == 3010
+                        ? "Npcap installed; a reboot is required before it is fully active."
+                        : "Npcap installation completed.");
             }
             else if (code == 1)
             {
                 Bilingual.Say(
-                    "Npcap 安装被取消；反扫描不可用。",
-                    "Npcap installation was cancelled; anti-scan is unavailable.");
+                    "已取消 Npcap 安装：系统没有被修改，安装中止。",
+                    "Npcap installation was cancelled: no system changes were made; installation aborted.");
+                return 8;
             }
             else
             {
-                Bilingual.Say(
-                    $"Npcap 安装未完成（退出码 {code}）；反扫描不可用。",
-                    $"Npcap installation did not complete (exit code {code}); anti-scan is unavailable.");
+                Bilingual.Fail(
+                    $"Npcap 安装未完成（退出码 {code}），安装中止。",
+                    $"Npcap installation did not complete (exit code {code}); installation aborted.");
+                return 9;
             }
         }
         catch (Exception ex)
@@ -390,19 +415,56 @@ internal static class Program
             Bilingual.Fail(
                 $"启动 Npcap 安装程序失败：{ex.Message}",
                 $"Failed to start the Npcap installer: {ex.Message}");
+            return 9;
         }
 
         if (!NpcapLocator.IsAvailable)
         {
-            Bilingual.Say(
-                "当前仍未检测到 Npcap；可以稍后重装 WinAppGuard 或手动安装 Npcap。",
-                "Npcap is still not detected; reinstall WinAppGuard later or install Npcap manually.");
+            Bilingual.Fail(
+                "Npcap 安装器已结束，但仍检测不到 wpcap.dll，安装中止。",
+                "The Npcap installer finished, but wpcap.dll is still missing; installation aborted.");
+            return 9;
         }
+
+        return 0;
     }
 
+    /// <summary>
+    /// 4.1：装完/启动服务后做一次只读探测。
+    /// 打不开网卡**只警告**：驱动异常不该让用户连防火墙都用不了。
+    /// </summary>
+    private static void ReportNpcapProbe()
+    {
+        if (_withoutNpcap)
+        {
+            return;
+        }
+
+        if (NpcapProbe.TryOpen(out var error))
+        {
+            Bilingual.Say("Npcap 探测：可以打开网卡。", "Npcap probe: an adapter can be opened.");
+            return;
+        }
+
+        Bilingual.Say(
+            $"警告：Npcap 已安装，但打不开网卡（{error}）。",
+            $"Warning: Npcap is installed, but no adapter can be opened ({error}).");
+        Bilingual.Say(
+            "防火墙主功能仍可使用；流量统计和反端口扫描会显示不可用。请重启后重试，或查看服务日志。",
+            "The firewall still works; traffic statistics and anti-port scan will show as unavailable. Retry after a reboot, or check the service log.");
+    }
     private static int Repair(bool allowOwnerMismatch)
     {
         using var payload = LocatePayload();
+
+        // 4.1：修复/升级同样要求 Npcap；顺序放在停服务之前，避免"拒绝安装却把服务停了"。
+        var npcapResult = EnsureNpcap(payload);
+
+        if (npcapResult != 0)
+        {
+            return npcapResult;
+        }
+
         TryStopUiProcesses();
 
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
@@ -414,8 +476,6 @@ internal static class Program
         Directory.CreateDirectory(InstallDirectory);
         CopyPayload(payload);
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
-
-        MaybeInstallNpcap(payload);
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
@@ -471,6 +531,8 @@ internal static class Program
             TryMigrateUserDataToService();
             TryRecoverLegacyStrictMode();
         }
+
+        ReportNpcapProbe();
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
             ? Bilingual.One("修复完成，服务正在运行。", "Repair completed; the service is running.")

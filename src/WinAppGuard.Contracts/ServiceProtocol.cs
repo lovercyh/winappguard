@@ -112,6 +112,9 @@ public static class ServiceProtocol
         /// <summary>3.6：清空本次运行的流量计数并重置统计起点。</summary>
         public const string ClearTraffic = "write.traffic.clear";
 
+        /// <summary>4.1：暂停 / 继续精确流量统计（只对本次运行有效）。</summary>
+        public const string ConfigureTraffic = "write.traffic.configure";
+
         /// <summary>3.5：最近的 DNS 查询记录（内存环形缓冲）。</summary>
         public const string QueryDns = "query.dns";
 

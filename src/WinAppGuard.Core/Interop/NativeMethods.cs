@@ -29,6 +29,9 @@ internal static class NativeMethods
     /// <summary>所有 TCP 连接，并且带所属进程 PID。</summary>
     internal const int TCP_TABLE_OWNER_PID_ALL = 5;
 
+    /// <summary>4.1：UDP 端点表（带所属进程 PID）。</summary>
+    internal const int UDP_TABLE_OWNER_PID = 1;
+
     // ---------------- 返回码 ----------------
 
     internal const int NO_ERROR = 0;
@@ -53,6 +56,16 @@ internal static class NativeMethods
     [DllImport("iphlpapi.dll", SetLastError = true)]
     internal static extern uint GetExtendedTcpTable(
         IntPtr pTcpTable,
+        ref int pdwSize,
+        [MarshalAs(UnmanagedType.Bool)] bool bOrder,
+        int ulAf,
+        int tableClass,
+        int reserved);
+
+    /// <summary>4.1：获取 UDP 端点表（含 PID），调用方式与 <see cref="GetExtendedTcpTable"/> 相同。</summary>
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    internal static extern uint GetExtendedUdpTable(
+        IntPtr pUdpTable,
         ref int pdwSize,
         [MarshalAs(UnmanagedType.Bool)] bool bOrder,
         int ulAf,
@@ -437,5 +450,43 @@ internal struct MibTcp6RowOwnerPid
     public uint State;
 
     /// <summary>拥有该连接的进程 PID。</summary>
+    public uint OwningPid;
+}
+
+/// <summary>
+/// 4.1：IPv4 UDP 端点表中的一行（含 PID）。
+/// 对应 Win32 的 MIB_UDPROW_OWNER_PID，字段顺序必须完全一致。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MibUdpRowOwnerPid
+{
+    /// <summary>本地地址，网络字节序。</summary>
+    public uint LocalAddr;
+
+    /// <summary>本地端口，网络字节序，数值存放在低 16 位。</summary>
+    public uint LocalPort;
+
+    /// <summary>拥有该端点的进程 PID。</summary>
+    public uint OwningPid;
+}
+
+/// <summary>
+/// 4.1：IPv6 UDP 端点表中的一行（含 PID）。
+/// 对应 Win32 的 MIB_UDP6ROW_OWNER_PID。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MibUdp6RowOwnerPid
+{
+    /// <summary>本地地址，16 字节，网络字节序。</summary>
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+    public byte[] LocalAddr;
+
+    /// <summary>本地地址的作用域 ID。</summary>
+    public uint LocalScopeId;
+
+    /// <summary>本地端口，网络字节序。</summary>
+    public uint LocalPort;
+
+    /// <summary>拥有该端点的进程 PID。</summary>
     public uint OwningPid;
 }

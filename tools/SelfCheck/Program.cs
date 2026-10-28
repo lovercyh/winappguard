@@ -18,6 +18,7 @@ using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Diagnostics.Ids;
+using WinAppGuard.Core.Diagnostics.Traffic;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
@@ -158,6 +159,8 @@ internal static class Program
                         && !args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--snapshot-test", StringComparer.OrdinalIgnoreCase)
@@ -423,6 +426,18 @@ internal static class Program
             else if (args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunAntiScanTest();
+            }
+            else if (args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunTrafficLiveTest();
+            }
+            else if (args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunTrafficCaptureTest();
+            }
+            else if (args.Contains("--service-traffic-precise-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceTrafficPreciseTest();
             }
             else if (args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1653,7 +1668,7 @@ internal static class Program
         // ---- 流量页 ----
         TrySetField(form, "_trafficStartedUtc", (DateTime?)started);
         TrySetField(form, "_trafficServiceAvailable", true);
-        TrySetField(form, "_trafficRecords", new List<TrafficDto>
+        var docsTraffic = new List<TrafficDto>
         {
             new()
             {
@@ -1715,7 +1730,52 @@ internal static class Program
                 BytesIn = 96_256,
                 LastSeenUtc = now.AddMinutes(-11).ToUniversalTime(),
             },
+        };
+
+        // 4.1：截图里要能看出 TCP/UDP 拆分与实时速率。
+        foreach (var row in docsTraffic)
+        {
+            row.TcpBytesIn = (long)(row.BytesIn * 0.92);
+            row.UdpBytesIn = row.BytesIn - row.TcpBytesIn;
+            row.TcpBytesOut = (long)(row.BytesOut * 0.65);
+            row.UdpBytesOut = row.BytesOut - row.TcpBytesOut;
+            row.RateIn = Math.Min(row.BytesIn, 12_400_000);
+            row.RateOut = Math.Min(row.BytesOut, 1_900_000);
+        }
+
+        TrySetField(form, "_trafficRecords", docsTraffic);
+        TrySetField(form, "_trafficStatus", new TrafficStatusDto
+        {
+            Collecting = true,
+            NpcapVersion = "1.90",
+            Pps = 2_431,
+            Dropped = 0,
+            Sampled = false,
         });
+
+        var docsBytesIn = new List<long>(300);
+        var docsBytesOut = new List<long>(300);
+
+        for (var i = 0; i < 300; i++)
+        {
+            var wave = (long)(Math.Sin(i / 17.0) * 3_800_000 + 5_600_000);
+            var inbound = Math.Max(80_000, wave);
+            docsBytesIn.Add(inbound);
+            docsBytesOut.Add(Math.Max(20_000, inbound / 6));
+        }
+
+        TrySetField(form, "_trafficSeries", new TrafficSeriesDto
+        {
+            StartUtc = now.ToUniversalTime().AddSeconds(-300),
+            IntervalMs = 1000,
+            BytesIn = docsBytesIn,
+            BytesOut = docsBytesOut,
+        });
+
+        if (TryGetField<TrafficChart>(form, "_trafficChart", out var docsChart))
+        {
+            docsChart.SetSeries(docsBytesIn, docsBytesOut);
+        }
 
         InvokePrivate(form, "RebuildTrafficView", null);
 
@@ -10089,6 +10149,10 @@ internal static class Program
             CheckAssertion(results, "流量采集在跑", status.TrafficCollecting);
             CheckAssertion(results, "DNS 采集在跑", status.DnsCollecting);
 
+            // 4.1：流量改由 Npcap 采集，状态里必须能看出驱动版本与丢包。
+            CheckAssertion(results, "流量状态带 Npcap 版本 / 丢包计数",
+                status.TrafficDropped >= 0 && status.TrafficPps >= 0);
+
             // ---------------- 流量 ----------------
             var before = QueryTrafficFromService(out var trafficError);
             TrafficDto? ownBefore = before is null ? null : FindOwnTraffic(before);
@@ -10104,21 +10168,23 @@ internal static class Program
             }
             else
             {
-                W($"    下载前本进程累计下载 = {ownBefore?.BytesIn ?? 0} 字节");
+                W($"    回环测试前本进程累计入站 = {ownBefore?.BytesIn ?? 0} 字节");
 
-                var payloadBytes = 4 * 1024 * 1024;
+                // 4.1：回环流量**不**计入（设计如此），这里反过来验证这条约束。
+                var payloadBytes = 1 * 1024 * 1024;
                 var received = DownloadLoopbackPayload(payloadBytes, out var downloadError);
                 W($"    回环下载完成：{received} 字节（{downloadError ?? "ok"}）");
 
-                Thread.Sleep(TimeSpan.FromSeconds(5));
+                Thread.Sleep(TimeSpan.FromSeconds(3));
 
-                var after = QueryTrafficFromService(out _);
-                var ownAfter = after is null ? null : FindOwnTraffic(after);
-                var delta = ownAfter is null ? -1 : ownAfter.BytesIn - (ownBefore?.BytesIn ?? 0);
+                var afterLoopback = QueryTrafficFromService(out _);
+                var ownAfterLoopback = afterLoopback is null ? null : FindOwnTraffic(afterLoopback);
+                var loopbackDelta = ownAfterLoopback is null
+                    ? -1
+                    : ownAfterLoopback.BytesIn - (ownBefore?.BytesIn ?? 0);
 
-                W($"    下载后本进程累计下载 = {ownAfter?.BytesIn ?? 0} 字节；本次增量 = {delta} 字节");
-                CheckAssertion(results, "本进程下载字节增量约为 4 MiB",
-                    delta >= 2_500_000 && delta <= 6_000_000);
+                W($"    回环下载后累计入站 = {ownAfterLoopback?.BytesIn ?? 0} 字节；增量 = {loopbackDelta} 字节");
+                CheckAssertion(results, "回环流量不计入精确统计", loopbackDelta is >= 0 and < 64 * 1024);
 
                 var wall = DateTime.UtcNow - wallBefore;
                 var cpuAfter = TryReadCpu(serviceProcess);
@@ -10128,25 +10194,28 @@ internal static class Program
                     var percent = (cpuEnd - cpuStart).TotalMilliseconds
                                   / (wall.TotalMilliseconds * Environment.ProcessorCount) * 100;
 
-                    W($"    服务 CPU（下载期间，{Environment.ProcessorCount} 核）= {percent:0.0}%");
+                    W($"    服务 CPU（回环下载期间，{Environment.ProcessorCount} 核）= {percent:0.0}%（仅记录）");
                 }
                 else
                 {
                     W("    服务 CPU：无法读取（权限或服务已退出）");
                 }
 
+                var after = QueryTrafficFromService(out _);
+
                 if (after is not null)
                 {
                     W("    流量前 5 名：");
                     foreach (var row in after.Take(5))
                     {
-                        W($"      {row.Name,-32} 上传 {row.BytesOut,10}  下载 {row.BytesIn,10}");
+                        W($"      {row.Name,-32} 入站 {row.BytesIn,10}  出站 {row.BytesOut,10}  " +
+                          $"UDP 入 {row.UdpBytesIn,10}");
                     }
                 }
 
                 var afterStatus = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
-                W($"    流量事件数（本次服务运行累计）= {afterStatus?.TrafficEventsSeen ?? 0}" +
-                  $"（本次测试新增 {Math.Max(0, (afterStatus?.TrafficEventsSeen ?? 0) - status.TrafficEventsSeen)}）");
+                W($"    包速率 = {afterStatus?.TrafficPps ?? 0} pps；丢包 = {afterStatus?.TrafficDropped ?? 0}" +
+                  $"；采样 = {afterStatus?.TrafficSampled == true}");
             }
 
             // ---------------- DNS ----------------
@@ -10726,6 +10795,130 @@ internal static class Program
         LateralRule = settings.LateralRule,
         DnsRule = settings.DnsRule,
     };
+
+    /// <summary>
+    /// 4.1：精确流量的服务端实测（Npcap 状态 / 暂停 / 继续 / 清空 / 曲线）。
+    /// 只在 VM 上跑：会暂停采集、清空计数。
+    /// </summary>
+    private static void RunServiceTrafficPreciseTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   4.1 精确流量服务端实测（Npcap / 暂停 / 曲线 / 清空）        #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        CheckAssertion(results, "服务版本是 4.1 或更高", status.ServiceVersion.StartsWith("4.1", StringComparison.Ordinal));
+        CheckAssertion(results, "精确流量采集在跑", status.TrafficCollecting);
+        CheckAssertion(results, "丢包计数可读", status.TrafficDropped >= 0);
+
+        var before = QueryTrafficResponse(out var beforeError);
+
+        if (before is not { Ok: true })
+        {
+            W($"    读取失败：{before?.Error ?? beforeError}");
+            CheckAssertion(results, "读取精确流量快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        var beforeSeries = before.TrafficSeries?.BytesIn?.Count ?? 0;
+        W($"    采集={before.TrafficStatus?.Collecting} Npcap={before.TrafficStatus?.NpcapVersion} " +
+          $"pps={before.TrafficStatus?.Pps} 丢包={before.TrafficStatus?.Dropped} " +
+          $"采样={before.TrafficStatus?.Sampled} 曲线点={beforeSeries}");
+
+        CheckAssertion(results, "返回 Npcap 版本与曲线",
+            !string.IsNullOrWhiteSpace(before.TrafficStatus?.NpcapVersion)
+            && before.TrafficSeries is not null);
+
+        var paused = ServiceClient.TryRequest(
+            new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.ConfigureTraffic,
+                TrafficPaused = true,
+            },
+            TimeSpan.FromSeconds(15),
+            out var pauseError);
+
+        CheckAssertion(results, "暂停精确统计成功",
+            paused is { Ok: true, TrafficStatus.Paused: true });
+
+        if (paused is not { Ok: true })
+        {
+            W($"    暂停失败：{paused?.Error ?? pauseError}");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        Thread.Sleep(TimeSpan.FromSeconds(3));
+
+        var pausedSnapshot = QueryTrafficResponse(out _);
+        var pausedSeries = pausedSnapshot?.TrafficSeries?.BytesIn?.Count ?? 0;
+
+        W($"    暂停 3 秒后曲线点 = {pausedSeries}（暂停前 {beforeSeries}）");
+        CheckAssertion(results, "暂停后曲线不再增长",
+            pausedSeries <= beforeSeries + 1);
+
+        var resumed = ServiceClient.TryRequest(
+            new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.ConfigureTraffic,
+                TrafficPaused = false,
+            },
+            TimeSpan.FromSeconds(15),
+            out var resumeError);
+
+        CheckAssertion(results, "继续精确统计成功",
+            resumed is { Ok: true, TrafficStatus.Paused: false });
+
+        if (resumed is not { Ok: true })
+        {
+            W($"    继续失败：{resumed?.Error ?? resumeError}");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        Thread.Sleep(TimeSpan.FromSeconds(3));
+
+        var resumedSnapshot = QueryTrafficResponse(out _);
+        var resumedSeries = resumedSnapshot?.TrafficSeries?.BytesIn?.Count ?? 0;
+
+        W($"    继续 3 秒后曲线点 = {resumedSeries}");
+        CheckAssertion(results, "继续后曲线恢复增长",
+            resumedSeries > pausedSeries);
+
+        var cleared = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.ClearTraffic },
+            TimeSpan.FromSeconds(15),
+            out var clearError);
+
+        CheckAssertion(results, "清空精确统计成功", cleared is { Ok: true });
+
+        var afterClear = QueryTrafficResponse(out _);
+
+        CheckAssertion(results, "清空后程序与曲线归零",
+            afterClear is { Ok: true }
+            && (afterClear.Traffic?.Count ?? 0) == 0
+            && (afterClear.TrafficSeries?.BytesIn?.Count ?? 0) == 0);
+
+        if (cleared is null)
+        {
+            W($"    清空失败：{clearError}");
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
 
     private static void RunServiceTrafficClearTest()
     {
@@ -11752,6 +11945,294 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// 4.1：精确流量聚合的离线自检（不需要 Npcap、不需要管理员）。
+    ///
+    /// 覆盖：方向/协议分列、方向→程序归属、pending 重试、超时归「未归属」、
+    /// 速率滑动平均、5 分钟环形缓冲、清空语义、新增 DTO 往返。
+    /// </summary>
+    /// <summary>
+    /// 4.1：真实抓包冒烟测试（离线环境也能跑，只要有 Npcap）。
+    ///
+    /// 验证的是 C/托管 ABI 与解析：能否打开网卡、能否看到真实包、能否归属到程序。
+    /// 不需要管理员（前提是 Npcap 安装时没有强制 admin_only）。
+    /// </summary>
+    private static void RunTrafficLiveTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var aggregator = new TrafficAggregator();
+        var events = 0L;
+
+        W("################################################################");
+        W("#   4.1 真实流量冒烟（Npcap 打开 / 解析 / 归属；不写盘）        #");
+        W("################################################################");
+        W();
+
+        using var capture = new NpcapTrafficCapture
+        {
+            PacketObserved = packet =>
+            {
+                Interlocked.Increment(ref events);
+                aggregator.Observe(packet, DateTime.UtcNow);
+            },
+            FragmentObserved = (direction, bytes) =>
+                aggregator.ObserveUnattributed(direction, bytes, DateTime.UtcNow),
+            Log = message => W("    " + message),
+        };
+
+        if (!capture.Start())
+        {
+            W($"    Npcap 启动失败：{capture.LastError}");
+            CheckAssertion(results, "打开 Npcap 网卡", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        CheckAssertion(results, "打开 Npcap 网卡", true);
+
+        try
+        {
+            // 产生一点真实流量：DNS（走系统解析器）+ 一次 TCP 连接尝试。
+            for (var i = 0; i < 5; i++)
+            {
+                try
+                {
+                    _ = Dns.GetHostAddresses($"probe-{Guid.NewGuid():N}.example.com");
+                }
+                catch (Exception)
+                {
+                    // NXDOMAIN 也算产生了查询。
+                }
+            }
+
+            try
+            {
+                using var client = new TcpClient();
+                var connect = client.ConnectAsync("example.com", 80);
+                connect.Wait(TimeSpan.FromSeconds(3));
+            }
+            catch (Exception)
+            {
+                // 没有外网也没关系，DNS 已经产生包了。
+            }
+
+            for (var i = 0; i < 5; i++)
+            {
+                Thread.Sleep(1000);
+                aggregator.SetOwnerLookup(EndpointOwnerTable.Capture());
+                aggregator.Tick(DateTime.UtcNow);
+            }
+
+            capture.RefreshStatistics();
+
+            var snapshot = aggregator.Snapshot(sampled: capture.SampleFactor > 1);
+            var totalIn = snapshot.BytesIn.Sum();
+            var totalOut = snapshot.BytesOut.Sum();
+            var top = snapshot.Programs
+                .OrderByDescending(item => item.TcpBytesIn + item.UdpBytesIn + item.TcpBytesOut + item.UdpBytesOut)
+                .Take(5)
+                .ToList();
+
+            W($"    抓到包事件 = {events}；采样 = 1/{capture.SampleFactor}；丢包 = {capture.DroppedPackets}");
+            W($"    曲线合计 入站 {totalIn} 字节 / 出站 {totalOut} 字节；归属程序 {snapshot.Programs.Count} 个");
+
+            foreach (var item in top)
+            {
+                W($"      {item.Key,-50} TCP 入 {item.TcpBytesIn,10} / 出 {item.TcpBytesOut,10} " +
+                  $"UDP 入 {item.UdpBytesIn,10} / 出 {item.UdpBytesOut,10}");
+            }
+
+            CheckAssertion(results, "抓到了真实数据包", events > 0);
+            CheckAssertion(results, "曲线里有入站或出站字节", totalIn + totalOut > 0);
+            CheckAssertion(results, "至少归属到一个程序（或未归属）", snapshot.Programs.Count > 0);
+            CheckAssertion(results, "丢包计数可读", capture.DroppedPackets >= 0);
+        }
+        finally
+        {
+            capture.Stop();
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunTrafficCaptureTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = new DateTime(2026, 10, 27, 12, 0, 0, DateTimeKind.Utc);
+        var owners = new FakeEndpointOwners();
+        var aggregator = new TrafficAggregator(owners);
+
+        W("################################################################");
+        W("#   4.1 精确流量聚合（离线：方向 / 归属 / 速率 / 环形缓冲）     #");
+        W("################################################################");
+        W();
+
+        static TrafficEndpoint Endpoint(uint address, ushort port, TrafficProtocol protocol)
+            => new(4, address, 0, port, protocol);
+
+        var tcpIn = Endpoint(0x0A000005, 443, TrafficProtocol.Tcp);
+        var tcpOut = Endpoint(0x0A000006, 51515, TrafficProtocol.Tcp);
+        var udpIn = Endpoint(0x0A000007, 53, TrafficProtocol.Udp);
+
+        owners.Map[tcpIn] = 4001;
+        owners.Map[tcpOut] = 4001;
+        owners.Map[udpIn] = 4001;
+
+        aggregator.Observe(new TrafficPacket(tcpIn, TrafficDirection.Inbound, TrafficProtocol.Tcp, 1000), start);
+        aggregator.Observe(new TrafficPacket(tcpOut, TrafficDirection.Outbound, TrafficProtocol.Tcp, 2000), start);
+        aggregator.Observe(new TrafficPacket(udpIn, TrafficDirection.Inbound, TrafficProtocol.Udp, 300), start);
+
+        var first = aggregator.Snapshot(sampled: false);
+        var program = first.Programs.SingleOrDefault(item => item.Key == "pid:4001");
+
+        CheckAssertion(results, "TCP / UDP 分列与方向正确",
+            program is
+            {
+                TcpBytesIn: 1000,
+                TcpBytesOut: 2000,
+                UdpBytesIn: 300,
+                UdpBytesOut: 0,
+                PacketsIn: 2,
+                PacketsOut: 1,
+            });
+
+        aggregator.Tick(start.AddSeconds(1));
+        var afterFirstTick = aggregator.Snapshot(sampled: false)
+            .Programs.Single(item => item.Key == "pid:4001");
+
+        CheckAssertion(results, "速率按 3 秒滑动平均起步",
+            afterFirstTick.RateIn == (1000 + 300) / 3
+            && afterFirstTick.RateOut == 2000 / 3);
+
+        aggregator.Tick(start.AddSeconds(2));
+        var afterSecondTick = aggregator.Snapshot(sampled: false)
+            .Programs.Single(item => item.Key == "pid:4001");
+
+        CheckAssertion(results, "没有新流量时速率平滑衰减",
+            afterSecondTick.RateIn < afterFirstTick.RateIn
+            && afterSecondTick.RateOut < afterFirstTick.RateOut);
+
+        // 未归属：先记 pending，1 秒内不放弃，超过 3 秒归「未归属」。
+        var unknown = Endpoint(0x0A000009, 8443, TrafficProtocol.Tcp);
+        aggregator.Observe(new TrafficPacket(unknown, TrafficDirection.Inbound, TrafficProtocol.Tcp, 700), start.AddSeconds(2));
+
+        CheckAssertion(results, "查不到 PID 的包先挂在 pending", aggregator.PendingCount == 1);
+
+        aggregator.Tick(start.AddSeconds(3));
+
+        CheckAssertion(results, "pending 未超时不丢弃", aggregator.PendingCount == 1);
+
+        aggregator.Tick(start.AddSeconds(6));
+
+        var unattributed = aggregator.Snapshot(sampled: false)
+            .Programs.FirstOrDefault(item => item.Key == TrafficAggregator.UnattributedKey);
+
+        CheckAssertion(results, "超过 3 秒归入「未归属」",
+            aggregator.PendingCount == 0
+            && unattributed is { TcpBytesIn: 700 });
+
+        // IP 分片的非首片没有端口，只能计入「未归属」的总数。
+        aggregator.ObserveUnattributed(TrafficDirection.Inbound, 333, start.AddSeconds(6));
+        aggregator.Tick(start.AddSeconds(7));
+
+        var unattributedWithFragment = aggregator.Snapshot(sampled: false)
+            .Programs.FirstOrDefault(item => item.Key == TrafficAggregator.UnattributedKey);
+
+        CheckAssertion(results, "分片字节计入「未归属」总数",
+            unattributedWithFragment is { OtherBytesIn: 333 }
+            && unattributedWithFragment.TcpBytesIn == 700);
+
+        // 迟到归属：端点表刷新后应该落到真实程序。
+        var late = Endpoint(0x0A00000A, 9000, TrafficProtocol.Udp);
+        aggregator.Observe(new TrafficPacket(late, TrafficDirection.Outbound, TrafficProtocol.Udp, 512), start.AddSeconds(7));
+
+        owners.Map[late] = 4002;
+        aggregator.Tick(start.AddSeconds(8));
+
+        var lateProgram = aggregator.Snapshot(sampled: false)
+            .Programs.FirstOrDefault(item => item.Key == "pid:4002");
+
+        CheckAssertion(results, "端点表刷新后 pending 能补归属",
+            lateProgram is { UdpBytesOut: 512 } && aggregator.PendingCount == 0);
+
+        // 环形缓冲：每秒一个点，旧的在前。
+        var series = aggregator.Snapshot(sampled: false);
+
+        CheckAssertion(results, "曲线每秒一个点且旧的在前",
+            series.BytesIn.Count == series.BytesOut.Count
+            && series.BytesIn.Count == 6
+            && series.BytesIn[0] == 1300
+            && series.BytesIn[1] == 0
+            && series.BytesIn[2] == 700
+            && series.BytesIn[4] == 333
+            && series.BytesOut[5] == 512);
+
+        var beforeClear = aggregator.Snapshot(sampled: false).Programs.Count;
+        aggregator.Clear();
+        var cleared = aggregator.Snapshot(sampled: false);
+
+        CheckAssertion(results, "清空后程序与曲线都归零",
+            beforeClear > 0 && cleared.Programs.Count == 0 && cleared.BytesIn.Count == 0);
+
+        // 新增 DTO 的 JSON 往返。
+        var response = new ServiceResponse
+        {
+            Ok = true,
+            Traffic = new List<TrafficDto>
+            {
+                new()
+                {
+                    Key = "pid:4001",
+                    Name = "PID 4001",
+                    BytesIn = 1300,
+                    BytesOut = 2000,
+                    TcpBytesIn = 1000,
+                    TcpBytesOut = 2000,
+                    UdpBytesIn = 300,
+                    PacketsIn = 2,
+                    PacketsOut = 1,
+                    RateIn = 433,
+                    RateOut = 666,
+                    Sampled = true,
+                    Source = "npcap",
+                },
+            },
+            TrafficSeries = new TrafficSeriesDto
+            {
+                StartUtc = start,
+                BytesIn = new List<long> { 1300, 0 },
+                BytesOut = new List<long> { 2000, 0 },
+                Sampled = true,
+            },
+            TrafficStatus = new TrafficStatusDto
+            {
+                Collecting = true,
+                Pps = 1234,
+                Dropped = 0,
+                NpcapVersion = "1.90",
+            },
+        };
+
+        var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+
+        CheckAssertion(results, "协议 DTO：精确字段 / 曲线 / 状态往返",
+            back?.Traffic is { Count: 1 }
+            && back.Traffic[0] is { UdpBytesIn: 300, Sampled: true, Source: "npcap" }
+            && back.TrafficSeries is { BytesIn.Count: 2, Sampled: true }
+            && back.TrafficStatus is { Collecting: true, Pps: 1234, NpcapVersion: "1.90" });
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private sealed class FakeEndpointOwners : IEndpointOwnerLookup
+    {
+        public Dictionary<TrafficEndpoint, int> Map { get; } = new();
+
+        public int Lookup(in TrafficEndpoint endpoint)
+            => Map.TryGetValue(endpoint, out var pid) ? pid : 0;
+    }
+
     private static void RunAntiScanTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -12237,10 +12718,79 @@ internal static class Program
 
             var unknownOk = grid.Rows.Count == 1
                             && grid.Rows[0].Cells[1].Value?.ToString() == "（无法获取）"
-                            && grid.Rows[0].Cells[6].Value?.ToString() == "路径未知";
+                            && grid.Rows[0].Cells[grid.Columns["Note"]!.Index].Value?.ToString() == "路径未知";
 
             W($"    未知路径行 = {grid.Rows.Count} 行");
             CheckAssertion(results, "未知路径显示无法获取 + 路径未知", unknownOk);
+
+            // 4.1：新增的列、暂停按钮、曲线控件。
+            if (TryGetField<WinAppGuard.Forms.TrafficChart>(form, "_trafficChart", out var chart)
+                && TryGetField<Button>(form, "_trafficPauseButton", out var pauseButton))
+            {
+                var headers = grid.Columns.Cast<DataGridViewColumn>()
+                    .Select(column => column.HeaderText)
+                    .ToList();
+
+                W("    流量列头 = " + string.Join(" | ", headers));
+                CheckAssertion(results, "流量页有入站/出站/下行/上行列",
+                    headers.Contains("入站") && headers.Contains("出站")
+                    && headers.Contains("下行") && headers.Contains("上行")
+                    && headers.Contains("最后活动"));
+
+                CheckAssertion(results, "流量页有暂停按钮和曲线控件",
+                    pauseButton.Text.Contains("暂停", StringComparison.Ordinal)
+                    && chart.Height > 60);
+            }
+            else
+            {
+                CheckAssertion(results, "找得到暂停按钮 / 曲线控件", false);
+            }
+
+            // 4.1：未归属行要显示成人能看懂的名字，速率列要带 /s。
+            search.Text = string.Empty;
+            TrySetField(form, "_trafficRecords", new List<TrafficDto>
+            {
+                new()
+                {
+                    Key = "unattributed", Name = "unattributed", IsPathKnown = false,
+                    BytesIn = 100, BytesOut = 50, TcpBytesIn = 60, UdpBytesIn = 40,
+                    RateIn = 1024, RateOut = 2048, LastSeenUtc = now,
+                },
+            });
+
+            rebuild.Invoke(form, null);
+            Application.DoEvents();
+
+            CheckAssertion(results, "未归属行显示本地化名称与速率",
+                grid.Rows.Count == 1
+                && grid.Rows[0].Cells[0].Value?.ToString() == "未归属（PID 未知）"
+                && grid.Rows[0].Cells[grid.Columns["InRateText"]!.Index].Value?.ToString()
+                    ?.EndsWith("/s", StringComparison.Ordinal) == true);
+
+            // 4.1：统计行要能看出 pps / 丢包 / 采样，否则“准不准”无从判断。
+            TrySetField(form, "_trafficStatus", new TrafficStatusDto
+            {
+                Collecting = true,
+                NpcapVersion = "1.90",
+                Pps = 1234,
+                Dropped = 7,
+                Sampled = true,
+            });
+
+            rebuild.Invoke(form, null);
+            Application.DoEvents();
+
+            W($"    统计行 = {summary.Text}");
+            CheckAssertion(results, "统计行标注 pps / 丢包 / 采样 / Npcap",
+                summary.Text.Contains("1234", StringComparison.Ordinal)
+                && summary.Text.Contains("丢包 7", StringComparison.Ordinal)
+                && summary.Text.Contains("采样", StringComparison.Ordinal)
+                && summary.Text.Contains("Npcap 1.90", StringComparison.Ordinal));
+
+            TrySetField(form, "_trafficStatus", null);
+            TrySetField(form, "_trafficRecords", records);
+            rebuild.Invoke(form, null);
+            Application.DoEvents();
 
             search.Text = string.Empty;
             Application.DoEvents();
@@ -12278,7 +12828,8 @@ internal static class Program
                 CheckAssertion(results, "最小宽度下流量列不溢出",
                     fixedWidth + fillMin <= layoutGrid.ClientSize.Width);
                 CheckAssertion(results, "最小宽度下顶部按钮不越界",
-                    clearButton.Right <= (searchBox.Parent?.ClientSize.Width ?? 0));
+                    clearButton.Parent is { } actions
+                    && actions.Right <= (searchBox.Parent?.ClientSize.Width ?? 0));
                 CheckAssertion(results, "统计行不超出顶栏",
                     summary.Width <= (searchBox.Parent?.ClientSize.Width ?? 0));
 

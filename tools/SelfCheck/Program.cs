@@ -18,6 +18,7 @@ using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Diagnostics.Ids;
+using WinAppGuard.Core.Diagnostics.Lan;
 using WinAppGuard.Core.Diagnostics.Traffic;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
@@ -160,6 +161,7 @@ internal static class Program
                         && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
@@ -431,9 +433,17 @@ internal static class Program
             {
                 RunTrafficLiveTest();
             }
+            else if (args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunLanTest();
+            }
             else if (args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunTrafficCaptureTest();
+            }
+            else if (args.Contains("--service-lan-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceLanTest();
             }
             else if (args.Contains("--service-traffic-precise-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1427,9 +1437,13 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "08-dns.png"));
 
-            TrySelectTab(form, "_tabAntiScan");
+            TrySelectTab(form, "_tabScan");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "09-protection.png"));
+
+            TrySelectTab(form, "_tabLan");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "10-lan.png"));
 
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
@@ -1778,6 +1792,101 @@ internal static class Program
         }
 
         InvokePrivate(form, "RebuildTrafficView", null);
+
+        // ---- 局域网页 ----
+        TrySetField(form, "_lanStatus", new LanStatusDto
+        {
+            Collecting = true,
+            BaselineReady = true,
+            BaselineUtc = now.ToUniversalTime().AddHours(-2),
+            Adapters = new List<string> { "Intel(R) Ethernet Connection", "WireGuard Tunnel" },
+            EventCount = 2,
+            BlockedCount = 1,
+            NpcapVersion = "1.90",
+        });
+
+        TrySetField(form, "_lanSettings", new LanSettingsDto
+        {
+            RetentionDays = 7,
+            DhcpBlockEnabled = true,
+        });
+
+        TrySetField(form, "_lanGateways", new List<LanGatewayDto>
+        {
+            new()
+            {
+                Adapter = "Intel(R) Ethernet Connection",
+                Ip = "192.168.1.1",
+                Mac = "aa:bb:cc:00:11:22",
+                LearnedUtc = now.ToUniversalTime().AddHours(-2),
+                Trusted = true,
+            },
+        });
+
+        TrySetField(form, "_lanServers", new List<LanDhcpServerDto>
+        {
+            new()
+            {
+                ServerIp = "192.168.1.1",
+                Mac = "aa:bb:cc:00:11:22",
+                Adapter = "Intel(R) Ethernet Connection",
+                Gateway = "192.168.1.1",
+                Dns = "192.168.1.1",
+                LeaseSeconds = 86400,
+                FirstSeenUtc = now.ToUniversalTime().AddHours(-2),
+                Trusted = true,
+            },
+            new()
+            {
+                ServerIp = "192.168.1.66",
+                Mac = "de:ad:be:ef:00:66",
+                Adapter = "Intel(R) Ethernet Connection",
+                Gateway = "192.168.1.66",
+                Dns = "192.168.1.66",
+                LeaseSeconds = 30,
+                FirstSeenUtc = now.ToUniversalTime().AddMinutes(-6),
+                Trusted = false,
+            },
+        });
+
+        TrySetField(form, "_lanBlocks", new List<LanBlockDto>
+        {
+            new()
+            {
+                ServerIp = "192.168.1.66",
+                UntilUtc = now.ToUniversalTime().AddMinutes(7),
+                Reason = "manual DHCP block",
+            },
+        });
+
+        TrySetField(form, "_lanEvents", new List<LanEventDto>
+        {
+            new()
+            {
+                Id = "lan-1",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-6),
+                Kind = "dhcp_unexpected_server",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "出现基线外的 DHCP 服务器 192.168.1.66（MAC de:ad:be:ef:00:66）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "lan-2",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-9),
+                Kind = "arp_gateway_mac_changed",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "网关 192.168.1.1 的 MAC 从 aa:bb:cc:00:11:22 变为 de:ad:be:ef:00:01。",
+                SourceMac = "de:ad:be:ef:00:01",
+                TargetIp = "192.168.1.1",
+                TargetMac = "aa:bb:cc:00:11:22",
+            },
+        });
+
+        InvokePrivate(form, "RebuildLanView", null);
 
         // ---- DNS 页 ----
         TrySetField(form, "_dnsCollecting", true);
@@ -2389,6 +2498,25 @@ internal static class Program
             || page is not TabPage tabPage)
         {
             return false;
+        }
+
+        // 4.2：IDS / 局域网 是防护页的子标签，先选外层再选内层。
+        if (TryGetField<TabControl>(form, "_protectionTabs", out var protection)
+            && TryGetField<TabPage>(form, "_tabAntiScan", out var protectionPage)
+            && protection.TabPages.Contains(tabPage))
+        {
+            if (!ReferenceEquals(tabs.SelectedTab, protectionPage))
+            {
+                tabs.SelectedTab = protectionPage;
+            }
+
+            if (!ReferenceEquals(protection.SelectedTab, tabPage))
+            {
+                protection.SelectedTab = tabPage;
+            }
+
+            Application.DoEvents();
+            return true;
         }
 
         if (!ReferenceEquals(tabs.SelectedTab, tabPage))
@@ -4513,6 +4641,87 @@ internal static class Program
                                 truncated.Count == 0
                                 && buttons.All(button => !HasCjk(button.Text)));
                         }
+                    }
+
+                    // 4.2：防护页的三子标签 + 局域网页。
+                    if (TryGetField<TabControl>(form, "_protectionTabs", out var protectionTabs)
+                        && TryGetField<TabPage>(form, "_tabScan", out var scanTab)
+                        && TryGetField<TabPage>(form, "_tabLan", out var lanTab))
+                    {
+                        var subTabs = protectionTabs.TabPages.Cast<TabPage>()
+                            .Select(page => page.Text)
+                            .ToList();
+
+                        W("    防护子标签 = " + string.Join(" | ", subTabs));
+                        CheckAssertion(results, "英文：防护三子标签无中文",
+                            subTabs.Count == 3 && subTabs.All(text => !HasCjk(text)));
+
+                        var lanButtons = new[]
+                        {
+                            "_lanRefreshButton", "_lanClearButton", "_lanResetBaselineButton",
+                            "_lanTrustGatewayButton", "_lanTrustDhcpButton", "_lanBlockDhcpButton",
+                        }
+                            .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
+                            .Where(button => button is not null)
+                            .Select(button => button!)
+                            .ToList();
+
+                        W("    局域网页按钮 = " + string.Join(" | ", lanButtons.Select(button => button.Text)));
+                        CheckAssertion(results, "英文：局域网页按钮无中文且不截断",
+                            lanButtons.Count == 6
+                            && lanButtons.All(button => !HasCjk(button.Text)
+                                && TextRenderer.MeasureText(button.Text, button.Font).Width + 6 <= button.Width));
+
+                        if (TryGetField<ComboBox>(form, "_lanRetentionCombo", out var lanRetention)
+                            && TryGetField<CheckBox>(form, "_lanBlockEnabledCheck", out var lanBlockCheck)
+                            && TryGetField<CheckBox>(form, "_lanAutoRefreshCheckBox", out var lanAuto))
+                        {
+                            var items = lanRetention.Items.Cast<object>()
+                                .Select(item => item?.ToString() ?? string.Empty)
+                                .ToList();
+
+                            W("    局域网页保留期 = " + string.Join(" | ", items));
+                            CheckAssertion(results, "英文：局域网页保留期/开关无中文",
+                                items.Count == 3
+                                && items.All(text => !HasCjk(text))
+                                && !HasCjk(lanBlockCheck.Text)
+                                && !HasCjk(lanAuto.Text));
+                        }
+
+                        var lanGrids = new[]
+                        {
+                            "_lanGatewayGrid", "_lanDhcpGrid", "_lanEventGrid",
+                        };
+
+                        foreach (var name in lanGrids)
+                        {
+                            if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, name, out var grid))
+                            {
+                                var headers = grid.Columns.Cast<DataGridViewColumn>()
+                                    .Select(column => column.HeaderText)
+                                    .ToList();
+
+                                W($"    {name} 列头 = " + string.Join(" | ", headers));
+                                CheckAssertion(results, $"英文：{name} 列头/空状态无中文",
+                                    headers.All(text => !HasCjk(text)) && !HasCjk(grid.EmptyText));
+                            }
+                            else
+                            {
+                                CheckAssertion(results, $"找得到 {name}", false);
+                            }
+                        }
+
+                        if (TryGetField<Label>(form, "_lanStatusLabel", out var lanStatusLabel)
+                            && TryGetField<Label>(form, "_lanAdapterLabel", out var lanAdapterLabel))
+                        {
+                            W("    局域网状态行 = " + lanStatusLabel.Text);
+                            CheckAssertion(results, "英文：局域网状态行无中文",
+                                !HasCjk(lanStatusLabel.Text) && !HasCjk(lanAdapterLabel.Text));
+                        }
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "找得到防护子标签与局域网页", false);
                     }
 
                     if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(
@@ -10800,6 +11009,155 @@ internal static class Program
     /// 4.1：精确流量的服务端实测（Npcap 状态 / 暂停 / 继续 / 清空 / 曲线）。
     /// 只在 VM 上跑：会暂停采集、清空计数。
     /// </summary>
+    /// <summary>
+    /// 4.2：局域网检测服务端实测（状态 / 设置 / DHCP 阻断 / 清空）。
+    /// 只在 VM 上跑：会修改设置并创建/删除一条 WFP 过滤器。
+    /// </summary>
+    private static void RunServiceLanTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        LanSettingsDto? initial = null;
+
+        W("################################################################");
+        W("#   4.2 局域网检测服务端实测（Npcap / 设置 / DHCP 阻断 / 清空） #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        CheckAssertion(results, "服务版本是 4.2 或更高",
+            status.ServiceVersion.StartsWith("4.2", StringComparison.Ordinal));
+        CheckAssertion(results, "局域网采集在跑", status.LanCollecting);
+
+        var snapshot = QueryLanResponse(out var queryError);
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取局域网失败：{snapshot?.Error ?? queryError}");
+            CheckAssertion(results, "读取局域网快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        initial = snapshot.LanSettings;
+
+        W($"    采集={snapshot.LanStatus?.Collecting} 基线={snapshot.LanStatus?.BaselineReady} " +
+          $"网卡={snapshot.LanStatus?.Adapters?.Count ?? 0} 事件={snapshot.LanStatus?.EventCount} " +
+          $"阻断={snapshot.LanStatus?.BlockedCount}");
+
+        CheckAssertion(results, "检测到 Npcap 且至少一张网卡",
+            snapshot.LanStatus?.Adapters is { Count: > 0 });
+        CheckAssertion(results, "返回设置与基线字段",
+            initial is not null && snapshot.LanStatus is not null);
+
+        try
+        {
+            var configure = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.ConfigureLan,
+                    LanSettings = new LanSettingsDto { RetentionDays = 15, DhcpBlockEnabled = true },
+                },
+                TimeSpan.FromSeconds(15),
+                out var configureError);
+
+            CheckAssertion(results, "修改保留期与 DHCP 阻断开关",
+                configure is { Ok: true, LanSettings.RetentionDays: 15, LanSettings.DhcpBlockEnabled: true });
+
+            if (configure is not { Ok: true })
+            {
+                W($"    配置失败：{configure?.Error ?? configureError}");
+            }
+
+            var block = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.BlockLanDhcp,
+                    LanBlockServerIp = "203.0.113.9",
+                    LanBlockEnabled = true,
+                },
+                TimeSpan.FromSeconds(15),
+                out var blockError);
+
+            W($"    阻断测试 IP：ok={block?.Ok}，阻断数={block?.LanStatus?.BlockedCount}，" +
+              $"错误={block?.Error ?? blockError}");
+
+            CheckAssertion(results, "创建 DHCP 阻断过滤器",
+                block is { Ok: true } && block.LanBlocks?.Any(item => item.ServerIp == "203.0.113.9") == true);
+
+            var unblock = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.BlockLanDhcp,
+                    LanBlockServerIp = "203.0.113.9",
+                    LanBlockEnabled = false,
+                },
+                TimeSpan.FromSeconds(15),
+                out var unblockError);
+
+            CheckAssertion(results, "解除 DHCP 阻断",
+                unblock is { Ok: true }
+                && unblock.LanBlocks?.All(item => item.ServerIp != "203.0.113.9") == true);
+
+            if (unblock is null)
+            {
+                W($"    解除失败：{unblockError}");
+            }
+
+            var clear = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ClearLan },
+                TimeSpan.FromSeconds(15),
+                out var clearError);
+
+            CheckAssertion(results, "清空局域网事件",
+                clear is { Ok: true } && clear.LanEvents is { Count: 0 });
+
+            if (clear is null)
+            {
+                W($"    清空失败：{clearError}");
+            }
+        }
+        finally
+        {
+            if (initial is not null)
+            {
+                var restore = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.ConfigureLan,
+                        LanSettings = initial,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var restoreError);
+
+                CheckAssertion(results, "恢复初始局域网设置", restore is { Ok: true });
+
+                if (restore is null)
+                {
+                    W($"    恢复失败：{restoreError}");
+                }
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: true);
+    }
+
+    private static ServiceResponse? QueryLanResponse(out string? error)
+    {
+        return ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryLan },
+            TimeSpan.FromSeconds(5),
+            out error);
+    }
+
     private static void RunServiceTrafficPreciseTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -12233,6 +12591,237 @@ internal static class Program
             => Map.TryGetValue(endpoint, out var pid) ? pid : 0;
     }
 
+    /// <summary>
+    /// 4.2：局域网检测离线自检（ARP / DHCP 规则、冷却、信任、落盘）。
+    /// </summary>
+    private static void RunLanTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = new DateTime(2026, 10, 29, 10, 0, 0, DateTimeKind.Utc);
+        var state = new LanState();
+        var analyzer = new LanAnalyzer(state, start);
+        var events = new List<LanEvent>();
+
+        analyzer.EventObserved = item =>
+        {
+            events.Add(item);
+            W($"    事件：{item.Kind} / {item.Severity} / {item.Detail}");
+        };
+
+        analyzer.UpdateGatewayHints(new[] { new LanGatewayHint("eth0", "192.168.1.1") });
+
+        W("################################################################");
+        W("#   4.2 局域网检测（离线：ARP / DHCP / 冷却 / 信任 / 落盘）      #");
+        W("################################################################");
+        W();
+
+        // 学习期：网关 + DHCP 基线建立，不告警。
+        analyzer.ObserveArp(new ArpFrame(start, "eth0", "aa:aa:aa:aa:aa:aa", "aa:aa:aa:aa:aa:aa",
+            "192.168.1.1", "192.168.1.100", IsReply: true, IsGratuitous: false), start);
+
+        analyzer.ObserveDhcp(new DhcpMessage(start, "eth0", "aa:aa:aa:aa:aa:aa", "192.168.1.1",
+            "192.168.1.1", "192.168.1.1", 3600, IsOffer: true), start);
+
+        CheckAssertion(results, "学习期建立网关与 DHCP 基线且不告警",
+            analyzer.BaselineReady
+            && analyzer.Snapshot().Gateways.Count == 1
+            && analyzer.Snapshot().DhcpServers.Count == 1
+            && events.Count == 0);
+
+        // 网关 MAC 变化 → 高危。
+        analyzer.ObserveArp(new ArpFrame(start.AddSeconds(30), "eth0", "bb:bb:bb:bb:bb:bb", "bb:bb:bb:bb:bb:bb",
+            "192.168.1.1", "192.168.1.100", IsReply: true, IsGratuitous: false), start.AddSeconds(30));
+
+        CheckAssertion(results, "网关 MAC 变化触发高危",
+            events.Any(item => item.Kind == LanEventKinds.ArpGatewayMacChanged
+                               && item.Severity == LanSeverity.High));
+
+        // 冷却：同样规则立刻再来一次，不应重复（其它规则可能同时命中，只看本规则）。
+        var beforeCooldown = events.Count(item => item.Kind == LanEventKinds.ArpGatewayMacChanged);
+
+        analyzer.ObserveArp(new ArpFrame(start.AddSeconds(31), "eth0", "cc:cc:cc:cc:cc:cc", "cc:cc:cc:cc:cc:cc",
+            "192.168.1.1", "192.168.1.100", IsReply: true, IsGratuitous: false), start.AddSeconds(31));
+
+        CheckAssertion(results, "同规则 10 分钟内不重复告警",
+            events.Count(item => item.Kind == LanEventKinds.ArpGatewayMacChanged) == beforeCooldown);
+
+        // 信任当前网关（会用最后一次观测到的 MAC）后清掉冷却。
+        CheckAssertion(results, "信任网关成功并写入基线",
+            analyzer.Trust("gateway", "192.168.1.1", start.AddSeconds(32))
+            && analyzer.Snapshot().Gateways[0].Trusted);
+
+        // 未知 DHCP 服务器 → 高危；再来一个 → 多服务器高危。
+        events.Clear();
+        analyzer.ObserveDhcp(new DhcpMessage(start.AddSeconds(40), "eth0", "dd:dd:dd:dd:dd:dd", "10.0.0.9",
+            "10.0.0.1", "10.0.0.1", 3600, IsOffer: true), start.AddSeconds(40));
+
+        CheckAssertion(results, "基线外 DHCP 服务器触发高危",
+            events.Any(item => item.Kind == LanEventKinds.DhcpUnexpectedServer
+                               && item.Severity == LanSeverity.High));
+
+        var beforeMultiple = events.Count;
+
+        analyzer.ObserveDhcp(new DhcpMessage(start.AddSeconds(41), "eth0", "aa:aa:aa:aa:aa:aa", "192.168.1.1",
+            "192.168.1.1", "192.168.1.1", 3600, IsOffer: true), start.AddSeconds(41));
+
+        CheckAssertion(results, "同一网段多个 DHCP 服务器触发高危",
+            events.Count == beforeMultiple
+            || events.Any(item => item.Kind == LanEventKinds.DhcpMultipleServers));
+
+        // 选项变化 / 短租期。
+        events.Clear();
+        analyzer.ObserveDhcp(new DhcpMessage(start.AddSeconds(50), "eth0", "aa:aa:aa:aa:aa:aa", "192.168.1.1",
+            "192.168.1.254", "192.168.1.1", 30, IsOffer: true), start.AddSeconds(50));
+
+        CheckAssertion(results, "DHCP 网关变化与短租期分别命中",
+            events.Any(item => item.Kind == LanEventKinds.DhcpOptionMismatch)
+            && events.Any(item => item.Kind == LanEventKinds.DhcpShortLease));
+
+        // ARP：同一 MAC 声称多个 IP / sender 不一致 / 免费 ARP 突发。
+        events.Clear();
+        var mac = "ee:ee:ee:ee:ee:ee";
+
+        for (var i = 1; i <= 3; i++)
+        {
+            analyzer.ObserveArp(new ArpFrame(
+                start.AddMinutes(2 + i), "eth0", mac, mac, $"192.168.1.{10 + i}", "192.168.1.100",
+                IsReply: true, IsGratuitous: false), start.AddMinutes(2 + i));
+        }
+
+        CheckAssertion(results, "同一 MAC 声称多个 IP 触发中危",
+            events.Any(item => item.Kind == LanEventKinds.ArpMacClaimsManyIps));
+
+        analyzer.ObserveArp(new ArpFrame(start.AddMinutes(6), "eth0", "11:11:11:11:11:11",
+            "22:22:22:22:22:22", "192.168.1.77", "192.168.1.100",
+            IsReply: true, IsGratuitous: false), start.AddMinutes(6));
+
+        CheckAssertion(results, "ARP sender MAC 与帧源不一致触发中危",
+            events.Any(item => item.Kind == LanEventKinds.ArpSenderMismatch));
+
+        for (var i = 0; i < 25; i++)
+        {
+            analyzer.ObserveArp(new ArpFrame(
+                start.AddMinutes(7).AddMilliseconds(i * 100), "eth0", "ff:ff:ff:ff:ff:ff",
+                "ff:ff:ff:ff:ff:ff", "192.168.1.200", "192.168.1.200",
+                IsReply: false, IsGratuitous: true), start.AddMinutes(7).AddMilliseconds(i * 100));
+        }
+
+        CheckAssertion(results, "免费 ARP 突发触发低危",
+            events.Any(item => item.Kind == LanEventKinds.ArpGratuitousBurst));
+
+        // 落盘：state 往返 + 事件 JSONL + 保留期。
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-LanTest-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var statePath = Path.Combine(directory, "state.json");
+
+            LanStateStore.Save(statePath, new LanState
+            {
+                Settings = new LanSettings { RetentionDays = 10, DhcpBlockEnabled = true },
+                Gateways = new List<LanGateway>
+                {
+                    new() { Adapter = "eth0", Ip = "192.168.1.1", Mac = "aa:aa:aa:aa:aa:aa", LearnedUtc = start },
+                },
+                DhcpServers = new List<LanDhcpServer>
+                {
+                    new() { ServerIp = "192.168.1.1", Mac = "aa:aa:aa:aa:aa:aa", Adapter = "eth0", FirstSeenUtc = start },
+                },
+            });
+
+            var loaded = LanStateStore.Load(statePath);
+
+            CheckAssertion(results, "状态文件：设置 / 基线 / 服务器往返，保留期归一到 7/15/30",
+                loaded.Settings.RetentionDays == 7
+                && loaded.Settings.DhcpBlockEnabled
+                && loaded.Gateways.Count == 1
+                && loaded.DhcpServers.Count == 1);
+
+            var eventStore = new LanEventStore(directory);
+            eventStore.Append(new LanEvent
+            {
+                TimeUtc = start,
+                Kind = LanEventKinds.ArpGatewayMacChanged,
+                Severity = LanSeverity.High,
+                Adapter = "eth0",
+                Detail = "test",
+            });
+
+            var recent = eventStore.ReadRecent(10);
+            CheckAssertion(results, "事件 JSONL 写入后可读回",
+                recent.Count == 1 && recent[0].Kind == LanEventKinds.ArpGatewayMacChanged);
+
+            var oldFile = Path.Combine(directory, $"events-{start.AddDays(-30):yyyyMMdd}.jsonl");
+            File.WriteAllText(oldFile, "{}", new System.Text.UTF8Encoding(false));
+
+            var removed = eventStore.Prune(7, start);
+            CheckAssertion(results, "保留期清理旧文件", removed == 1 && !File.Exists(oldFile));
+
+            eventStore.Clear();
+            CheckAssertion(results, "清空事件文件", eventStore.ReadRecent(10).Count == 0);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响自检。
+            }
+        }
+
+        // 协议 DTO 往返。
+        var response = new ServiceResponse
+        {
+            Ok = true,
+            LanSettings = new LanSettingsDto { RetentionDays = 15, DhcpBlockEnabled = true },
+            LanStatus = new LanStatusDto
+            {
+                Collecting = true,
+                BaselineReady = true,
+                Adapters = new List<string> { "以太网" },
+                EventCount = 1,
+                BlockedCount = 1,
+                NpcapVersion = "1.90",
+            },
+            LanEvents = new List<LanEventDto>
+            {
+                new() { Id = "e1", Kind = LanEventKinds.DhcpUnexpectedServer, Severity = "high", Detail = "x" },
+            },
+            LanGateways = new List<LanGatewayDto>
+            {
+                new() { Adapter = "以太网", Ip = "192.168.1.1", Mac = "aa:aa:aa:aa:aa:aa" },
+            },
+            LanDhcpServers = new List<LanDhcpServerDto>
+            {
+                new() { ServerIp = "192.168.1.1", Adapter = "以太网" },
+            },
+            LanBlocks = new List<LanBlockDto>
+            {
+                new() { ServerIp = "10.0.0.9", Reason = "test" },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+
+        CheckAssertion(results, "协议 DTO：局域网状态 / 事件 / 网关 / 服务器 / 阻断往返",
+            back?.LanSettings is { RetentionDays: 15, DhcpBlockEnabled: true }
+            && back.LanStatus is { Collecting: true, BaselineReady: true, EventCount: 1 }
+            && back.LanEvents is { Count: 1 }
+            && back.LanGateways is { Count: 1 }
+            && back.LanDhcpServers is { Count: 1 }
+            && back.LanBlocks is { Count: 1 });
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunAntiScanTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -12787,6 +13376,7 @@ internal static class Program
                      {
                          ("_dnsAutoRefreshCheckBox", "_dnsTimer", "DNS"),
                          ("_auditAutoRefreshCheckBox", "_auditTimer", "记录"),
+                         ("_lanAutoRefreshCheckBox", "_lanTimer", "局域网"),
                      })
             {
                 if (TryGetField<CheckBox>(form, pair.Check, out var auto)
@@ -12890,9 +13480,13 @@ internal static class Program
                     && TryGetField<Button>(form, "_idsClearButton", out var idsClear)
                     && TryGetField<TextBox>(form, "_idsSearchBox", out var idsSearch))
                 {
-                    if (TryGetField<TabControl>(form, "_tabControl", out var idsTabs))
+                    if (TryGetField<TabControl>(form, "_tabControl", out var idsTabs)
+                        && TryGetField<TabPage>(form, "_tabAntiScan", out var idsProtection)
+                        && TryGetField<TabControl>(form, "_protectionTabs", out var idsSubtabs))
                     {
-                        idsTabs.SelectedTab = idsTab;
+                        // 4.2：IDS 已并入防护页的第三个子标签。
+                        idsTabs.SelectedTab = idsProtection;
+                        idsSubtabs.SelectedTab = idsTab;
                     }
 
                     form.PerformLayout();
@@ -12950,6 +13544,57 @@ internal static class Program
                     CheckAssertion(results, "最小宽度下防护顶部按钮不越界",
                         actionsPanel is not null
                         && actionsPanel.Right <= (antiSearch.Parent?.ClientSize.Width ?? 0));
+
+                    // 4.2：防护三子标签 + 局域网页布局与深链。
+                    if (TryGetField<TabControl>(form, "_protectionTabs", out var protectionTabs)
+                        && TryGetField<TabPage>(form, "_tabLan", out var lanTab)
+                        && TryGetField<DataGridView>(form, "_lanEventGrid", out var lanEventGrid)
+                        && TryGetField<DataGridView>(form, "_lanGatewayGrid", out var lanGatewayGrid)
+                        && TryGetField<DataGridView>(form, "_lanDhcpGrid", out var lanDhcpGrid))
+                    {
+                        protectionTabs.SelectedTab = lanTab;
+                        form.PerformLayout();
+                        Application.DoEvents();
+
+                        var lanFixed = lanEventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Where(column => column.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
+                            .Sum(column => column.Width);
+                        var lanFill = lanEventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                            .Sum(column => column.MinimumWidth);
+
+                        W($"    980 宽局域网：列宽合计 {lanFixed + lanFill}px / " +
+                          $"客户区 {lanEventGrid.ClientSize.Width}px");
+
+                        CheckAssertion(results, "最小宽度下局域网列不溢出",
+                            lanFixed + lanFill <= lanEventGrid.ClientSize.Width);
+                        CheckAssertion(results, "局域网三张表都已加载",
+                            lanGatewayGrid.Columns.Count > 0 && lanDhcpGrid.Columns.Count > 0);
+
+                        var selectMethod = typeof(MainForm).GetMethod(
+                            "SelectProtectionTab",
+                            BindingFlags.Instance | BindingFlags.NonPublic);
+
+                        var idsTabPage = (TabPage?)typeof(MainForm)
+                            .GetField("_tabIds", BindingFlags.Instance | BindingFlags.NonPublic)
+                            ?.GetValue(form);
+
+                        if (selectMethod is not null && idsTabPage is not null)
+                        {
+                            selectMethod.Invoke(form, new object[] { idsTabPage });
+
+                            CheckAssertion(results, "深链：切到防护 → IDS 子标签",
+                                protectionTabs.SelectedTab == idsTabPage);
+                        }
+                        else
+                        {
+                            CheckAssertion(results, "找得到防护子标签深链方法", false);
+                        }
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "找得到局域网子标签与三张表", false);
+                    }
                 }
             }
         }

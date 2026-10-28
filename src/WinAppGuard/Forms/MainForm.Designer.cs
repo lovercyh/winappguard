@@ -413,7 +413,6 @@ partial class MainForm
         _tabControl.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _tabControl.Controls.Add(_tabConnections);
         _tabControl.Controls.Add(_tabTraffic);
-        _tabControl.Controls.Add(_tabIds);
         _tabControl.Controls.Add(_tabAntiScan);
         _tabControl.Controls.Add(_tabRules);
         _tabControl.Controls.Add(_tabWhitelist);

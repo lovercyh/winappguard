@@ -84,6 +84,26 @@ public sealed class ServiceRequest
 
     /// <summary>暂停 / 继续精确流量统计（null = 不改）。只对本次服务运行有效。</summary>
     public bool? TrafficPaused { get; set; }
+
+    // ---- 4.2：局域网 ----
+
+    /// <summary>修改局域网设置（null = 不改）。</summary>
+    public LanSettingsDto? LanSettings { get; set; }
+
+    /// <summary>信任类型：gateway / dhcp。</summary>
+    public string? LanTrustKind { get; set; }
+
+    /// <summary>信任的目标：网关 IP 或 DHCP 服务器 IP。</summary>
+    public string? LanTrustValue { get; set; }
+
+    /// <summary>要临时阻断 / 解除的 DHCP 服务器 IP。</summary>
+    public string? LanBlockServerIp { get; set; }
+
+    /// <summary>true = 阻断，false = 解除。</summary>
+    public bool LanBlockEnabled { get; set; }
+
+    /// <summary>true = 清空基线并重新学习。</summary>
+    public bool LanResetBaseline { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -167,6 +187,20 @@ public sealed class ServiceResponse
     public List<AntiScanEventDto>? AntiScanEvents { get; set; }
 
     public List<AntiScanBlockDto>? AntiScanBlocks { get; set; }
+
+    // ---- 4.2：局域网 ----
+
+    public LanStatusDto? LanStatus { get; set; }
+
+    public List<LanEventDto>? LanEvents { get; set; }
+
+    public List<LanGatewayDto>? LanGateways { get; set; }
+
+    public List<LanDhcpServerDto>? LanDhcpServers { get; set; }
+
+    public List<LanBlockDto>? LanBlocks { get; set; }
+
+    public LanSettingsDto? LanSettings { get; set; }
 
     public AntiScanSettingsDto? AntiScanSettings { get; set; }
 }
@@ -382,6 +416,114 @@ public sealed class AntiScanStatusDto
     public int BlockMinutes { get; set; }
 
     public DateTime? LastEventUtc { get; set; }
+
+    public string? LastError { get; set; }
+}
+
+// ---- 4.2：局域网欺骗检测 ----
+
+/// <summary>4.2：局域网检测设置。</summary>
+public sealed class LanSettingsDto
+{
+    /// <summary>事件保留天数：7 / 15 / 30，默认 7。</summary>
+    public int RetentionDays { get; set; } = 7;
+
+    /// <summary>是否允许“临时阻断 DHCP 服务器”（默认关闭）。</summary>
+    public bool DhcpBlockEnabled { get; set; }
+}
+
+/// <summary>4.2：一条局域网事件（ARP / DHCP）。</summary>
+public sealed class LanEventDto
+{
+    public string Id { get; set; } = string.Empty;
+
+    public DateTime TimeUtc { get; set; }
+
+    /// <summary>规则 id，例如 <c>arp_gateway_mac_changed</c>。</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>high / medium / low。</summary>
+    public string Severity { get; set; } = "medium";
+
+    public string Adapter { get; set; } = string.Empty;
+
+    public string Detail { get; set; } = string.Empty;
+
+    public string? SourceMac { get; set; }
+
+    public string? TargetIp { get; set; }
+
+    public string? TargetMac { get; set; }
+
+    public bool Blocked { get; set; }
+}
+
+/// <summary>4.2：已学习的网关基线。</summary>
+public sealed class LanGatewayDto
+{
+    public string Adapter { get; set; } = string.Empty;
+
+    public string Ip { get; set; } = string.Empty;
+
+    public string Mac { get; set; } = string.Empty;
+
+    public DateTime LearnedUtc { get; set; }
+
+    public bool Trusted { get; set; }
+}
+
+/// <summary>4.2：观察到的 DHCP 服务器。</summary>
+public sealed class LanDhcpServerDto
+{
+    public string ServerIp { get; set; } = string.Empty;
+
+    public string? Mac { get; set; }
+
+    public string Adapter { get; set; } = string.Empty;
+
+    public string? Gateway { get; set; }
+
+    public string? Dns { get; set; }
+
+    public int LeaseSeconds { get; set; }
+
+    public DateTime FirstSeenUtc { get; set; }
+
+    public bool Trusted { get; set; }
+}
+
+/// <summary>4.2：一条临时 DHCP 阻断。</summary>
+public sealed class LanBlockDto
+{
+    public string ServerIp { get; set; } = string.Empty;
+
+    public DateTime UntilUtc { get; set; }
+
+    public string Reason { get; set; } = string.Empty;
+
+    public string? EventId { get; set; }
+}
+
+/// <summary>4.2：局域网检测状态。</summary>
+public sealed class LanStatusDto
+{
+    public bool Collecting { get; set; }
+
+    public List<string>? Adapters { get; set; }
+
+    public bool BaselineReady { get; set; }
+
+    public DateTime? BaselineUtc { get; set; }
+
+    public int GatewayCount { get; set; }
+
+    public int DhcpServerCount { get; set; }
+
+    public int EventCount { get; set; }
+
+    public int BlockedCount { get; set; }
+
+    public string? NpcapVersion { get; set; }
 
     public string? LastError { get; set; }
 }
@@ -615,6 +757,16 @@ public sealed class ServiceStatus
     public bool AntiScanNpcapAvailable { get; set; }
 
     public int AntiScanBlockedCount { get; set; }
+
+    // ---- 4.2：局域网 ----
+
+    public bool LanCollecting { get; set; }
+
+    public int LanEventCount { get; set; }
+
+    public int LanBlockedCount { get; set; }
+
+    public bool LanBaselineReady { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

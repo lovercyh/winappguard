@@ -1,0 +1,748 @@
+using WinAppGuard.Contracts;
+using WinAppGuard.Core;
+using WinAppGuard.Core.Diagnostics.AntiScan;
+using WinAppGuard.Core.Diagnostics.Lan;
+using WinAppGuard.Core.Wfp;
+
+namespace WinAppGuard.Service;
+
+/// <summary>
+/// 4.2：局域网欺骗检测宿主（ARP + 虚假 DHCP）。
+///
+/// 采集是独立的第三份 Npcap 会话（只抓 ARP / DHCP），默认只告警。
+/// 基线、信任、事件与临时阻断全部落盘；DHCP 阻断默认关闭，且只拦该服务器的 DHCP 应答。
+/// </summary>
+internal static class LanHost
+{
+    private static readonly object Gate = new();
+
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan StatsInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HintsInterval = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan SaveInterval = TimeSpan.FromSeconds(5);
+
+    private static LanAnalyzer? _analyzer;
+    private static NpcapLanCapture? _capture;
+    private static LanEventStore? _eventStore;
+    private static System.Threading.Timer? _timer;
+    private static bool _started;
+    private static bool _dirty;
+    private static bool _saving;
+    private static DateTime _nextStatsUtc = DateTime.MinValue;
+    private static DateTime _nextHintsUtc = DateTime.MinValue;
+    private static DateTime _nextSaveUtc = DateTime.MinValue;
+    private static DateTime _nextPruneUtc = DateTime.MinValue;
+    private static string? _lastError;
+    private static int _eventCount;
+
+    internal static bool Collecting
+    {
+        get { lock (Gate) { return _capture?.IsRunning == true; } }
+    }
+
+    internal static bool BaselineReady
+    {
+        get { lock (Gate) { return _analyzer?.BaselineReady == true; } }
+    }
+
+    internal static int EventCount
+    {
+        get { lock (Gate) { return _eventCount; } }
+    }
+
+    internal static int BlockedCount
+    {
+        get { lock (Gate) { return _analyzer?.Blocks.Count ?? 0; } }
+    }
+
+    internal static void Start()
+    {
+        LanState state = LanStateStore.Load(ServicePaths.LanStateFile);
+        var analyzer = new LanAnalyzer(state, DateTime.UtcNow);
+        var eventStore = new LanEventStore(ServicePaths.LanDirectory);
+
+        analyzer.EventObserved = item => OnEvent(analyzer, eventStore, item);
+        analyzer.StateChanged = () =>
+        {
+            lock (Gate)
+            {
+                _dirty = true;
+            }
+        };
+
+        // 历史事件读回内存，重启后仍能在页面里看到。
+        analyzer.SeedEvents(eventStore.ReadRecent(200));
+        analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
+
+        // 上次运行留下的过滤器不能直接信任：先清掉，再按状态文件恢复。
+        try
+        {
+            var removed = LanWfp.RemoveAll();
+
+            if (removed > 0)
+            {
+                ServiceLog.Operation("WAG-LAN-001", $"Removed {removed} stale DHCP block filter(s).");
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-002", "Failed to clean stale DHCP block filters.", ex);
+        }
+
+        if (!state.Settings.DhcpBlockEnabled && state.Blocks.Count > 0)
+        {
+            state.Blocks.Clear();
+        }
+
+        foreach (var block in state.Blocks.ToList())
+        {
+            try
+            {
+                LanWfp.Add(System.Net.IPAddress.Parse(block.ServerIp));
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-LAN-003", $"Failed to restore DHCP block for {block.ServerIp}.", ex);
+                state.Blocks.Remove(block);
+            }
+        }
+
+        lock (Gate)
+        {
+            _analyzer = analyzer;
+            _eventStore = eventStore;
+            _started = true;
+            _dirty = true;
+            _eventCount = analyzer.Snapshot().Events.Count;
+            _lastError = null;
+        }
+
+        eventStore.Prune(state.Settings.RetentionDays, DateTime.UtcNow);
+        SaveState();
+        EnsureCapture();
+
+        lock (Gate)
+        {
+            _timer ??= new System.Threading.Timer(
+                _ => Tick(),
+                state: null,
+                dueTime: TickInterval,
+                period: TickInterval);
+        }
+
+        ServiceLog.Info(
+            "WAG-LAN-004",
+            $"LAN detection started (retention={state.Settings.RetentionDays}d, " +
+            $"dhcpBlock={state.Settings.DhcpBlockEnabled}, blocks={state.Blocks.Count}).");
+    }
+
+    internal static void Stop()
+    {
+        NpcapLanCapture? capture;
+
+        lock (Gate)
+        {
+            _started = false;
+            _timer?.Dispose();
+            _timer = null;
+            capture = _capture;
+            _capture = null;
+        }
+
+        capture?.Stop();
+        capture?.Dispose();
+
+        SaveState();
+
+        try
+        {
+            LanWfp.RemoveAll();
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-005", "Failed to remove DHCP block filters on stop.", ex);
+        }
+
+        lock (Gate)
+        {
+            _analyzer = null;
+            _eventStore = null;
+        }
+
+        ServiceLog.Info("WAG-LAN-006", "LAN detection stopped.");
+    }
+
+    internal static ServiceResponse Query(ServiceRequest request)
+    {
+        LanAnalyzer? analyzer;
+        NpcapLanCapture? capture;
+        LanEventStore? eventStore;
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+            capture = _capture;
+            eventStore = _eventStore;
+        }
+
+        if (analyzer is null)
+        {
+            return new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = true,
+                LanStatus = new LanStatusDto
+                {
+                    Collecting = false,
+                    BaselineReady = false,
+                    NpcapVersion = NpcapLocator.GetVersion(),
+                    LastError = "局域网检测未启动。",
+                },
+                LanEvents = new List<LanEventDto>(),
+                LanGateways = new List<LanGatewayDto>(),
+                LanDhcpServers = new List<LanDhcpServerDto>(),
+                LanBlocks = new List<LanBlockDto>(),
+                LanSettings = new LanSettingsDto(),
+            };
+        }
+
+        var snapshot = analyzer.Snapshot();
+        var history = eventStore?.ReadRecent(200) ?? new List<LanEvent>();
+
+        // 内存里的是本次运行的新事件；历史从磁盘补齐，按时间倒序去重。
+        var events = snapshot.Events
+            .Concat(history)
+            .GroupBy(item => item.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .OrderByDescending(item => item.TimeUtc)
+            .Take(200)
+            .ToList();
+
+        lock (Gate)
+        {
+            _eventCount = events.Count;
+        }
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            LanStatus = new LanStatusDto
+            {
+                Collecting = capture?.IsRunning == true,
+                Adapters = capture?.Adapters ?? new List<string>(),
+                BaselineReady = snapshot.BaselineReady,
+                BaselineUtc = snapshot.BaselineUtc,
+                GatewayCount = snapshot.Gateways.Count,
+                DhcpServerCount = snapshot.DhcpServers.Count,
+                EventCount = events.Count,
+                BlockedCount = snapshot.Blocks.Count,
+                NpcapVersion = NpcapLocator.GetVersion(),
+                LastError = capture?.LastError,
+            },
+            LanEvents = events.Select(ToDto).ToList(),
+            LanGateways = snapshot.Gateways.Select(ToDto).ToList(),
+            LanDhcpServers = snapshot.DhcpServers.Select(ToDto).ToList(),
+            LanBlocks = snapshot.Blocks.Select(ToDto).ToList(),
+            LanSettings = ToDto(analyzer.Settings),
+        };
+    }
+
+    internal static ServiceResponse Configure(ServiceRequest request)
+    {
+        var dto = request.LanSettings;
+
+        if (dto is null)
+        {
+            return Error(request, "缺少局域网设置。");
+        }
+
+        LanAnalyzer? analyzer;
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+        }
+
+        if (analyzer is null)
+        {
+            return Error(request, "局域网检测未启动。");
+        }
+
+        var wasBlockEnabled = analyzer.Settings.DhcpBlockEnabled;
+        analyzer.ApplySettings(new LanSettings
+        {
+            RetentionDays = dto.RetentionDays,
+            DhcpBlockEnabled = dto.DhcpBlockEnabled,
+        });
+
+        if (wasBlockEnabled && !dto.DhcpBlockEnabled)
+        {
+            ReleaseAllBlocks(analyzer);
+        }
+
+        SaveState();
+        ServiceLog.Operation(
+            "WAG-LAN-007",
+            $"LAN detection configured (retention={dto.RetentionDays}d, dhcpBlock={dto.DhcpBlockEnabled}).");
+
+        return Query(request);
+    }
+
+    internal static ServiceResponse Clear(ServiceRequest request)
+    {
+        LanAnalyzer? analyzer;
+        LanEventStore? store;
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+            store = _eventStore;
+        }
+
+        if (analyzer is null)
+        {
+            return Error(request, "局域网检测未启动。");
+        }
+
+        var released = ReleaseAllBlocks(analyzer);
+        analyzer.ClearEvents();
+        store?.Clear();
+
+        lock (Gate)
+        {
+            _eventCount = 0;
+            _dirty = true;
+        }
+
+        ServiceLog.Operation(
+            "WAG-LAN-008",
+            $"LAN events cleared; {released} DHCP block(s) released.");
+
+        return Query(request);
+    }
+
+    internal static ServiceResponse Trust(ServiceRequest request)
+    {
+        LanAnalyzer? analyzer;
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+        }
+
+        if (analyzer is null)
+        {
+            return Error(request, "局域网检测未启动。");
+        }
+
+        var kind = request.LanTrustKind;
+        var value = request.LanTrustValue;
+
+        if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(value))
+        {
+            return Error(request, "缺少信任类型或目标。");
+        }
+
+        if (!analyzer.Trust(kind, value.Trim(), DateTime.UtcNow))
+        {
+            return Error(request, "找不到要信任的网关或 DHCP 服务器。");
+        }
+
+        SaveState();
+        ServiceLog.Operation("WAG-LAN-009", $"Trusted {kind} {value}.");
+        return Query(request);
+    }
+
+    internal static ServiceResponse ResetBaseline(ServiceRequest request)
+    {
+        LanAnalyzer? analyzer;
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+        }
+
+        if (analyzer is null)
+        {
+            return Error(request, "局域网检测未启动。");
+        }
+
+        analyzer.ResetBaseline(DateTime.UtcNow);
+        SaveState();
+        ServiceLog.Operation("WAG-LAN-010", "LAN baseline reset; learning again.");
+
+        return Query(request);
+    }
+
+    internal static ServiceResponse Block(ServiceRequest request)
+    {
+        LanAnalyzer? analyzer;
+        var ip = request.LanBlockServerIp;
+
+        if (string.IsNullOrWhiteSpace(ip) || !System.Net.IPAddress.TryParse(ip.Trim(), out var address))
+        {
+            return Error(request, "缺少或非法的 DHCP 服务器 IP。");
+        }
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+        }
+
+        if (analyzer is null)
+        {
+            return Error(request, "局域网检测未启动。");
+        }
+
+        if (request.LanBlockEnabled)
+        {
+            if (!analyzer.Settings.DhcpBlockEnabled)
+            {
+                return Error(request, "DHCP 阻断总开关未开启。");
+            }
+
+            try
+            {
+                LanWfp.Add(address);
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-LAN-011", $"Failed to block DHCP server {ip}.", ex);
+                return Error(request, $"阻断失败：{ex.Message}");
+            }
+
+            analyzer.AddBlock(
+                address.ToString(),
+                DateTime.UtcNow,
+                "manual DHCP block",
+                eventId: null);
+
+            ServiceLog.Operation("WAG-LAN-012", $"DHCP server {ip} blocked for 10 minutes.");
+        }
+        else
+        {
+            try
+            {
+                LanWfp.Remove(address);
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-LAN-013", $"Failed to unblock DHCP server {ip}.", ex);
+            }
+
+            analyzer.RemoveBlock(address.ToString());
+            ServiceLog.Operation("WAG-LAN-014", $"DHCP server {ip} unblocked.");
+        }
+
+        SaveState();
+        return Query(request);
+    }
+
+    internal static LanStatusDto GetStatus()
+    {
+        lock (Gate)
+        {
+            return new LanStatusDto
+            {
+                Collecting = _capture?.IsRunning == true,
+                Adapters = _capture?.Adapters ?? new List<string>(),
+                BaselineReady = _analyzer?.BaselineReady == true,
+                EventCount = _eventCount,
+                BlockedCount = _analyzer?.Blocks.Count ?? 0,
+                NpcapVersion = NpcapLocator.GetVersion(),
+                LastError = _lastError ?? _capture?.LastError,
+            };
+        }
+    }
+
+    private static void Tick()
+    {
+        try
+        {
+            EnsureCapture();
+
+            var now = DateTime.UtcNow;
+            LanAnalyzer? analyzer;
+            NpcapLanCapture? capture;
+
+            lock (Gate)
+            {
+                if (!_started)
+                {
+                    return;
+                }
+
+                analyzer = _analyzer;
+                capture = _capture;
+            }
+
+            if (analyzer is null)
+            {
+                return;
+            }
+
+            if (capture is not null && now >= _nextStatsUtc)
+            {
+                capture.RefreshStatistics();
+                _nextStatsUtc = now.Add(StatsInterval);
+            }
+
+            if (now >= _nextHintsUtc)
+            {
+                analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
+                _nextHintsUtc = now.Add(HintsInterval);
+            }
+
+            // 到期的 DHCP 阻断要同时删过滤器和状态。
+            var before = analyzer.Blocks;
+
+            if (analyzer.PruneBlocks(now) > 0)
+            {
+                var after = analyzer.Blocks
+                    .Select(item => item.ServerIp)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var block in before.Where(item => !after.Contains(item.ServerIp)))
+                {
+                    try
+                    {
+                        if (System.Net.IPAddress.TryParse(block.ServerIp, out var address))
+                        {
+                            LanWfp.Remove(address);
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // 删失败下次启动再清。
+                    }
+                }
+
+                ServiceLog.Operation("WAG-LAN-015", "Expired DHCP block(s) released.");
+            }
+
+            if (now >= _nextPruneUtc)
+            {
+                var settings = analyzer.Settings;
+                _eventStore?.Prune(settings.RetentionDays, now);
+                _nextPruneUtc = now.AddHours(6);
+            }
+
+            lock (Gate)
+            {
+                if (_dirty && now >= _nextSaveUtc)
+                {
+                    _nextSaveUtc = now.Add(SaveInterval);
+                    _dirty = false;
+                    _saving = true;
+                }
+            }
+
+            if (_saving)
+            {
+                SaveState();
+                _saving = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-016", "LAN detection tick failed.", ex);
+        }
+    }
+
+    private static void OnEvent(LanAnalyzer analyzer, LanEventStore store, LanEvent item)
+    {
+        store.Append(item);
+
+        lock (Gate)
+        {
+            _eventCount = Math.Min(_eventCount + 1, LanAnalyzer.MaxEvents);
+            _dirty = true;
+        }
+
+        ServiceLog.Operation(
+            "WAG-LAN-017",
+            $"LAN event: kind={item.Kind}, severity={item.Severity}, adapter={item.Adapter}, " +
+            $"source={item.SourceMac ?? "-"}, target={item.TargetIp ?? "-"}, detail={item.Detail}");
+
+        // 高危事件立即保存，避免服务重启丢掉关键状态（例如新服务器记录）。
+        if (string.Equals(item.Severity, LanSeverity.High, StringComparison.Ordinal))
+        {
+            SaveState();
+        }
+    }
+
+    private static void EnsureCapture()
+    {
+        lock (Gate)
+        {
+            if (!_started || _capture is { IsRunning: true })
+            {
+                return;
+            }
+        }
+
+        if (!NpcapLocator.IsAvailable)
+        {
+            lock (Gate)
+            {
+                _lastError = "Npcap 未安装。";
+            }
+
+            return;
+        }
+
+        var analyzer = _analyzer;
+        var capture = new NpcapLanCapture
+        {
+            ArpObserved = frame => analyzer?.ObserveArp(frame, DateTime.UtcNow),
+            DhcpObserved = message => analyzer?.ObserveDhcp(message, DateTime.UtcNow),
+            Log = message => ServiceLog.Info("WAG-LAN-018", message),
+        };
+
+        if (!capture.Start())
+        {
+            lock (Gate)
+            {
+                _lastError = capture.LastError ?? "Npcap 启动失败。";
+            }
+
+            capture.Dispose();
+            ServiceLog.Warning("WAG-LAN-019", $"LAN capture failed to start: {capture.LastError}");
+            return;
+        }
+
+        NpcapLanCapture? previous;
+
+        lock (Gate)
+        {
+            previous = _capture;
+            _capture = capture;
+            _lastError = null;
+            _nextStatsUtc = DateTime.MinValue;
+            _nextHintsUtc = DateTime.MinValue;
+            _nextPruneUtc = DateTime.MinValue;
+        }
+
+        previous?.Stop();
+        previous?.Dispose();
+
+        if (analyzer is not null)
+        {
+            analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
+        }
+    }
+
+    private static int ReleaseAllBlocks(LanAnalyzer analyzer)
+    {
+        var blocks = analyzer.Blocks.ToList();
+
+        foreach (var block in blocks)
+        {
+            try
+            {
+                if (System.Net.IPAddress.TryParse(block.ServerIp, out var address))
+                {
+                    LanWfp.Remove(address);
+                }
+            }
+            catch (Exception)
+            {
+                // 删失败不影响状态清理。
+            }
+
+            analyzer.RemoveBlock(block.ServerIp);
+        }
+
+        return blocks.Count;
+    }
+
+    private static void SaveState()
+    {
+        LanAnalyzer? analyzer;
+
+        lock (Gate)
+        {
+            analyzer = _analyzer;
+        }
+
+        if (analyzer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var snapshot = analyzer.Snapshot();
+
+            LanStateStore.Save(ServicePaths.LanStateFile, new LanState
+            {
+                Settings = analyzer.Settings,
+                Gateways = snapshot.Gateways,
+                DhcpServers = snapshot.DhcpServers,
+                Blocks = snapshot.Blocks,
+                BaselineReadyUtc = snapshot.BaselineUtc,
+            });
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-020", "Failed to save LAN state.", ex);
+        }
+    }
+
+    private static LanEventDto ToDto(LanEvent item) => new()
+    {
+        Id = item.Id,
+        TimeUtc = item.TimeUtc,
+        Kind = item.Kind,
+        Severity = item.Severity,
+        Adapter = item.Adapter,
+        Detail = item.Detail,
+        SourceMac = item.SourceMac,
+        TargetIp = item.TargetIp,
+        TargetMac = item.TargetMac,
+        Blocked = item.Blocked,
+    };
+
+    private static LanGatewayDto ToDto(LanGateway item) => new()
+    {
+        Adapter = item.Adapter,
+        Ip = item.Ip,
+        Mac = item.Mac,
+        LearnedUtc = item.LearnedUtc,
+        Trusted = item.Trusted,
+    };
+
+    private static LanDhcpServerDto ToDto(LanDhcpServer item) => new()
+    {
+        ServerIp = item.ServerIp,
+        Mac = item.Mac,
+        Adapter = item.Adapter,
+        Gateway = item.Gateway,
+        Dns = item.Dns,
+        LeaseSeconds = item.LeaseSeconds,
+        FirstSeenUtc = item.FirstSeenUtc,
+        Trusted = item.Trusted,
+    };
+
+    private static LanBlockDto ToDto(LanBlock item) => new()
+    {
+        ServerIp = item.ServerIp,
+        UntilUtc = item.UntilUtc,
+        Reason = item.Reason,
+        EventId = item.EventId,
+    };
+
+    private static LanSettingsDto ToDto(LanSettings item) => new()
+    {
+        RetentionDays = item.RetentionDays,
+        DhcpBlockEnabled = item.DhcpBlockEnabled,
+    };
+
+    private static ServiceResponse Error(ServiceRequest request, string message) => new()
+    {
+        Id = request.Id,
+        Ok = false,
+        Error = message,
+    };
+}

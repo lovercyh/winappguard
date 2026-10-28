@@ -218,7 +218,7 @@ public sealed partial class MainForm
 
         _tabControl.SelectedIndexChanged += (_, _) =>
         {
-            if (_tabControl.SelectedTab == _tabIds)
+            if (IsProtectionTab(_tabIds))
             {
                 _idsBalloonPending = false;
                 _ = RefreshIdsAsync();
@@ -228,7 +228,7 @@ public sealed partial class MainForm
         _idsTimer = new System.Windows.Forms.Timer { Interval = IdsRefreshIntervalMs };
         _idsTimer.Tick += (_, _) =>
         {
-            if (_tabControl.SelectedTab == _tabIds)
+            if (IsProtectionTab(_tabIds))
             {
                 _ = RefreshIdsAsync();
             }
@@ -239,7 +239,7 @@ public sealed partial class MainForm
         _idsNotifyTimer = new System.Windows.Forms.Timer { Interval = IdsNotifyIntervalMs };
         _idsNotifyTimer.Tick += (_, _) =>
         {
-            if (_tabControl.SelectedTab != _tabIds)
+            if (!IsProtectionTab(_tabIds))
             {
                 _ = CheckIdsNotificationsAsync();
             }
@@ -256,7 +256,7 @@ public sealed partial class MainForm
 
             _idsBalloonPending = false;
             ShowMainWindow();
-            _tabControl.SelectedTab = _tabIds;
+            SelectProtectionTab(_tabIds);
             _ = RefreshIdsAsync();
         };
 

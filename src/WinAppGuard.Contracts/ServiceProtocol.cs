@@ -152,6 +152,26 @@ public static class ServiceProtocol
         /// <summary>4.0：清空扫描事件并解除全部临时封禁（写，需提权）。</summary>
         public const string ClearAntiScan = "write.antiscan.clear";
 
+        // ---- 4.2：局域网欺骗检测 ----
+
+        /// <summary>4.2：读取局域网状态、事件、网关、DHCP 服务器与阻断（只读）。</summary>
+        public const string QueryLan = "query.lan";
+
+        /// <summary>4.2：修改保留期与 DHCP 阻断总开关（写，需提权）。</summary>
+        public const string ConfigureLan = "write.lan.configure";
+
+        /// <summary>4.2：清空事件并解除全部 DHCP 阻断（写，需提权）。</summary>
+        public const string ClearLan = "write.lan.clear";
+
+        /// <summary>4.2：信任当前网关 MAC / DHCP 服务器（写，需提权）。</summary>
+        public const string TrustLan = "write.lan.trust";
+
+        /// <summary>4.2：临时阻断 / 解除某个 DHCP 服务器（写，需提权）。</summary>
+        public const string BlockLanDhcp = "write.lan.block";
+
+        /// <summary>4.2：清空基线并重新学习（写，需提权）。</summary>
+        public const string ResetLanBaseline = "write.lan.reset-baseline";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

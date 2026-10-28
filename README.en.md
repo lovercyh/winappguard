@@ -37,6 +37,11 @@ and finish with *"blocked."*
 > (TCP + UDP, short-lived and failed connections included), with live rates and a 5-minute chart.
 > Declining Npcap aborts the installation without changing the system. See
 > [`docs/4.1-精确流量与实时速率设计.md`](docs/4.1-精确流量与实时速率设计.md).
+>
+> **4.2 adds LAN spoofing detection.** The *Protection* tab now has a *LAN* sub-tab that detects
+> ARP spoofing (gateway MAC changes, etc.) and rogue DHCP servers. Detection only by default;
+> baselines and events are stored locally, with an optional temporary DHCP block. See
+> [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
@@ -81,12 +86,16 @@ and finish with *"blocked."*
   connection metadata plus DNS records to flag periodic beaconing, port/host scans, lateral
   movement and DNS anomalies. Alerts stay local for 30 days and can be acknowledged, suppressed
   or cleared. The IDS itself reads no payloads and never blocks.
-- **Anti-port-scan (4.0)** — the *Protection* page uses Npcap to inspect inbound TCP SYN
+- **Anti-port-scan (4.0)** — the *Protection → Port scan* tab uses Npcap to inspect inbound TCP SYN
   packets and detect port scans. It can temporarily block the source IP for 5 / 10 / 30 / 60
   minutes; automatic blocking is **off by default**, affects new connections only, and never cuts
-  existing sessions. Without Npcap the firewall works normally and anti-scan is unavailable.
-  The status bar shows `Npcap: connected / not connected`; clicking it while disconnected installs
-  Npcap from the bundled official installer.
+  existing sessions. The status bar shows `Npcap: connected / not connected`; clicking it while
+  disconnected installs Npcap from the bundled official installer.
+- **LAN spoofing detection (4.2)** — the *Protection → LAN* tab detects **ARP spoofing**
+  (gateway MAC changes, a MAC claiming many IPs, IP/MAC flapping, …) and **rogue DHCP**
+  (unexpected/multiple servers, changed options, very short leases). Detection only by default;
+  baselines can be trusted; events are stored locally with 7 / 15 / 30-day retention; an optional
+  temporary DHCP server block is available (off by default).
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
@@ -495,6 +504,8 @@ Most project documentation is in Chinese.
 | [`docs/4.0-VM验收.md`](docs/4.0-VM验收.md) | 4.0 Npcap install, scan tests and soak acceptance |
 | [`docs/4.1-精确流量与实时速率设计.md`](docs/4.1-精确流量与实时速率设计.md) | 4.1 Npcap packet counting, live rates, mandatory Npcap install |
 | [`docs/4.1-VM验收.md`](docs/4.1-VM验收.md) | 4.1 install paths, accuracy tests and soak acceptance |
+| [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md) | 4.2 ARP/DHCP detection, baselines, storage and DHCP blocking |
+| [`docs/4.2-VM验收.md`](docs/4.2-VM验收.md) | 4.2 ARP spoof / rogue DHCP tests and 24h false-positive watch |
 
 ## Contributing
 

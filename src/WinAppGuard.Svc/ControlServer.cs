@@ -154,6 +154,9 @@ internal sealed class ControlServer : IDisposable
         // 4.0：反扫描使用 Npcap（用户安装），与上面两个 ETW 会话无关。
         AntiScanHost.Start();
 
+        // 4.2：ARP / DHCP 检测（独立的第三份 Npcap 会话）。
+        LanHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -189,6 +192,8 @@ internal sealed class ControlServer : IDisposable
         IdsHost.Stop();
 
         AntiScanHost.Stop();
+
+        LanHost.Stop();
 
         TrafficCaptureHost.Stop();
 
@@ -555,6 +560,19 @@ internal sealed class ControlServer : IDisposable
 
             ServiceProtocol.Commands.ClearAntiScan => AntiScanHost.Clear(request),
 
+            // 4.2：局域网；写命令（write.lan.*）已由上面的提权检查统一拦截。
+            ServiceProtocol.Commands.QueryLan => LanHost.Query(request),
+
+            ServiceProtocol.Commands.ConfigureLan => LanHost.Configure(request),
+
+            ServiceProtocol.Commands.ClearLan => LanHost.Clear(request),
+
+            ServiceProtocol.Commands.TrustLan => LanHost.Trust(request),
+
+            ServiceProtocol.Commands.BlockLanDhcp => LanHost.Block(request),
+
+            ServiceProtocol.Commands.ResetLanBaseline => LanHost.ResetBaseline(request),
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -644,6 +662,12 @@ internal sealed class ControlServer : IDisposable
         status.AntiScanCollecting = antiScan.Collecting;
         status.AntiScanNpcapAvailable = antiScan.NpcapAvailable;
         status.AntiScanBlockedCount = antiScan.BlockedCount;
+
+        var lan = LanHost.GetStatus();
+        status.LanCollecting = lan.Collecting;
+        status.LanEventCount = lan.EventCount;
+        status.LanBlockedCount = lan.BlockedCount;
+        status.LanBaselineReady = lan.BaselineReady;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

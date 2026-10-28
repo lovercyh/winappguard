@@ -40,6 +40,22 @@ public sealed partial class MainForm
     private DateTime _npcapConnectingUntilUtc = DateTime.MinValue;
     private bool _npcapInstallerRunning;
 
+    // 4.2：防护页内部的三子标签（端口扫描 / 局域网 / IDS）。
+    private TabControl _protectionTabs = null!;
+    private TabPage _tabScan = null!;
+    private TabPage _tabLan = null!;
+
+    /// <summary>当前是否正看着防护页的某个子标签。</summary>
+    private bool IsProtectionTab(TabPage page)
+        => _tabControl.SelectedTab == _tabAntiScan && _protectionTabs.SelectedTab == page;
+
+    /// <summary>切到防护页的指定子标签（托盘深链用）。</summary>
+    private void SelectProtectionTab(TabPage page)
+    {
+        _tabControl.SelectedTab = _tabAntiScan;
+        _protectionTabs.SelectedTab = page;
+    }
+
     /// <summary>
     /// 状态栏的「Npcap」项：只反映采集是否真的在跑，不把"装了驱动"说成"已连接"。
     ///
@@ -487,21 +503,83 @@ public sealed partial class MainForm
         _antiSplit.Panel1.Controls.Add(_antiEventGrid);
         _antiSplit.Panel2.Controls.Add(_antiBlockGrid);
 
-        _tabAntiScan.Controls.Add(_antiSplit);
-        _tabAntiScan.Controls.Add(top);
+        // 4.2：防护页改成三子标签；原有扫描内容放进 _tabScan，IDS 页迁移进来。
+        _protectionTabs = new TabControl
+        {
+            Dock = DockStyle.Fill,
+            Name = "_protectionTabs",
+        };
+
+        _tabScan = new TabPage(Localizer.T("端口扫描"))
+        {
+            Name = "_tabScan",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
+        _tabLan = new TabPage(Localizer.T("局域网"))
+        {
+            Name = "_tabLan",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
+        _tabScan.Controls.Add(_antiSplit);
+        _tabScan.Controls.Add(top);
+
+        _protectionTabs.Controls.Add(_tabScan);
+        _protectionTabs.Controls.Add(_tabLan);
+        _protectionTabs.Controls.Add(_tabIds);
+        _tabAntiScan.Controls.Add(_protectionTabs);
+
+        InitializeLanPage();
+
+        _protectionTabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (_tabControl.SelectedTab != _tabAntiScan)
+            {
+                return;
+            }
+
+            if (_protectionTabs.SelectedTab == _tabScan)
+            {
+                _ = RefreshAntiScanAsync();
+            }
+            else if (_protectionTabs.SelectedTab == _tabLan)
+            {
+                _ = RefreshLanAsync();
+            }
+            else if (_protectionTabs.SelectedTab == _tabIds)
+            {
+                _idsBalloonPending = false;
+                _ = RefreshIdsAsync();
+            }
+        };
 
         _tabControl.SelectedIndexChanged += (_, _) =>
         {
             if (_tabControl.SelectedTab == _tabAntiScan)
             {
-                _ = RefreshAntiScanAsync();
+                if (_protectionTabs.SelectedTab == _tabLan)
+                {
+                    _ = RefreshLanAsync();
+                }
+                else if (_protectionTabs.SelectedTab == _tabIds)
+                {
+                    _idsBalloonPending = false;
+                    _ = RefreshIdsAsync();
+                }
+                else
+                {
+                    _ = RefreshAntiScanAsync();
+                }
             }
         };
 
         _antiTimer = new System.Windows.Forms.Timer { Interval = AntiScanRefreshIntervalMs };
         _antiTimer.Tick += (_, _) =>
         {
-            if (_tabControl.SelectedTab == _tabAntiScan)
+            if (IsProtectionTab(_tabScan))
             {
                 _ = RefreshAntiScanAsync();
             }

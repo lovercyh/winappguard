@@ -10121,7 +10121,7 @@ internal static class Program
         var results = new List<(string Title, bool Passed)>();
 
         W("################################################################");
-        W("#   3.5/3.6 服务端实测（流量 ETW Network / DNS ETW）            #");
+        W("#   3.5/3.6 服务端实测（流量 Npcap / DNS ETW）                  #");
         W("################################################################");
         W();
 
@@ -10179,9 +10179,9 @@ internal static class Program
 
                 var afterLoopback = QueryTrafficFromService(out _);
                 var ownAfterLoopback = afterLoopback is null ? null : FindOwnTraffic(afterLoopback);
-                var loopbackDelta = ownAfterLoopback is null
-                    ? -1
-                    : ownAfterLoopback.BytesIn - (ownBefore?.BytesIn ?? 0);
+
+                // 没有记录 = 这段流量没被计入（正是期望）；不能把“查不到”当成 -1 的增量。
+                var loopbackDelta = (ownAfterLoopback?.BytesIn ?? 0) - (ownBefore?.BytesIn ?? 0);
 
                 W($"    回环下载后累计入站 = {ownAfterLoopback?.BytesIn ?? 0} 字节；增量 = {loopbackDelta} 字节");
                 CheckAssertion(results, "回环流量不计入精确统计", loopbackDelta is >= 0 and < 64 * 1024);

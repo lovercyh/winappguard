@@ -153,8 +153,8 @@ partial class MainForm
     /// <summary>
     /// 检查「临时阻断」是否到期的独立定时器。
     ///
-    /// 刻意**不**复用上面那个自动刷新定时器：自动刷新的开关默认是关的，
-    /// 复用的话没勾开关的用户就永远等不到临时阻断自动解除。
+    /// 刻意**不**复用上面那个自动刷新定时器：自动刷新的开关用户可以关掉，
+    /// 复用的话关掉开关的用户就永远等不到临时阻断自动解除。
     /// </summary>
     private System.Windows.Forms.Timer _expiryTimer = null!;
     private ToolTip _toolTip = null!;
@@ -509,6 +509,7 @@ partial class MainForm
         _autoRefreshCheckBox.TabIndex = 1;
         _autoRefreshCheckBox.Text = "每 3 秒自动刷新";
         _autoRefreshCheckBox.UseVisualStyleBackColor = true;
+        _autoRefreshCheckBox.Checked = true;
         _autoRefreshCheckBox.CheckedChanged += OnAutoRefreshCheckedChanged;
 
         _showListenCheckBox.AutoSize = true;

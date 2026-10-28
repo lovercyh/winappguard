@@ -15,13 +15,14 @@ namespace WinAppGuard.Forms;
 /// </summary>
 public sealed partial class MainForm
 {
-    private const int DnsRefreshIntervalMs = 5000;
+    private const int DnsRefreshIntervalMs = 3000;
 
     private TextBox _dnsSearchBox = null!;
     private Label _dnsStatusLabel = null!;
     private Label _dnsHintLabel = null!;
     private Button _dnsRefreshButton = null!;
     private Button _dnsClearButton = null!;
+    private CheckBox _dnsAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _dnsGrid = null!;
     private System.Windows.Forms.Timer? _dnsTimer;
 
@@ -35,7 +36,7 @@ public sealed partial class MainForm
         var top = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 72,
+            Height = 96,
             Padding = new Padding(0, 4, 0, 0),
         };
 
@@ -73,11 +74,20 @@ public sealed partial class MainForm
 
         _dnsHintLabel = new Label
         {
-            Location = new Point(0, 42),
+            Location = new Point(0, 64),
             Width = 1000,
             Text = "只记录系统 DNS 客户端看到的域名；DoH/DoT 可能看不到，部分系统会把查询记到 svchost（DNS Client 服务）名下。内存保留最近 2000 条，服务重启后清空。",
             ForeColor = SystemColors.GrayText,
         };
+
+        _dnsAutoRefreshCheckBox = new CheckBox
+        {
+            Location = new Point(0, 40),
+            AutoSize = true,
+            Text = Localizer.T("每 3 秒自动刷新"),
+            Checked = true,
+        };
+        _dnsAutoRefreshCheckBox.CheckedChanged += OnDnsAutoRefreshChanged;
 
         top.Controls.AddRange(new Control[]
         {
@@ -85,6 +95,7 @@ public sealed partial class MainForm
             _dnsRefreshButton,
             _dnsClearButton,
             _dnsStatusLabel,
+            _dnsAutoRefreshCheckBox,
             _dnsHintLabel,
         });
 
@@ -124,16 +135,33 @@ public sealed partial class MainForm
             }
         };
 
-        _dnsTimer = new System.Windows.Forms.Timer { Interval = DnsRefreshIntervalMs };
+        _dnsTimer = new System.Windows.Forms.Timer
+        {
+            Interval = DnsRefreshIntervalMs,
+            Enabled = _dnsAutoRefreshCheckBox.Checked,
+        };
+
         _dnsTimer.Tick += (_, _) =>
         {
-            // 只在用户真的看着这一页时拉数据，避免后台白白占用管道。
-            if (_tabControl.SelectedTab == _tabDns)
+            // 只在用户真的看着这一页、且没关掉自动刷新时拉数据。
+            if (_dnsAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabDns)
             {
                 _ = RefreshDnsAsync();
             }
         };
-        _dnsTimer.Start();
+    }
+
+    private void OnDnsAutoRefreshChanged(object? sender, EventArgs e)
+    {
+        if (_dnsTimer is not null)
+        {
+            _dnsTimer.Enabled = _dnsAutoRefreshCheckBox.Checked;
+        }
+
+        if (_dnsAutoRefreshCheckBox.Checked)
+        {
+            _ = RefreshDnsAsync();
+        }
     }
 
     private void AddDnsColumn(string title, string property, int fillWeight)

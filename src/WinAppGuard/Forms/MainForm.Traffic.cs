@@ -14,13 +14,14 @@ namespace WinAppGuard.Forms;
 /// </summary>
 public sealed partial class MainForm
 {
-    private const int TrafficRefreshIntervalMs = 1000;
+    private const int TrafficRefreshIntervalMs = 3000;
 
     private TextBox _trafficSearchBox = null!;
     private Label _trafficSummaryLabel = null!;
     private Button _trafficRefreshButton = null!;
     private Button _trafficPauseButton = null!;
     private Button _trafficClearButton = null!;
+    private CheckBox _trafficAutoRefreshCheckBox = null!;
     private TrafficChart _trafficChart = null!;
     private DataGridViewBuffered _trafficGrid = null!;
     private System.Windows.Forms.Timer? _trafficTimer;
@@ -106,6 +107,15 @@ public sealed partial class MainForm
         };
         _trafficClearButton.Click += OnTrafficClearClick;
 
+        _trafficAutoRefreshCheckBox = new CheckBox
+        {
+            Text = Localizer.T("每 3 秒自动刷新"),
+            AutoSize = true,
+            Checked = true,
+            Margin = new Padding(4, 6, 0, 0),
+        };
+        _trafficAutoRefreshCheckBox.CheckedChanged += OnTrafficAutoRefreshChanged;
+
         var actions = new FlowLayoutPanel
         {
             Location = new Point(210, 22),
@@ -117,6 +127,7 @@ public sealed partial class MainForm
         actions.Controls.AddRange(new Control[]
         {
             _trafficRefreshButton, _trafficPauseButton, _trafficClearButton,
+            _trafficAutoRefreshCheckBox,
         });
 
         _trafficSummaryLabel = new Label
@@ -193,16 +204,21 @@ public sealed partial class MainForm
             }
         };
 
-        _trafficTimer = new System.Windows.Forms.Timer { Interval = TrafficRefreshIntervalMs };
+        _trafficTimer = new System.Windows.Forms.Timer
+        {
+            Interval = TrafficRefreshIntervalMs,
+            Enabled = _trafficAutoRefreshCheckBox.Checked,
+        };
+
         _trafficTimer.Tick += (_, _) =>
         {
-            // 只在用户真的看着这一页时拉数据。
-            if (_tabControl.SelectedTab == _tabTraffic)
+            // 只在用户真的看着这一页、并且没关掉自动刷新时拉数据。
+            if (_trafficAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabTraffic)
             {
                 _ = RefreshTrafficAsync();
             }
         };
-        _trafficTimer.Start();
+
 
         UpdateTrafficSortGlyphs();
         UpdateTrafficButtons();
@@ -612,6 +628,20 @@ public sealed partial class MainForm
         _trafficClearButton.Enabled = !_trafficLoading
                                       && available
                                       && _trafficRecords.Count > 0;
+    }
+
+    private void OnTrafficAutoRefreshChanged(object? sender, EventArgs e)
+    {
+        if (_trafficTimer is not null)
+        {
+            _trafficTimer.Enabled = _trafficAutoRefreshCheckBox.Checked;
+        }
+
+        // 勾上时立刻刷新一次，不用再等 3 秒。
+        if (_trafficAutoRefreshCheckBox.Checked)
+        {
+            _ = RefreshTrafficAsync();
+        }
     }
 
     private void OnTrafficPauseClick(object? sender, EventArgs e)

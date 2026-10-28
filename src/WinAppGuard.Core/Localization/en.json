@@ -654,6 +654,7 @@
 
     "精确统计（Npcap）：按网卡上真实出现的字节计数，含重传与被拒绝的入站包，不含回环。": "Precise (Npcap): counts bytes actually seen on the adapter, including retransmissions and rejected inbound packets; loopback is excluded.",
     "等待流量…": "Waiting for traffic…",
+    "每 3 秒自动刷新": "Auto-refresh every 3 s",
     "暂停统计": "Pause",
     "继续统计": "Resume",
     "下行": "Down",

@@ -20,6 +20,7 @@ public sealed partial class MainForm
 
     private TextBox _auditSearchBox = null!;
     private CheckBox _auditBlockedOnlyCheck = null!;
+    private CheckBox _auditAutoRefreshCheckBox = null!;
     private Label _auditRetentionLabel = null!;
     private ComboBox _auditRetentionCombo = null!;
     private CheckBox _auditEnabledCheck = null!;
@@ -47,7 +48,7 @@ public sealed partial class MainForm
         var top = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 72,
+            Height = 100,
             Padding = new Padding(0, 4, 0, 0),
         };
 
@@ -155,6 +156,15 @@ public sealed partial class MainForm
             ForeColor = SystemColors.GrayText,
         };
 
+        _auditAutoRefreshCheckBox = new CheckBox
+        {
+            Location = new Point(0, 70),
+            AutoSize = true,
+            Text = Localizer.T("每 3 秒自动刷新"),
+            Checked = true,
+        };
+        _auditAutoRefreshCheckBox.CheckedChanged += OnAuditAutoRefreshChanged;
+
         top.Controls.AddRange(new Control[]
         {
             _auditSearchBox,
@@ -169,6 +179,7 @@ public sealed partial class MainForm
             _auditEnabledCheck,
             _auditDomainCheck,
             _auditStatusLabel,
+            _auditAutoRefreshCheckBox,
         });
 
         _auditGrid = new DataGridViewBuffered
@@ -255,10 +266,15 @@ public sealed partial class MainForm
             }
         };
 
-        _auditTimer = new System.Windows.Forms.Timer { Interval = AuditRefreshIntervalMs };
+        _auditTimer = new System.Windows.Forms.Timer
+        {
+            Interval = AuditRefreshIntervalMs,
+            Enabled = _auditAutoRefreshCheckBox.Checked,
+        };
+
         _auditTimer.Tick += (_, _) =>
         {
-            if (_tabControl.SelectedTab == _tabAudit)
+            if (_auditAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabAudit)
             {
                 RefreshAudit();
             }
@@ -272,9 +288,21 @@ public sealed partial class MainForm
         _auditRetentionCombo.Enabled = _settings.AuditEnabled;
         _loadingAuditSettings = false;
 
-        _auditTimer.Start();
         RefreshAudit();
         UpdateAuditControlsEnabled();
+    }
+
+    private void OnAuditAutoRefreshChanged(object? sender, EventArgs e)
+    {
+        if (_auditTimer is not null)
+        {
+            _auditTimer.Enabled = _auditAutoRefreshCheckBox.Checked;
+        }
+
+        if (_auditAutoRefreshCheckBox.Checked)
+        {
+            RefreshAudit();
+        }
     }
 
     private static DataGridViewTextBoxColumn NewAuditColumn(string title, int width, int fillWeight)

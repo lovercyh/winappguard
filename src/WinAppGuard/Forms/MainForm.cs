@@ -333,6 +333,7 @@ public partial class MainForm : Form
         InitializeComponent();
 
         _autoRefreshTimer.Interval = AutoRefreshIntervalMs;
+        _autoRefreshTimer.Enabled = _autoRefreshCheckBox.Checked;
 
         // 到期检查用独立定时器（理由见字段说明）。
         _expiryTimer.Interval = AppConstants.ExpiredRuleCheckIntervalMs;
@@ -1033,6 +1034,7 @@ public partial class MainForm : Form
     private void ShowRuntimeStatus()
     {
         _versionLabel.Text = Localizer.F("版本 v{0}", BuildVersionText());
+        _autoRefreshCheckBox.Text = Localizer.T("每 3 秒自动刷新");
 
         _startModeLabel.Text = _isAutostart
             ? Localizer.F("启动模式：开机自启（{0}）", AppConstants.AutostartArgument)
@@ -1341,8 +1343,8 @@ public partial class MainForm : Form
     //
     // 什么时候检查：程序启动时（同步一次）、一个 30 秒的独立定时器、
     // 以及用户手动点「刷新」时。
-    // **刻意不搭在「每 3 秒自动刷新」上** —— 那个开关默认是关的，
-    // 搭上去的话没勾开关的用户就永远等不到临时阻断自动解除。
+    // **刻意不搭在「每 3 秒自动刷新」上** —— 那个开关用户随时可以关掉，
+    // 搭上去的话关掉开关的用户就永远等不到临时阻断自动解除。
     //
     // 为什么放后台线程：读一遍防火墙规则要把系统里**全部**规则枚举一遍
     // （本机 735 条，实测约 45ms）。挂在界面线程上，每 30 秒就会有一次可见的卡顿。
@@ -3932,7 +3934,11 @@ public partial class MainForm : Form
 
     private async void OnAutoRefreshTick(object? sender, EventArgs e)
     {
-        await RefreshConnectionsAsync();
+        // 只在用户看着连接页时刷新，避免在别的页上白白走一遍扫描。
+        if (_tabControl.SelectedTab == _tabConnections)
+        {
+            await RefreshConnectionsAsync();
+        }
     }
 
     /// <summary>重新从防火墙读取规则状态。用于在 wf.msc 里手动改过规则之后同步。</summary>

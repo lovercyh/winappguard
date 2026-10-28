@@ -12767,6 +12767,54 @@ internal static class Program
                 && grid.Rows[0].Cells[grid.Columns["InRateText"]!.Index].Value?.ToString()
                     ?.EndsWith("/s", StringComparison.Ordinal) == true);
 
+            // 4.1：自动刷新开关（默认开启、3 秒、取消后定时器停止）
+            if (TryGetField<CheckBox>(form, "_trafficAutoRefreshCheckBox", out var trafficAuto)
+                && TryGetField<System.Windows.Forms.Timer>(form, "_trafficTimer", out var trafficTimer))
+            {
+                CheckAssertion(results, "流量页自动刷新默认开启且间隔 3 秒",
+                    trafficAuto.Checked && trafficTimer.Enabled && trafficTimer.Interval == 3000);
+
+                trafficAuto.Checked = false;
+                Application.DoEvents();
+                CheckAssertion(results, "流量页取消自动刷新后定时器停止", !trafficTimer.Enabled);
+
+                trafficAuto.Checked = true;
+                Application.DoEvents();
+                CheckAssertion(results, "流量页重新勾选后自动刷新恢复", trafficTimer.Enabled);
+            }
+
+            foreach (var pair in new (string Check, string Timer, string Label)[]
+                     {
+                         ("_dnsAutoRefreshCheckBox", "_dnsTimer", "DNS"),
+                         ("_auditAutoRefreshCheckBox", "_auditTimer", "记录"),
+                     })
+            {
+                if (TryGetField<CheckBox>(form, pair.Check, out var auto)
+                    && TryGetField<System.Windows.Forms.Timer>(form, pair.Timer, out var timer))
+                {
+                    CheckAssertion(results, $"{pair.Label}页自动刷新默认开启且间隔 3 秒",
+                        auto.Checked && timer.Enabled && timer.Interval == 3000);
+
+                    auto.Checked = false;
+                    Application.DoEvents();
+                    CheckAssertion(results, $"{pair.Label}页取消自动刷新后定时器停止", !timer.Enabled);
+
+                    auto.Checked = true;
+                    Application.DoEvents();
+                }
+                else
+                {
+                    CheckAssertion(results, $"找得到{pair.Label}页的自动刷新开关", false);
+                }
+            }
+
+            if (TryGetField<CheckBox>(form, "_autoRefreshCheckBox", out var connectionAuto)
+                && TryGetField<System.Windows.Forms.Timer>(form, "_autoRefreshTimer", out var connectionTimer))
+            {
+                CheckAssertion(results, "联网连接页自动刷新默认开启且间隔 3 秒",
+                    connectionAuto.Checked && connectionTimer.Enabled && connectionTimer.Interval == 3000);
+            }
+
             // 4.1：统计行要能看出 pps / 丢包 / 采样，否则“准不准”无从判断。
             TrySetField(form, "_trafficStatus", new TrafficStatusDto
             {

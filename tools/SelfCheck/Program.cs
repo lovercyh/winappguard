@@ -162,6 +162,7 @@ internal static class Program
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
@@ -437,6 +438,10 @@ internal static class Program
             {
                 RunLanTest();
             }
+            else if (args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunDnsSecurityTest();
+            }
             else if (args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunTrafficCaptureTest();
@@ -444,6 +449,10 @@ internal static class Program
             else if (args.Contains("--service-lan-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceLanTest();
+            }
+            else if (args.Contains("--service-dns-security-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceDnsSecurityTest();
             }
             else if (args.Contains("--service-traffic-precise-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -4643,18 +4652,19 @@ internal static class Program
                         }
                     }
 
-                    // 4.2：防护页的三子标签 + 局域网页。
+                    // 4.2 / 4.3：防护页的四子标签 + 局域网 / DNS 安全页。
                     if (TryGetField<TabControl>(form, "_protectionTabs", out var protectionTabs)
                         && TryGetField<TabPage>(form, "_tabScan", out var scanTab)
-                        && TryGetField<TabPage>(form, "_tabLan", out var lanTab))
+                        && TryGetField<TabPage>(form, "_tabLan", out var lanTab)
+                        && TryGetField<TabPage>(form, "_tabDnsSecurity", out var dnsSecurityTab))
                     {
                         var subTabs = protectionTabs.TabPages.Cast<TabPage>()
                             .Select(page => page.Text)
                             .ToList();
 
                         W("    防护子标签 = " + string.Join(" | ", subTabs));
-                        CheckAssertion(results, "英文：防护三子标签无中文",
-                            subTabs.Count == 3 && subTabs.All(text => !HasCjk(text)));
+                        CheckAssertion(results, "英文：防护四子标签无中文",
+                            subTabs.Count == 4 && subTabs.All(text => !HasCjk(text)));
 
                         var lanButtons = new[]
                         {
@@ -4717,6 +4727,46 @@ internal static class Program
                             W("    局域网状态行 = " + lanStatusLabel.Text);
                             CheckAssertion(results, "英文：局域网状态行无中文",
                                 !HasCjk(lanStatusLabel.Text) && !HasCjk(lanAdapterLabel.Text));
+                        }
+
+                        // 4.3：DNS 安全页按钮 / 列头 / 状态行。
+                        var dnsButtons = new[]
+                        {
+                            "_dnsSecRefreshButton", "_dnsSecClearButton", "_dnsSecTrustButton",
+                            "_dnsSecClearTrustButton",
+                        }
+                            .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
+                            .Where(button => button is not null)
+                            .Select(button => button!)
+                            .ToList();
+
+                        W("    DNS 安全页按钮 = " + string.Join(" | ", dnsButtons.Select(button => button.Text)));
+                        CheckAssertion(results, "英文：DNS 安全页按钮无中文",
+                            dnsButtons.Count == 4 && dnsButtons.All(button => !HasCjk(button.Text)));
+
+                        foreach (var name in new[] { "_dnsSecServerGrid", "_dnsSecEventGrid" })
+                        {
+                            if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, name, out var grid))
+                            {
+                                var headers = grid.Columns.Cast<DataGridViewColumn>()
+                                    .Select(column => column.HeaderText)
+                                    .ToList();
+
+                                W($"    {name} 列头 = " + string.Join(" | ", headers));
+                                CheckAssertion(results, $"英文：{name} 列头/空状态无中文",
+                                    headers.All(text => !HasCjk(text)) && !HasCjk(grid.EmptyText));
+                            }
+                            else
+                            {
+                                CheckAssertion(results, $"找得到 {name}", false);
+                            }
+                        }
+
+                        if (TryGetField<Label>(form, "_dnsSecStatusLabel", out var dnsStatusLabel))
+                        {
+                            W("    DNS 安全状态行 = " + dnsStatusLabel.Text);
+                            CheckAssertion(results, "英文：DNS 安全状态行无中文",
+                                !HasCjk(dnsStatusLabel.Text));
                         }
                     }
                     else
@@ -11158,6 +11208,134 @@ internal static class Program
             out error);
     }
 
+    /// <summary>
+    /// 4.3：DNS 安全服务端实测（状态 / 服务器列表 / 信任 / 清空）。
+    /// 只在 VM 上跑：会读写服务端状态文件。
+    /// </summary>
+    private static void RunServiceDnsSecurityTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   4.3 DNS 安全服务端实测（状态 / 服务器 / 信任 / 清空）        #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        CheckAssertion(results, "服务版本是 4.3 或更高",
+            status.ServiceVersion.StartsWith("4.3", StringComparison.Ordinal));
+        CheckAssertion(results, "DNS 安全采集在跑", status.DnsSecurityCollecting);
+
+        var snapshot = QueryDnsSecurityResponse(out var queryError);
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取 DNS 安全失败：{snapshot?.Error ?? queryError}");
+            CheckAssertion(results, "读取 DNS 安全快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    采集={snapshot.DnsSecurityStatus?.Collecting} " +
+          $"基线={snapshot.DnsSecurityStatus?.BaselineReady} " +
+          $"配置={snapshot.DnsSecurityStatus?.ConfiguredCount} " +
+          $"事件={snapshot.DnsSecurityStatus?.EventCount}");
+
+        CheckAssertion(results, "返回 DNS 安全状态与服务器列表",
+            snapshot.DnsSecurityStatus is not null
+            && snapshot.DnsSecurityServers is not null);
+
+        const string testAddress = "203.0.113.53";
+
+        try
+        {
+            var trust = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.TrustDnsServer,
+                    DnsTrustAddress = testAddress,
+                    DnsTrustEnabled = true,
+                },
+                TimeSpan.FromSeconds(15),
+                out var trustError);
+
+            CheckAssertion(results, "信任 DNS 服务器",
+                trust is { Ok: true }
+                && trust.DnsSecurityServers?.Any(item =>
+                    item.Address == testAddress && item.Trusted) == true);
+
+            if (trust is null)
+            {
+                W($"    信任失败：{trustError}");
+            }
+
+            var untrust = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.TrustDnsServer,
+                    DnsTrustAddress = testAddress,
+                    DnsTrustEnabled = false,
+                },
+                TimeSpan.FromSeconds(15),
+                out var untrustError);
+
+            CheckAssertion(results, "取消信任 DNS 服务器",
+                untrust is { Ok: true }
+                && untrust.DnsSecurityServers?.All(item =>
+                    item.Address != testAddress || !item.Trusted) == true);
+
+            if (untrust is null)
+            {
+                W($"    取消信任失败：{untrustError}");
+            }
+
+            var clear = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ClearDnsSecurity },
+                TimeSpan.FromSeconds(15),
+                out var clearError);
+
+            CheckAssertion(results, "清空 DNS 安全事件",
+                clear is { Ok: true } && clear.DnsSecurityEvents is { Count: 0 });
+
+            if (clear is null)
+            {
+                W($"    清空失败：{clearError}");
+            }
+        }
+        finally
+        {
+            // 测试地址本身不写入任何配置；保险起见再取消一次。
+            ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.TrustDnsServer,
+                    DnsTrustAddress = testAddress,
+                    DnsTrustEnabled = false,
+                },
+                TimeSpan.FromSeconds(15),
+                out _);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static ServiceResponse? QueryDnsSecurityResponse(out string? error)
+    {
+        return ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryDnsSecurity },
+            TimeSpan.FromSeconds(5),
+            out error);
+    }
+
     private static void RunServiceTrafficPreciseTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -12822,6 +13000,472 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
+    /// <summary>
+    /// 4.3：DNS 安全离线自检（应答校验 / 绕过 / 信任 / 冷却 / 落盘）。
+    /// 只构造 <see cref="DnsMessage"/>，不依赖 Npcap。
+    /// </summary>
+    private static void RunDnsSecurityTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = new DateTime(2026, 10, 29, 10, 0, 0, DateTimeKind.Utc);
+        var gatewayMac = "aa:aa:aa:aa:aa:aa";
+
+        var state = new LanState
+        {
+            Gateways = new List<LanGateway>
+            {
+                new()
+                {
+                    Adapter = "eth0",
+                    Ip = "192.168.1.1",
+                    Mac = gatewayMac,
+                    LearnedUtc = start,
+                },
+            },
+        };
+
+        var analyzer = new DnsAnalyzer(state, start);
+        var events = new List<LanEvent>();
+
+        analyzer.EventObserved = item =>
+        {
+            events.Add(item);
+            W($"    事件：{item.Kind} / {item.Severity} / {item.Detail}");
+        };
+
+        analyzer.UpdateConfiguredServers(new[] { new DnsServerHint("eth0", "192.168.1.1") });
+        analyzer.UpdateGatewayBaselines(state.Gateways);
+
+        W("################################################################");
+        W("#   4.3 DNS 安全（离线：应答校验 / 绕过 / 信任 / 冷却 / 落盘）  #");
+        W("################################################################");
+        W();
+
+        static DnsMessage Query(DateTime time, ushort id, string name, string server)
+            => new(
+                time,
+                "eth0",
+                "192.168.1.100",
+                53000,
+                server,
+                IsResponse: false,
+                id,
+                name,
+                1,
+                0,
+                "aa:aa:aa:aa:aa:aa",
+                Array.Empty<DnsAnswer>());
+
+        static DnsMessage Response(
+            DateTime time,
+            ushort id,
+            string name,
+            string server,
+            int responseCode,
+            string? sourceMac,
+            params DnsAnswer[] answers)
+            => new(
+                time,
+                "eth0",
+                "192.168.1.100",
+                53000,
+                server,
+                IsResponse: true,
+                id,
+                name,
+                1,
+                responseCode,
+                sourceMac,
+                answers);
+
+        CheckAssertion(results, "基线：配置 DNS 后立即可用",
+            analyzer.BaselineReady && analyzer.ConfiguredCount == 1);
+
+        // 正常应答：不应告警。
+        var normal = start.AddSeconds(1);
+        analyzer.Observe(Query(normal, 100, "example.com", "192.168.1.1"), normal);
+        analyzer.Observe(
+            Response(normal.AddMilliseconds(50), 100, "example.com", "192.168.1.1", 0, gatewayMac,
+                new DnsAnswer("example.com", 1, 300, "93.184.216.34")),
+            normal.AddMilliseconds(50));
+
+        CheckAssertion(results, "正常应答不告警", events.Count == 0);
+
+        // 字节级解析：问题段 + 答案名压缩指针（真实 DNS 应答最常见的形式）。
+        static byte[] BuildQuery(ushort id, string name, ushort type)
+        {
+            var bytes = new List<byte>();
+
+            void U16(ushort value)
+            {
+                bytes.Add((byte)(value >> 8));
+                bytes.Add((byte)value);
+            }
+
+            U16(id);
+            U16(0x0100);
+            U16(1);
+            U16(0);
+            U16(0);
+            U16(0);
+
+            foreach (var label in name.Split('.'))
+            {
+                bytes.Add((byte)label.Length);
+                bytes.AddRange(Encoding.ASCII.GetBytes(label));
+            }
+
+            bytes.Add(0);
+            U16(type);
+            U16(1);
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildResponse(ushort id, string name, uint ttl, string address, ushort flags = 0x8180)
+        {
+            var bytes = new List<byte>();
+
+            void U16(ushort value)
+            {
+                bytes.Add((byte)(value >> 8));
+                bytes.Add((byte)value);
+            }
+
+            void U32(uint value)
+            {
+                bytes.Add((byte)(value >> 24));
+                bytes.Add((byte)(value >> 16));
+                bytes.Add((byte)(value >> 8));
+                bytes.Add((byte)value);
+            }
+
+            U16(id);
+            U16(flags);
+            U16(1);
+            U16(1);
+            U16(0);
+            U16(0);
+
+            foreach (var label in name.Split('.'))
+            {
+                bytes.Add((byte)label.Length);
+                bytes.AddRange(Encoding.ASCII.GetBytes(label));
+            }
+
+            bytes.Add(0);
+            U16(1);
+            U16(1);
+
+            // 答案名压缩指针指向偏移 12（问题段域名）。
+            bytes.Add(0xC0);
+            bytes.Add(0x0C);
+            U16(1);
+            U16(1);
+            U32(ttl);
+            U16(4);
+            bytes.AddRange(IPAddress.Parse(address).GetAddressBytes());
+            return bytes.ToArray();
+        }
+
+        var clientBytes = new byte[] { 192, 168, 1, 100 };
+        var serverBytes = new byte[] { 192, 168, 1, 1 };
+        var macBytes = new byte[] { 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
+
+        var queryBytes = BuildQuery(0x1234, "example.com", 1);
+
+        CheckAssertion(results, "字节解析：请求头 / 域名 / 目标服务器",
+            NpcapLanCapture.TryParseDnsPayload(
+                queryBytes, start, "eth0", clientBytes, serverBytes, 53000, 53, macBytes,
+                out var parsedQuery)
+            && !parsedQuery.IsResponse
+            && parsedQuery.TransactionId == 0x1234
+            && parsedQuery.QuestionName == "example.com"
+            && parsedQuery.ClientAddress == "192.168.1.100"
+            && parsedQuery.ServerAddress == "192.168.1.1"
+            && parsedQuery.ClientPort == 53000);
+
+        var responseBytes = BuildResponse(0x1234, "example.com", 300, "93.184.216.34");
+
+        CheckAssertion(results, "字节解析：压缩指针答案 + A 记录 + TTL",
+            NpcapLanCapture.TryParseDnsPayload(
+                responseBytes, start, "eth0", serverBytes, clientBytes, 53, 53000, macBytes,
+                out var parsedResponse)
+            && parsedResponse.IsResponse
+            && parsedResponse.Answers.Count == 1
+            && parsedResponse.Answers[0].Name == "example.com"
+            && parsedResponse.Answers[0].Value == "93.184.216.34"
+            && parsedResponse.Answers[0].Ttl == 300);
+
+        CheckAssertion(results, "字节解析：截断载荷安全拒绝",
+            !NpcapLanCapture.TryParseDnsPayload(
+                new byte[] { 0x12, 0x34, 0x81 }, start, "eth0", serverBytes, clientBytes,
+                53, 53000, macBytes, out _));
+
+        // TC=1：能看到报文，但不拿不完整答案做 TTL / 冲突判断。
+        var truncatedBytes = BuildResponse(1000, "trunc.example", 0, "4.4.4.4", 0x8380);
+
+        var truncatedParsed = NpcapLanCapture.TryParseDnsPayload(
+            truncatedBytes, start, "eth0", serverBytes, clientBytes, 53, 53000, macBytes,
+            out var truncatedResponse);
+
+        CheckAssertion(results, "字节解析：TC 截断标记被识别",
+            truncatedParsed && truncatedResponse.Truncated);
+
+        var beforeTruncated = events.Count;
+        var truncatedAt = start.AddMinutes(9);
+
+        analyzer.Observe(Query(truncatedAt, 1000, "trunc.example", "192.168.1.1"), truncatedAt);
+        analyzer.Observe(truncatedResponse, truncatedAt);
+
+        CheckAssertion(results, "截断应答不产生 TTL / 冲突告警",
+            events.Count == beforeTruncated);
+
+        // 应答来源与请求不符 → 高危；MAC 与网关不符 → 中危。
+        var unexpected = start.AddMinutes(1);
+        analyzer.Observe(Query(unexpected, 200, "bank.example", "192.168.1.1"), unexpected);
+        analyzer.Observe(
+            Response(unexpected.AddMilliseconds(10), 200, "bank.example", "192.168.1.66", 0,
+                "bb:bb:bb:bb:bb:bb",
+                new DnsAnswer("bank.example", 1, 300, "6.6.6.6")),
+            unexpected.AddMilliseconds(10));
+
+        CheckAssertion(results, "应答来源异常触发高危",
+            events.Any(item => item.Kind == LanEventKinds.DnsResponseUnexpectedServer
+                               && item.Severity == LanSeverity.High));
+        CheckAssertion(results, "DNS 服务器 MAC 非网关触发中危",
+            events.Any(item => item.Kind == LanEventKinds.DnsServerNotGateway
+                               && item.Severity == LanSeverity.Medium));
+
+        // 事务 ID 对不上任何未完成请求 → 高危。
+        var mismatched = start.AddMinutes(2);
+        analyzer.Observe(Query(mismatched, 300, "tx.example", "192.168.1.1"), mismatched);
+        analyzer.Observe(
+            Response(mismatched.AddMilliseconds(10), 999, "tx.example", "192.168.1.1", 0, gatewayMac,
+                new DnsAnswer("tx.example", 1, 300, "7.7.7.7")),
+            mismatched.AddMilliseconds(10));
+
+        CheckAssertion(results, "事务 ID 不匹配触发高危",
+            events.Any(item => item.Kind == LanEventKinds.DnsTransactionMismatch
+                               && item.Severity == LanSeverity.High));
+
+        // 应答 Question 与请求不符 → 高危。
+        var answerName = start.AddMinutes(3);
+        analyzer.Observe(Query(answerName, 400, "real.example", "192.168.1.1"), answerName);
+        analyzer.Observe(
+            Response(answerName.AddMilliseconds(10), 400, "evil.example", "192.168.1.1", 0, gatewayMac,
+                new DnsAnswer("evil.example", 1, 300, "6.6.6.6")),
+            answerName.AddMilliseconds(10));
+
+        CheckAssertion(results, "应答域名不符触发高危",
+            events.Any(item => item.Kind == LanEventKinds.DnsAnswerNameMismatch
+                               && item.Severity == LanSeverity.High));
+
+        // NXDOMAIN 却带答案 → 高危。
+        var nxdomain = start.AddMinutes(4);
+        analyzer.Observe(Query(nxdomain, 500, "nx.example", "192.168.1.1"), nxdomain);
+        analyzer.Observe(
+            Response(nxdomain.AddMilliseconds(10), 500, "nx.example", "192.168.1.1", 3, gatewayMac,
+                new DnsAnswer("nx.example", 1, 300, "10.0.0.1")),
+            nxdomain.AddMilliseconds(10));
+
+        CheckAssertion(results, "NXDOMAIN 带答案触发高危",
+            events.Any(item => item.Kind == LanEventKinds.DnsNxdomainWithAnswer
+                               && item.Severity == LanSeverity.High));
+
+        // 同一请求 2 秒内收到不同答案 → 中危。
+        var conflict = start.AddMinutes(5);
+        analyzer.Observe(Query(conflict, 600, "conflict.example", "192.168.1.1"), conflict);
+        analyzer.Observe(
+            Response(conflict.AddMilliseconds(10), 600, "conflict.example", "192.168.1.1", 0, gatewayMac,
+                new DnsAnswer("conflict.example", 1, 300, "1.1.1.1")),
+            conflict.AddMilliseconds(10));
+        analyzer.Observe(
+            Response(conflict.AddMilliseconds(500), 600, "conflict.example", "192.168.1.1", 0, gatewayMac,
+                new DnsAnswer("conflict.example", 1, 300, "2.2.2.2")),
+            conflict.AddMilliseconds(500));
+
+        CheckAssertion(results, "冲突应答触发中危",
+            events.Any(item => item.Kind == LanEventKinds.DnsConflictingAnswers
+                               && item.Severity == LanSeverity.Medium));
+
+        // TTL 异常短 → 低危。
+        var ttl = start.AddMinutes(6);
+        analyzer.Observe(Query(ttl, 700, "ttl.example", "192.168.1.1"), ttl);
+        analyzer.Observe(
+            Response(ttl.AddMilliseconds(10), 700, "ttl.example", "192.168.1.1", 0, gatewayMac,
+                new DnsAnswer("ttl.example", 1, 0, "3.3.3.3")),
+            ttl.AddMilliseconds(10));
+
+        CheckAssertion(results, "TTL 异常触发低危",
+            events.Any(item => item.Kind == LanEventKinds.DnsTtlSuspicious
+                               && item.Severity == LanSeverity.Low));
+
+        // 明文 DNS 发往非配置服务器 → 中危。
+        var bypass = start.AddMinutes(7);
+        analyzer.Observe(Query(bypass, 800, "bypass.example", "10.0.0.9"), bypass);
+
+        CheckAssertion(results, "明文 DNS 绕过触发中危",
+            events.Any(item => item.Kind == LanEventKinds.DnsPlaintextBypass
+                               && item.Severity == LanSeverity.Medium));
+
+        // 信任后不再报，并清掉该服务器的冷却。
+        var bypassCount = events.Count(item => item.Kind == LanEventKinds.DnsPlaintextBypass);
+
+        CheckAssertion(results, "信任 DNS 服务器成功",
+            analyzer.Trust("10.0.0.9", true, bypass.AddSeconds(1))
+            && analyzer.TrustedServers.Contains("10.0.0.9"));
+
+        // 还没观察到的信任项也要出现在服务器表里，否则用户没法取消信任。
+        analyzer.Trust("10.0.0.11", true, bypass.AddSeconds(1));
+        var orphan = analyzer.Snapshot().Servers
+            .FirstOrDefault(item => item.Address == "10.0.0.11");
+
+        CheckAssertion(results, "未观察的信任项仍出现在服务器表",
+            orphan is { Source: "trusted", Trusted: true });
+
+        analyzer.Trust("10.0.0.11", false, bypass.AddSeconds(1));
+
+        analyzer.Observe(Query(bypass.AddSeconds(2), 801, "bypass2.example", "10.0.0.9"), bypass.AddSeconds(2));
+
+        CheckAssertion(results, "信任后不再报绕过",
+            events.Count(item => item.Kind == LanEventKinds.DnsPlaintextBypass) == bypassCount);
+
+        // 冷却：同一服务器 10 分钟内只报一次绕过。
+        var cooldown = start.AddMinutes(8);
+        analyzer.Observe(Query(cooldown, 900, "c1.example", "10.0.0.10"), cooldown);
+        var cooldownCount = events.Count(item => item.Kind == LanEventKinds.DnsPlaintextBypass);
+        analyzer.Observe(Query(cooldown.AddSeconds(1), 901, "c2.example", "10.0.0.10"), cooldown.AddSeconds(1));
+
+        CheckAssertion(results, "同规则 10 分钟内不重复告警",
+            events.Count(item => item.Kind == LanEventKinds.DnsPlaintextBypass) == cooldownCount);
+
+        // 取消信任后又开始报（冷却已清）。
+        CheckAssertion(results, "取消信任 DNS 服务器成功",
+            analyzer.Trust("10.0.0.9", false, cooldown.AddSeconds(2))
+            && !analyzer.TrustedServers.Contains("10.0.0.9"));
+
+        analyzer.Observe(Query(cooldown.AddSeconds(3), 802, "bypass3.example", "10.0.0.9"), cooldown.AddSeconds(3));
+
+        CheckAssertion(results, "取消信任后恢复绕过告警",
+            events.Count(item => item.Kind == LanEventKinds.DnsPlaintextBypass) == cooldownCount + 1);
+
+        // 信任应答服务器后，应答来源异常 / 非网关也一起静默。
+        var trustedServer = start.AddMinutes(10);
+        analyzer.Trust("192.168.1.66", true, trustedServer);
+        var beforeTrustedServer = events.Count;
+
+        analyzer.Observe(Query(trustedServer, 1100, "trusted.example", "192.168.1.1"), trustedServer);
+        analyzer.Observe(
+            Response(trustedServer.AddMilliseconds(10), 1100, "trusted.example", "192.168.1.66", 0,
+                "bb:bb:bb:bb:bb:bb",
+                new DnsAnswer("trusted.example", 1, 300, "6.6.6.6")),
+            trustedServer.AddMilliseconds(10));
+
+        CheckAssertion(results, "信任服务器后不报应答来源异常 / 非网关",
+            events.Count == beforeTrustedServer);
+
+        analyzer.Trust("192.168.1.66", false, trustedServer.AddSeconds(1));
+
+        // 落盘：state 往返 + 只清 dns_* 事件。
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-DnsSecurityTest-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var statePath = Path.Combine(directory, "state.json");
+
+            LanStateStore.Save(statePath, new LanState
+            {
+                TrustedDnsServers = new List<string> { "10.0.0.9", "10.0.0.9", " " },
+                DnsBaselineReadyUtc = start,
+            });
+
+            var loaded = LanStateStore.Load(statePath);
+
+            CheckAssertion(results, "状态文件：DNS 信任列表往返并去空去重",
+                loaded.TrustedDnsServers.Count == 1
+                && loaded.TrustedDnsServers[0] == "10.0.0.9"
+                && loaded.DnsBaselineReadyUtc == start);
+
+            var eventStore = new LanEventStore(directory);
+
+            eventStore.Append(new LanEvent
+            {
+                TimeUtc = start,
+                Kind = LanEventKinds.ArpGatewayMacChanged,
+                Severity = LanSeverity.High,
+                Adapter = "eth0",
+                Detail = "arp",
+            });
+            eventStore.Append(new LanEvent
+            {
+                TimeUtc = start,
+                Kind = LanEventKinds.DnsPlaintextBypass,
+                Severity = LanSeverity.Medium,
+                Adapter = "eth0",
+                Detail = "dns",
+            });
+
+            CheckAssertion(results, "按 dns_ 前缀只读 DNS 事件",
+                eventStore.ReadRecent(10, "dns_").Count == 1);
+
+            eventStore.ClearKinds("dns_");
+
+            var remaining = eventStore.ReadRecent(10);
+
+            CheckAssertion(results, "清空只删 dns_*，保留 ARP 事件",
+                remaining.Count == 1
+                && remaining[0].Kind == LanEventKinds.ArpGatewayMacChanged);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响自检。
+            }
+        }
+
+        // 协议 DTO 往返。
+        var response = new ServiceResponse
+        {
+            Ok = true,
+            DnsSecurityStatus = new DnsSecurityStatusDto
+            {
+                Collecting = true,
+                BaselineReady = true,
+                BaselineUtc = start,
+                ConfiguredCount = 1,
+                EventCount = 1,
+                NpcapVersion = "1.90",
+            },
+            DnsSecurityServers = new List<DnsSecurityServerDto>
+            {
+                new() { Address = "192.168.1.1", Adapter = "以太网", Source = "configured", Trusted = true },
+            },
+            DnsSecurityEvents = new List<LanEventDto>
+            {
+                new() { Id = "d1", Kind = LanEventKinds.DnsPlaintextBypass, Severity = "medium", Detail = "x" },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+
+        CheckAssertion(results, "协议 DTO：DNS 状态 / 服务器 / 事件往返",
+            back?.DnsSecurityStatus is { Collecting: true, BaselineReady: true, ConfiguredCount: 1 }
+            && back.DnsSecurityServers is { Count: 1 }
+            && back.DnsSecurityEvents is { Count: 1 });
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunAntiScanTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -13594,6 +14238,59 @@ internal static class Program
                     else
                     {
                         CheckAssertion(results, "找得到局域网子标签与三张表", false);
+                    }
+
+                    // 4.3：DNS 安全页布局与深链。
+                    if (TryGetField<TabControl>(form, "_protectionTabs", out var dnsProtectionTabs)
+                        && TryGetField<TabPage>(form, "_tabDnsSecurity", out var dnsSecurityTab)
+                        && TryGetField<TabPage>(form, "_tabIds", out var dnsIdsTab)
+                        && TryGetField<DataGridView>(form, "_dnsSecServerGrid", out var dnsServerGrid)
+                        && TryGetField<DataGridView>(form, "_dnsSecEventGrid", out var dnsEventGrid))
+                    {
+                        dnsProtectionTabs.SelectedTab = dnsSecurityTab;
+                        form.PerformLayout();
+                        Application.DoEvents();
+
+                        var dnsFixed = dnsEventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Where(column => column.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
+                            .Sum(column => column.Width);
+
+                        var dnsFill = dnsEventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                            .Sum(column => column.MinimumWidth);
+
+                        W($"    980 宽 DNS 安全：列宽合计 {dnsFixed + dnsFill}px / " +
+                          $"客户区 {dnsEventGrid.ClientSize.Width}px");
+
+                        CheckAssertion(results, "最小宽度下 DNS 安全列不溢出",
+                            dnsFixed + dnsFill <= dnsEventGrid.ClientSize.Width);
+                        CheckAssertion(results, "DNS 安全两张表都已加载",
+                            dnsServerGrid.Columns.Count > 0 && dnsEventGrid.Columns.Count > 0);
+
+                        var dnsSelectMethod = typeof(MainForm).GetMethod(
+                            "SelectProtectionTab",
+                            BindingFlags.Instance | BindingFlags.NonPublic);
+
+                        if (dnsSelectMethod is not null)
+                        {
+                            dnsSelectMethod.Invoke(form, new object[] { dnsSecurityTab });
+
+                            CheckAssertion(results, "深链：切到防护 → DNS 安全子标签",
+                                dnsProtectionTabs.SelectedTab == dnsSecurityTab);
+
+                            dnsSelectMethod.Invoke(form, new object[] { dnsIdsTab });
+
+                            CheckAssertion(results, "深链：从 DNS 安全切回 IDS 子标签",
+                                dnsProtectionTabs.SelectedTab == dnsIdsTab);
+                        }
+                        else
+                        {
+                            CheckAssertion(results, "找得到 DNS 安全深链方法", false);
+                        }
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "找得到 DNS 安全子标签与两张表", false);
                     }
                 }
             }

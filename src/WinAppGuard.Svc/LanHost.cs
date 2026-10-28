@@ -22,6 +22,7 @@ internal static class LanHost
     private static readonly TimeSpan SaveInterval = TimeSpan.FromSeconds(5);
 
     private static LanAnalyzer? _analyzer;
+    private static DnsAnalyzer? _dnsAnalyzer;
     private static NpcapLanCapture? _capture;
     private static LanEventStore? _eventStore;
     private static System.Threading.Timer? _timer;
@@ -34,6 +35,7 @@ internal static class LanHost
     private static DateTime _nextPruneUtc = DateTime.MinValue;
     private static string? _lastError;
     private static int _eventCount;
+    private static int _dnsEventCount;
 
     internal static bool Collecting
     {
@@ -61,7 +63,7 @@ internal static class LanHost
         var analyzer = new LanAnalyzer(state, DateTime.UtcNow);
         var eventStore = new LanEventStore(ServicePaths.LanDirectory);
 
-        analyzer.EventObserved = item => OnEvent(analyzer, eventStore, item);
+        analyzer.EventObserved = item => OnEvent(item);
         analyzer.StateChanged = () =>
         {
             lock (Gate)
@@ -70,9 +72,22 @@ internal static class LanHost
             }
         };
 
+        // 4.3：DNS 分析与局域网共用同一个状态文件、事件文件和采集会话。
+        var dnsAnalyzer = new DnsAnalyzer(state, DateTime.UtcNow);
+        dnsAnalyzer.EventObserved = item => OnEvent(item);
+        dnsAnalyzer.StateChanged = () =>
+        {
+            lock (Gate)
+            {
+                _dirty = true;
+            }
+        };
+        dnsAnalyzer.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
+
         // 历史事件读回内存，重启后仍能在页面里看到。
         analyzer.SeedEvents(eventStore.ReadRecent(200));
         analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
+        dnsAnalyzer.UpdateGatewayBaselines(analyzer.Gateways);
 
         // 上次运行留下的过滤器不能直接信任：先清掉，再按状态文件恢复。
         try
@@ -110,10 +125,12 @@ internal static class LanHost
         lock (Gate)
         {
             _analyzer = analyzer;
+            _dnsAnalyzer = dnsAnalyzer;
             _eventStore = eventStore;
             _started = true;
             _dirty = true;
             _eventCount = analyzer.Snapshot().Events.Count;
+            _dnsEventCount = dnsAnalyzer.EventCount;
             _lastError = null;
         }
 
@@ -166,6 +183,7 @@ internal static class LanHost
         lock (Gate)
         {
             _analyzer = null;
+            _dnsAnalyzer = null;
             _eventStore = null;
         }
 
@@ -207,11 +225,13 @@ internal static class LanHost
         }
 
         var snapshot = analyzer.Snapshot();
-        var history = eventStore?.ReadRecent(200) ?? new List<LanEvent>();
+        var history = eventStore?.ReadRecent(400) ?? new List<LanEvent>();
 
         // 内存里的是本次运行的新事件；历史从磁盘补齐，按时间倒序去重。
+        // 4.3 起 DNS 事件与 ARP/DHCP 共用文件，这里先过滤，避免挤占局域网列表。
         var events = snapshot.Events
-            .Concat(history)
+            .Where(item => !item.Kind.StartsWith("dns_", StringComparison.OrdinalIgnoreCase))
+            .Concat(history.Where(item => !item.Kind.StartsWith("dns_", StringComparison.OrdinalIgnoreCase)))
             .GroupBy(item => item.Id, StringComparer.Ordinal)
             .Select(group => group.First())
             .OrderByDescending(item => item.TimeUtc)
@@ -307,7 +327,7 @@ internal static class LanHost
 
         var released = ReleaseAllBlocks(analyzer);
         analyzer.ClearEvents();
-        store?.Clear();
+        store?.ClearWhere(kind => !kind.StartsWith("dns_", StringComparison.OrdinalIgnoreCase));
 
         lock (Gate)
         {
@@ -439,6 +459,133 @@ internal static class LanHost
         return Query(request);
     }
 
+    internal static ServiceResponse QueryDns(ServiceRequest request)
+    {
+        DnsAnalyzer? dns;
+        NpcapLanCapture? capture;
+        LanEventStore? store;
+
+        lock (Gate)
+        {
+            dns = _dnsAnalyzer;
+            capture = _capture;
+            store = _eventStore;
+        }
+
+        if (dns is null)
+        {
+            return new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = true,
+                DnsSecurityStatus = new DnsSecurityStatusDto
+                {
+                    Collecting = false,
+                    BaselineReady = false,
+                    NpcapVersion = NpcapLocator.GetVersion(),
+                    LastError = "DNS 安全检测未启动。",
+                },
+                DnsSecurityServers = new List<DnsSecurityServerDto>(),
+                DnsSecurityEvents = new List<LanEventDto>(),
+            };
+        }
+
+        var snapshot = dns.Snapshot();
+        var history = store?.ReadRecent(200, "dns_") ?? new List<LanEvent>();
+
+        var events = snapshot.Events
+            .Concat(history)
+            .GroupBy(item => item.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .OrderByDescending(item => item.TimeUtc)
+            .Take(200)
+            .ToList();
+
+        lock (Gate)
+        {
+            _dnsEventCount = events.Count;
+        }
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            DnsSecurityStatus = new DnsSecurityStatusDto
+            {
+                Collecting = capture?.IsRunning == true,
+                BaselineReady = snapshot.BaselineReady,
+                BaselineUtc = snapshot.BaselineUtc,
+                ConfiguredCount = snapshot.ConfiguredCount,
+                EventCount = events.Count,
+                NpcapVersion = NpcapLocator.GetVersion(),
+                LastError = capture?.LastError,
+            },
+            DnsSecurityServers = snapshot.Servers.Select(ToDto).ToList(),
+            DnsSecurityEvents = events.Select(ToDto).ToList(),
+        };
+    }
+
+    internal static ServiceResponse ClearDns(ServiceRequest request)
+    {
+        DnsAnalyzer? dns;
+        LanEventStore? store;
+
+        lock (Gate)
+        {
+            dns = _dnsAnalyzer;
+            store = _eventStore;
+        }
+
+        if (dns is null)
+        {
+            return Error(request, "DNS 安全检测未启动。");
+        }
+
+        dns.ClearEvents();
+        store?.ClearKinds("dns_");
+
+        lock (Gate)
+        {
+            _dnsEventCount = 0;
+            _dirty = true;
+        }
+
+        ServiceLog.Operation("WAG-LAN-021", "DNS security events cleared.");
+        return QueryDns(request);
+    }
+
+    internal static ServiceResponse TrustDns(ServiceRequest request)
+    {
+        DnsAnalyzer? dns;
+        var address = request.DnsTrustAddress;
+
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return Error(request, "缺少 DNS 服务器地址。");
+        }
+
+        lock (Gate)
+        {
+            dns = _dnsAnalyzer;
+        }
+
+        if (dns is null)
+        {
+            return Error(request, "DNS 安全检测未启动。");
+        }
+
+        if (!dns.Trust(address.Trim(), request.DnsTrustEnabled, DateTime.UtcNow))
+        {
+            return Error(request, "DNS 服务器地址不合法。");
+        }
+
+        SaveState();
+        ServiceLog.Operation(
+            "WAG-LAN-022",
+            $"DNS server {address} {(request.DnsTrustEnabled ? "trusted" : "untrusted")}.");
+        return QueryDns(request);
+    }
+
     internal static LanStatusDto GetStatus()
     {
         lock (Gate)
@@ -450,6 +597,8 @@ internal static class LanHost
                 BaselineReady = _analyzer?.BaselineReady == true,
                 EventCount = _eventCount,
                 BlockedCount = _analyzer?.Blocks.Count ?? 0,
+                DnsSecurityCollecting = _capture?.IsRunning == true && _dnsAnalyzer is not null,
+                DnsSecurityEventCount = _dnsEventCount,
                 NpcapVersion = NpcapLocator.GetVersion(),
                 LastError = _lastError ?? _capture?.LastError,
             };
@@ -465,6 +614,7 @@ internal static class LanHost
             var now = DateTime.UtcNow;
             LanAnalyzer? analyzer;
             NpcapLanCapture? capture;
+            DnsAnalyzer? dns;
 
             lock (Gate)
             {
@@ -475,12 +625,16 @@ internal static class LanHost
 
                 analyzer = _analyzer;
                 capture = _capture;
+                dns = _dnsAnalyzer;
             }
 
             if (analyzer is null)
             {
                 return;
             }
+
+            // DNS 规则要用网关 MAC 判断“DNS 服务器非网关”，这里每秒同步一次副本。
+            dns?.UpdateGatewayBaselines(analyzer.Gateways);
 
             if (capture is not null && now >= _nextStatsUtc)
             {
@@ -491,6 +645,8 @@ internal static class LanHost
             if (now >= _nextHintsUtc)
             {
                 analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
+                dns?.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
+
                 _nextHintsUtc = now.Add(HintsInterval);
             }
 
@@ -550,19 +706,30 @@ internal static class LanHost
         }
     }
 
-    private static void OnEvent(LanAnalyzer analyzer, LanEventStore store, LanEvent item)
+    private static void OnEvent(LanEvent item)
     {
-        store.Append(item);
+        LanEventStore? store;
 
         lock (Gate)
         {
-            _eventCount = Math.Min(_eventCount + 1, LanAnalyzer.MaxEvents);
+            store = _eventStore;
             _dirty = true;
+
+            if (item.Kind.StartsWith("dns_", StringComparison.OrdinalIgnoreCase))
+            {
+                _dnsEventCount = Math.Min(_dnsEventCount + 1, DnsAnalyzer.MaxEvents);
+            }
+            else
+            {
+                _eventCount = Math.Min(_eventCount + 1, LanAnalyzer.MaxEvents);
+            }
         }
+
+        store?.Append(item);
 
         ServiceLog.Operation(
             "WAG-LAN-017",
-            $"LAN event: kind={item.Kind}, severity={item.Severity}, adapter={item.Adapter}, " +
+            $"LAN/DNS event: kind={item.Kind}, severity={item.Severity}, adapter={item.Adapter}, " +
             $"source={item.SourceMac ?? "-"}, target={item.TargetIp ?? "-"}, detail={item.Detail}");
 
         // 高危事件立即保存，避免服务重启丢掉关键状态（例如新服务器记录）。
@@ -593,10 +760,12 @@ internal static class LanHost
         }
 
         var analyzer = _analyzer;
+        var dnsAnalyzer = _dnsAnalyzer;
         var capture = new NpcapLanCapture
         {
             ArpObserved = frame => analyzer?.ObserveArp(frame, DateTime.UtcNow),
             DhcpObserved = message => analyzer?.ObserveDhcp(message, DateTime.UtcNow),
+            DnsObserved = message => dnsAnalyzer?.Observe(message, DateTime.UtcNow),
             Log = message => ServiceLog.Info("WAG-LAN-018", message),
         };
 
@@ -630,6 +799,13 @@ internal static class LanHost
         if (analyzer is not null)
         {
             analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
+        }
+
+        dnsAnalyzer?.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
+
+        if (analyzer is not null)
+        {
+            dnsAnalyzer?.UpdateGatewayBaselines(analyzer.Gateways);
         }
     }
 
@@ -682,6 +858,8 @@ internal static class LanHost
                 DhcpServers = snapshot.DhcpServers,
                 Blocks = snapshot.Blocks,
                 BaselineReadyUtc = snapshot.BaselineUtc,
+                TrustedDnsServers = _dnsAnalyzer?.TrustedServers ?? new List<string>(),
+                DnsBaselineReadyUtc = _dnsAnalyzer?.BaselineUtc,
             });
         }
         catch (Exception ex)
@@ -702,6 +880,15 @@ internal static class LanHost
         TargetIp = item.TargetIp,
         TargetMac = item.TargetMac,
         Blocked = item.Blocked,
+    };
+
+    private static DnsSecurityServerDto ToDto(DnsServerView item) => new()
+    {
+        Address = item.Address,
+        Adapter = item.Adapter,
+        Source = item.Source,
+        Mac = item.Mac,
+        Trusted = item.Trusted,
     };
 
     private static LanGatewayDto ToDto(LanGateway item) => new()

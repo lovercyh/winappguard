@@ -573,6 +573,13 @@ internal sealed class ControlServer : IDisposable
 
             ServiceProtocol.Commands.ResetLanBaseline => LanHost.ResetBaseline(request),
 
+            // 4.3：DNS 安全。
+            ServiceProtocol.Commands.QueryDnsSecurity => LanHost.QueryDns(request),
+
+            ServiceProtocol.Commands.ClearDnsSecurity => LanHost.ClearDns(request),
+
+            ServiceProtocol.Commands.TrustDnsServer => LanHost.TrustDns(request),
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -668,6 +675,10 @@ internal sealed class ControlServer : IDisposable
         status.LanEventCount = lan.EventCount;
         status.LanBlockedCount = lan.BlockedCount;
         status.LanBaselineReady = lan.BaselineReady;
+
+        // 4.3：DNS 安全。
+        status.DnsSecurityCollecting = lan.DnsSecurityCollecting;
+        status.DnsSecurityEventCount = lan.DnsSecurityEventCount;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

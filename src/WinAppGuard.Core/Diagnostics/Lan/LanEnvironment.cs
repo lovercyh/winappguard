@@ -60,8 +60,42 @@ public static class LanEnvironment
         return result;
     }
 
-    public static List<LanGatewayHint> GetGatewayHints()
+    /// <summary>4.3：读取每张网卡配置的 DNS 服务器（IPv4）。</summary>
+    public static List<DnsServerHint> GetDnsHints()
     {
+        var result = new List<DnsServerHint>();
+
+        try
+        {
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != OperationalStatus.Up || IsExcluded(nic))
+                {
+                    continue;
+                }
+
+                foreach (var dns in nic.GetIPProperties().DnsAddresses)
+                {
+                    if (dns is null
+                        || dns.AddressFamily != AddressFamily.InterNetwork
+                        || dns.Equals(IPAddress.Any))
+                    {
+                        continue;
+                    }
+
+                    result.Add(new DnsServerHint(nic.Description, dns.ToString()));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // 枚举失败时视为“没有配置 DNS”，只做响应侧校验。
+        }
+
+        return result;
+    }
+
+    public static List<LanGatewayHint> GetGatewayHints()    {
         var result = new List<LanGatewayHint>();
 
         try

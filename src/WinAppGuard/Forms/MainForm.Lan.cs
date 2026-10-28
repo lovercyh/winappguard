@@ -900,6 +900,14 @@ public sealed partial class MainForm
             "dhcp_option_mismatch" => "DHCP 下发参数变化",
             "dhcp_short_lease" => "DHCP 租期异常短",
             "dhcp_server_not_gateway" => "DHCP 服务器非网关",
+            "dns_response_unexpected_server" => "应答来源异常",
+            "dns_transaction_mismatch" => "事务 ID 不匹配",
+            "dns_answer_name_mismatch" => "应答域名不符",
+            "dns_nxdomain_with_answer" => "NXDOMAIN 带答案",
+            "dns_conflicting_answers" => "冲突应答",
+            "dns_ttl_suspicious" => "TTL 异常",
+            "dns_server_not_gateway" => "DNS 服务器非网关",
+            "dns_plaintext_bypass" => "明文 DNS 绕过",
             _ => Kind,
         });
     }

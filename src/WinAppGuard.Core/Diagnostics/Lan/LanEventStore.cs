@@ -47,7 +47,10 @@ public sealed class LanEventStore
     }
 
     /// <summary>读取最近 <paramref name="max"/> 条（新的在前）。</summary>
-    public List<LanEvent> ReadRecent(int max)
+    public List<LanEvent> ReadRecent(int max) => ReadRecent(max, kindPrefix: null);
+
+    /// <summary>读取最近 N 条；kindPrefix 非空时只返回该前缀的规则。</summary>
+    public List<LanEvent> ReadRecent(int max, string? kindPrefix)
     {
         var result = new List<LanEvent>(Math.Min(max, 256));
 
@@ -76,7 +79,14 @@ public sealed class LanEventStore
                         {
                             var item = JsonSerializer.Deserialize<LanEvent>(lines[i], Options);
 
-                            if (item is not null && !result.Any(existing => existing.Id == item.Id))
+                            if (item is null
+                                || (kindPrefix is not null
+                                    && !item.Kind.StartsWith(kindPrefix, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                continue;
+                            }
+
+                            if (!result.Any(existing => existing.Id == item.Id))
                             {
                                 result.Add(item);
                             }
@@ -100,6 +110,88 @@ public sealed class LanEventStore
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 4.3：只删除某个规则前缀的事件（例如 <c>dns_</c>），保留同一天的其它事件。
+    /// 返回删除的条数。
+    /// </summary>
+    public int ClearKinds(string kindPrefix)
+        => ClearWhere(kind => kind.StartsWith(kindPrefix, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>4.3：按规则名谓词删除事件（用于“只清 DNS”或“只清非 DNS”）。</summary>
+    public int ClearWhere(Func<string, bool> predicate)
+    {
+        var removed = 0;
+
+        lock (_gate)
+        {
+            try
+            {
+                if (!Directory.Exists(_directory))
+                {
+                    return 0;
+                }
+
+                foreach (var file in Directory.GetFiles(_directory, $"{FilePrefix}*{FileSuffix}"))
+                {
+                    var lines = File.ReadAllLines(file, Encoding.UTF8);
+                    var keep = new List<string>(lines.Length);
+                    var changed = false;
+
+                    foreach (var line in lines)
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                        {
+                            continue;
+                        }
+
+                        LanEvent? item = null;
+
+                        try
+                        {
+                            item = JsonSerializer.Deserialize<LanEvent>(line, Options);
+                        }
+                        catch (Exception)
+                        {
+                            // 坏行保留，避免误删。
+                        }
+
+                        if (item is not null && predicate(item.Kind))
+                        {
+                            removed++;
+                            changed = true;
+                            continue;
+                        }
+
+                        keep.Add(line);
+                    }
+
+                    if (!changed)
+                    {
+                        continue;
+                    }
+
+                    if (keep.Count == 0)
+                    {
+                        File.Delete(file);
+                    }
+                    else
+                    {
+                        File.WriteAllText(
+                            file,
+                            string.Join("\n", keep) + "\n",
+                            new UTF8Encoding(false));
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // 删不掉不影响功能。
+            }
+        }
+
+        return removed;
     }
 
     public void Clear()

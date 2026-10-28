@@ -104,6 +104,14 @@ public sealed class ServiceRequest
 
     /// <summary>true = 清空基线并重新学习。</summary>
     public bool LanResetBaseline { get; set; }
+
+    // ---- 4.3：DNS 安全 ----
+
+    /// <summary>要信任 / 取消信任的 DNS 服务器地址。</summary>
+    public string? DnsTrustAddress { get; set; }
+
+    /// <summary>true = 信任，false = 取消信任。</summary>
+    public bool DnsTrustEnabled { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -201,6 +209,14 @@ public sealed class ServiceResponse
     public List<LanBlockDto>? LanBlocks { get; set; }
 
     public LanSettingsDto? LanSettings { get; set; }
+
+    // ---- 4.3：DNS 安全 ----
+
+    public DnsSecurityStatusDto? DnsSecurityStatus { get; set; }
+
+    public List<DnsSecurityServerDto>? DnsSecurityServers { get; set; }
+
+    public List<LanEventDto>? DnsSecurityEvents { get; set; }
 
     public AntiScanSettingsDto? AntiScanSettings { get; set; }
 }
@@ -523,6 +539,47 @@ public sealed class LanStatusDto
 
     public int BlockedCount { get; set; }
 
+    // ---- 4.3：DNS 安全 ----
+
+    public bool DnsSecurityCollecting { get; set; }
+
+    public int DnsSecurityEventCount { get; set; }
+
+    public string? NpcapVersion { get; set; }
+
+    public string? LastError { get; set; }
+}
+
+// ---- 4.3：DNS 安全 ----
+
+/// <summary>4.3：一个 DNS 服务器（系统配置 / 观察到）。</summary>
+public sealed class DnsSecurityServerDto
+{
+    public string Address { get; set; } = string.Empty;
+
+    public string Adapter { get; set; } = string.Empty;
+
+    /// <summary>configured / observed / trusted。</summary>
+    public string Source { get; set; } = "observed";
+
+    public string? Mac { get; set; }
+
+    public bool Trusted { get; set; }
+}
+
+/// <summary>4.3：DNS 安全运行状态。</summary>
+public sealed class DnsSecurityStatusDto
+{
+    public bool Collecting { get; set; }
+
+    public bool BaselineReady { get; set; }
+
+    public DateTime? BaselineUtc { get; set; }
+
+    public int ConfiguredCount { get; set; }
+
+    public int EventCount { get; set; }
+
     public string? NpcapVersion { get; set; }
 
     public string? LastError { get; set; }
@@ -767,6 +824,12 @@ public sealed class ServiceStatus
     public int LanBlockedCount { get; set; }
 
     public bool LanBaselineReady { get; set; }
+
+    // ---- 4.3：DNS 安全 ----
+
+    public bool DnsSecurityCollecting { get; set; }
+
+    public int DnsSecurityEventCount { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

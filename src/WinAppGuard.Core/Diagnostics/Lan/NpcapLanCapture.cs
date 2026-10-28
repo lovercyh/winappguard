@@ -6,16 +6,16 @@ using WinAppGuard.Core.Diagnostics.AntiScan;
 namespace WinAppGuard.Core.Diagnostics.Lan;
 
 /// <summary>
-/// 4.2：ARP / DHCP 采集（独立的小会话）。
+/// 4.2 / 4.3：ARP / DHCP / DNS 采集（独立的小会话）。
 ///
-/// BPF：<c>arp or (udp and (port 67 or 68))</c>；snaplen 600（DHCP options）；
-/// 混杂模式关闭；只解析 ARP 与 DHCP 的头部/选项，不保存报文。
+/// BPF：<c>arp or (udp and (port 67 or 68 or 53))</c>；snaplen 600（DHCP options 与 DNS 应答）；
+/// 混杂模式关闭；只解析 ARP、DHCP 头部/选项与 DNS 的 A/AAAA/CNAME，不保存报文。
 /// </summary>
 public sealed class NpcapLanCapture : IDisposable
 {
     private const int SnapLength = 600;
     private const int ReadTimeoutMs = 100;
-    private const string BpfFilter = "arp or (udp and (port 67 or 68))";
+    private const string BpfFilter = "arp or (udp and (port 67 or 68 or 53))";
 
     private readonly object _gate = new();
     private readonly List<CaptureHandle> _captures = new();
@@ -30,6 +30,8 @@ public sealed class NpcapLanCapture : IDisposable
     public Action<ArpFrame>? ArpObserved { get; set; }
 
     public Action<DhcpMessage>? DhcpObserved { get; set; }
+
+    public Action<DnsMessage>? DnsObserved { get; set; }
 
     public Action<string>? Log { get; set; }
 
@@ -359,13 +361,241 @@ public sealed class NpcapLanCapture : IDisposable
         var sourcePort = BinaryPrimitives.ReadUInt16BigEndian(span[udp..]);
         var destinationPort = BinaryPrimitives.ReadUInt16BigEndian(span[(udp + 2)..]);
 
-        // 只看服务器 → 客户端的 DHCP 应答。
-        if (sourcePort != 67 || destinationPort != 68)
+        if (sourcePort == 67 && destinationPort == 68)
+        {
+            ParseDhcp(span, udp + 8, length, adapter, now, span.Slice(offset + 12, 4), span.Slice(6, 6));
+            return;
+        }
+
+        // 4.3：DNS 请求与应答都看（源/目的端口 53）。
+        if (sourcePort == 53 || destinationPort == 53)
+        {
+            ParseDns(
+                span,
+                udp + 8,
+                length,
+                adapter,
+                now,
+                span.Slice(offset + 12, 4),
+                span.Slice(offset + 16, 4),
+                sourcePort,
+                destinationPort,
+                span.Slice(6, 6));
+        }
+    }
+
+    /// <summary>4.3：解析 DNS 头、问题段与 A/AAAA/CNAME，交给分析器。</summary>
+    private void ParseDns(
+        ReadOnlySpan<byte> span,
+        int offset,
+        int length,
+        string adapter,
+        DateTime now,
+        ReadOnlySpan<byte> sourceAddress,
+        ReadOnlySpan<byte> destinationAddress,
+        ushort sourcePort,
+        ushort destinationPort,
+        ReadOnlySpan<byte> ethernetSource)
+    {
+        if (offset >= length)
         {
             return;
         }
 
-        ParseDhcp(span, udp + 8, length, adapter, now, span.Slice(offset + 12, 4), span.Slice(6, 6));
+        var payload = span[offset..length];
+
+        if (TryParseDnsPayload(
+                payload,
+                now,
+                adapter,
+                sourceAddress,
+                destinationAddress,
+                sourcePort,
+                destinationPort,
+                ethernetSource,
+                out var message))
+        {
+            DnsObserved?.Invoke(message);
+        }
+    }
+
+    /// <summary>
+    /// 4.3：从一段 DNS 载荷（不含 UDP 头）解析请求/应答。
+    /// 公开为静态方法，便于离线自检用合成字节覆盖压缩指针等边界。
+    /// </summary>
+    public static bool TryParseDnsPayload(
+        ReadOnlySpan<byte> payload,
+        DateTime timeUtc,
+        string adapter,
+        ReadOnlySpan<byte> sourceAddress,
+        ReadOnlySpan<byte> destinationAddress,
+        ushort sourcePort,
+        ushort destinationPort,
+        ReadOnlySpan<byte> ethernetSource,
+        out DnsMessage message)
+    {
+        message = default;
+        var length = payload.Length;
+
+        if (length < 12)
+        {
+            return false;
+        }
+
+        const int baseOffset = 0;
+        var transactionId = BinaryPrimitives.ReadUInt16BigEndian(payload);
+        var flags = BinaryPrimitives.ReadUInt16BigEndian(payload[2..]);
+        var questionCount = BinaryPrimitives.ReadUInt16BigEndian(payload[4..]);
+        var answerCount = BinaryPrimitives.ReadUInt16BigEndian(payload[6..]);
+        var isResponse = (flags & 0x8000) != 0;
+        var responseCode = flags & 0x000F;
+        var truncated = (flags & 0x0200) != 0;
+
+        if (questionCount is 0 or > 4 || answerCount > 64)
+        {
+            return false;
+        }
+
+        var cursor = 12;
+
+        if (!TryReadDnsName(payload, cursor, length, out var questionName, out cursor, baseOffset)
+            || cursor + 4 > length)
+        {
+            return false;
+        }
+
+        var questionType = BinaryPrimitives.ReadUInt16BigEndian(payload[cursor..]);
+        cursor += 4;
+
+        var answers = new List<DnsAnswer>(Math.Min((int)answerCount, 8));
+
+        for (var i = 0; i < answerCount && answers.Count < 16; i++)
+        {
+            if (!TryReadDnsName(payload, cursor, length, out var answerName, out cursor, baseOffset)
+                || cursor + 10 > length)
+            {
+                truncated = true;
+                break;
+            }
+
+            var type = BinaryPrimitives.ReadUInt16BigEndian(payload[cursor..]);
+            var ttl = BinaryPrimitives.ReadUInt32BigEndian(payload[(cursor + 4)..]);
+            var dataLength = BinaryPrimitives.ReadUInt16BigEndian(payload[(cursor + 8)..]);
+            cursor += 10;
+
+            if (dataLength == 0 || cursor + dataLength > length)
+            {
+                truncated = true;
+                break;
+            }
+
+            string? value = type switch
+            {
+                1 when dataLength == 4 => new IPAddress(payload.Slice(cursor, 4)).ToString(),
+                28 when dataLength == 16 => new IPAddress(payload.Slice(cursor, 16)).ToString(),
+                5 => TryReadDnsName(payload, cursor, length, out var cname, out _, baseOffset)
+                    ? cname
+                    : null,
+                _ => null,
+            };
+
+            if (value is not null)
+            {
+                answers.Add(new DnsAnswer(answerName, type, ttl, value));
+            }
+
+            cursor += dataLength;
+        }
+
+        var clientAddress = isResponse ? destinationAddress : sourceAddress;
+        var serverAddress = isResponse ? sourceAddress : destinationAddress;
+        var clientPort = isResponse ? destinationPort : sourcePort;
+
+        message = new DnsMessage(
+            timeUtc,
+            adapter,
+            new IPAddress(clientAddress).ToString(),
+            clientPort,
+            new IPAddress(serverAddress).ToString(),
+            isResponse,
+            transactionId,
+            questionName,
+            questionType,
+            responseCode,
+            LanEnvironment.FormatMac(ethernetSource),
+            answers,
+            truncated);
+
+        return true;
+    }
+
+    /// <summary>读取 DNS 名称（支持压缩指针），返回下一个字段的偏移。</summary>
+    /// <param name="baseOffset">DNS 报文头在帧里的起始偏移；压缩指针相对它计算。</param>
+    private static bool TryReadDnsName(
+        ReadOnlySpan<byte> span,
+        int offset,
+        int limit,
+        out string name,
+        out int nextOffset,
+        int baseOffset)
+    {
+        name = string.Empty;
+        nextOffset = offset;
+        var labels = new List<string>(4);
+        var cursor = offset;
+        var jumped = false;
+        var guard = 0;
+
+        while (cursor < limit)
+        {
+            var lengthByte = span[cursor];
+
+            if (lengthByte == 0)
+            {
+                cursor++;
+
+                if (!jumped)
+                {
+                    nextOffset = cursor;
+                }
+
+                name = labels.Count == 0 ? "." : string.Join(".", labels);
+                return true;
+            }
+
+            if ((lengthByte & 0xC0) == 0xC0)
+            {
+                if (cursor + 1 >= limit || guard++ > 8)
+                {
+                    return false;
+                }
+
+                if (!jumped)
+                {
+                    nextOffset = cursor + 2;
+                }
+
+                // 指针值相对 DNS 报文头，而不是整帧。
+                cursor = baseOffset + (((lengthByte & 0x3F) << 8) | span[cursor + 1]);
+                jumped = true;
+                continue;
+            }
+
+            if ((lengthByte & 0xC0) != 0 || cursor + 1 + lengthByte > limit)
+            {
+                return false;
+            }
+
+            labels.Add(System.Text.Encoding.ASCII.GetString(span.Slice(cursor + 1, lengthByte)));
+            cursor += lengthByte + 1;
+
+            if (!jumped)
+            {
+                nextOffset = cursor;
+            }
+        }
+
+        return false;
     }
 
     private void ParseArp(

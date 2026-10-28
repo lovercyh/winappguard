@@ -3934,6 +3934,12 @@ public partial class MainForm : Form
 
     private async void OnAutoRefreshTick(object? sender, EventArgs e)
     {
+        // 自检模式承诺不联网，也不让后台扫描覆盖人造样本。
+        if (SuppressBackgroundServices)
+        {
+            return;
+        }
+
         // 只在用户看着连接页时刷新，避免在别的页上白白走一遍扫描。
         if (_tabControl.SelectedTab == _tabConnections)
         {

@@ -1,4 +1,4 @@
-﻿<#
+<#
     WinAppGuard 单文件发布脚本
 
     用法（在项目根目录执行）：
@@ -149,7 +149,7 @@ if ($LASTEXITCODE -ne 0) { throw "发布自检工具失败，退出码 $LASTEXIT
 
 Copy-Item (Join-Path $selfCheckOut 'WinAppGuard.SelfCheck.exe') $distTools -Force
 
-foreach ($name in @('3.4-验收脚本.ps1', '3.5-验收脚本.ps1', '3.6-验收脚本.ps1', '3.7-验收脚本.ps1', '4.0-验收脚本.ps1', '4.1-验收脚本.ps1', '4.2-验收脚本.ps1')) {
+foreach ($name in @('3.4-验收脚本.ps1', '3.5-验收脚本.ps1', '3.6-验收脚本.ps1', '3.7-验收脚本.ps1', '4.0-验收脚本.ps1', '4.1-验收脚本.ps1', '4.2-验收脚本.ps1', '4.3-验收脚本.ps1')) {
     $acceptanceScript = Join-Path $root "docs\$name"
 
     if (Test-Path $acceptanceScript) {

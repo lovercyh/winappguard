@@ -38,6 +38,15 @@ public static class LanEventKinds
     public const string DhcpOptionMismatch = "dhcp_option_mismatch";
     public const string DhcpShortLease = "dhcp_short_lease";
     public const string DhcpServerNotGateway = "dhcp_server_not_gateway";
+
+    public const string DnsResponseUnexpectedServer = "dns_response_unexpected_server";
+    public const string DnsTransactionMismatch = "dns_transaction_mismatch";
+    public const string DnsAnswerNameMismatch = "dns_answer_name_mismatch";
+    public const string DnsNxdomainWithAnswer = "dns_nxdomain_with_answer";
+    public const string DnsConflictingAnswers = "dns_conflicting_answers";
+    public const string DnsTtlSuspicious = "dns_ttl_suspicious";
+    public const string DnsServerNotGateway = "dns_server_not_gateway";
+    public const string DnsPlaintextBypass = "dns_plaintext_bypass";
 }
 
 /// <summary>4.2：事件级别。</summary>
@@ -137,6 +146,12 @@ public sealed class LanState
 
     public List<LanBlock> Blocks { get; set; } = new();
 
+    /// <summary>4.3：用户信任的 DNS 服务器。</summary>
+    public List<string> TrustedDnsServers { get; set; } = new();
+
+    /// <summary>4.3：DNS 基线就绪时间。</summary>
+    public DateTime? DnsBaselineReadyUtc { get; set; }
+
     /// <summary>基线学习完成时间；null = 还在学习。</summary>
     public DateTime? BaselineReadyUtc { get; set; }
 }
@@ -162,3 +177,53 @@ public readonly record struct LanGatewayHint(string Adapter, string Ip);
 
 /// <summary>4.2：网卡信息（用于界面显示与排除判断）。</summary>
 public readonly record struct LanAdapterInfo(string Id, string Description, string Type);
+
+/// <summary>4.3：系统配置的 DNS 服务器提示。</summary>
+public readonly record struct DnsServerHint(string Adapter, string Address);
+
+/// <summary>4.3：一条 DNS 应答记录（只取检测需要的字段）。</summary>
+public readonly record struct DnsAnswer(string Name, ushort Type, uint Ttl, string? Value);
+
+/// <summary>4.3：一条 DNS 请求或应答。</summary>
+public readonly record struct DnsMessage(
+    DateTime TimeUtc,
+    string Adapter,
+    string ClientAddress,
+    ushort ClientPort,
+    string ServerAddress,
+    bool IsResponse,
+    ushort TransactionId,
+    string QuestionName,
+    ushort QuestionType,
+    int ResponseCode,
+    string? SourceMac,
+    IReadOnlyList<DnsAnswer> Answers,
+    bool Truncated = false);
+
+/// <summary>4.3：DNS 服务器视图（系统配置 / 观察到）。</summary>
+public sealed class DnsServerView
+{
+    public string Address { get; init; } = string.Empty;
+
+    public string Adapter { get; init; } = string.Empty;
+
+    public string Source { get; init; } = "observed";
+
+    public string? Mac { get; init; }
+
+    public bool Trusted { get; init; }
+}
+
+/// <summary>4.3：DNS 安全快照。</summary>
+public sealed class DnsSecuritySnapshot
+{
+    public List<LanEvent> Events { get; init; } = new();
+
+    public List<DnsServerView> Servers { get; init; } = new();
+
+    public bool BaselineReady { get; init; }
+
+    public DateTime? BaselineUtc { get; init; }
+
+    public int ConfiguredCount { get; init; }
+}

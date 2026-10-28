@@ -40,10 +40,11 @@ public sealed partial class MainForm
     private DateTime _npcapConnectingUntilUtc = DateTime.MinValue;
     private bool _npcapInstallerRunning;
 
-    // 4.2：防护页内部的三子标签（端口扫描 / 局域网 / IDS）。
+    // 4.2：防护页内部的子标签（端口扫描 / 局域网 / DNS 安全 / IDS）。
     private TabControl _protectionTabs = null!;
     private TabPage _tabScan = null!;
     private TabPage _tabLan = null!;
+    private TabPage _tabDnsSecurity = null!;
 
     /// <summary>当前是否正看着防护页的某个子标签。</summary>
     private bool IsProtectionTab(TabPage page)
@@ -524,15 +525,24 @@ public sealed partial class MainForm
             UseVisualStyleBackColor = true,
         };
 
+        _tabDnsSecurity = new TabPage(Localizer.T("DNS 安全"))
+        {
+            Name = "_tabDnsSecurity",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
         _tabScan.Controls.Add(_antiSplit);
         _tabScan.Controls.Add(top);
 
         _protectionTabs.Controls.Add(_tabScan);
         _protectionTabs.Controls.Add(_tabLan);
+        _protectionTabs.Controls.Add(_tabDnsSecurity);
         _protectionTabs.Controls.Add(_tabIds);
         _tabAntiScan.Controls.Add(_protectionTabs);
 
         InitializeLanPage();
+        InitializeDnsSecurityPage();
 
         _protectionTabs.SelectedIndexChanged += (_, _) =>
         {
@@ -549,6 +559,11 @@ public sealed partial class MainForm
             {
                 _ = RefreshLanAsync();
             }
+            else if (_protectionTabs.SelectedTab == _tabDnsSecurity)
+            {
+                _dnsSecBalloonPending = false;
+                _ = RefreshDnsSecurityAsync();
+            }
             else if (_protectionTabs.SelectedTab == _tabIds)
             {
                 _idsBalloonPending = false;
@@ -563,6 +578,11 @@ public sealed partial class MainForm
                 if (_protectionTabs.SelectedTab == _tabLan)
                 {
                     _ = RefreshLanAsync();
+                }
+                else if (_protectionTabs.SelectedTab == _tabDnsSecurity)
+                {
+                    _dnsSecBalloonPending = false;
+                    _ = RefreshDnsSecurityAsync();
                 }
                 else if (_protectionTabs.SelectedTab == _tabIds)
                 {

@@ -120,6 +120,12 @@ public sealed class LanAnalyzer
         get { lock (_gate) { return Clone(_state.Settings); } }
     }
 
+    /// <summary>4.3：网关基线副本（DNS 分析用，避免跨线程无锁读取）。</summary>
+    public List<LanGateway> Gateways
+    {
+        get { lock (_gate) { return _state.Gateways.ToList(); } }
+    }
+
     public void ApplySettings(LanSettings settings)
     {
         lock (_gate)

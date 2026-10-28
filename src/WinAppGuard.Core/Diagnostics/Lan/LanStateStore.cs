@@ -43,6 +43,12 @@ public static class LanStateStore
                 .Where(item => !string.IsNullOrWhiteSpace(item.ServerIp) && item.UntilUtc > DateTime.UtcNow)
                 .ToList();
 
+            // 4.3：DNS 信任列表去空、去重；旧状态文件没有这一项时保持空列表。
+            state.TrustedDnsServers = (state.TrustedDnsServers ?? new List<string>())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             return state;
         }
         catch (Exception)

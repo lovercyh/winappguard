@@ -172,6 +172,17 @@ public static class ServiceProtocol
         /// <summary>4.2：清空基线并重新学习（写，需提权）。</summary>
         public const string ResetLanBaseline = "write.lan.reset-baseline";
 
+        // ---- 4.3：DNS 安全 ----
+
+        /// <summary>4.3：读取 DNS 安全状态、服务器与事件（只读）。</summary>
+        public const string QueryDnsSecurity = "query.dns-security";
+
+        /// <summary>4.3：只清空 DNS 安全事件（写，需提权）。</summary>
+        public const string ClearDnsSecurity = "write.dns-security.clear";
+
+        /// <summary>4.3：信任 / 取消信任某个 DNS 服务器（写，需提权）。</summary>
+        public const string TrustDnsServer = "write.dns-security.trust";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

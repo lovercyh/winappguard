@@ -12835,7 +12835,9 @@ internal static class Program
                 && summary.Text.Contains("采样", StringComparison.Ordinal)
                 && summary.Text.Contains("Npcap 1.90", StringComparison.Ordinal));
 
-            TrySetField(form, "_trafficStatus", null);
+            // 用空状态而不是 null：TrySetField 的泛型推断对 null 会退回不可空类型，
+            // CI 的 -warnaserror 会把它当成 CS8625。
+            TrySetField(form, "_trafficStatus", new TrafficStatusDto());
             TrySetField(form, "_trafficRecords", records);
             rebuild.Invoke(form, null);
             Application.DoEvents();

@@ -13236,6 +13236,19 @@ internal static class Program
             events.Any(item => item.Kind == LanEventKinds.DnsServerNotGateway
                                && item.Severity == LanSeverity.Medium));
 
+        // 被伪造的是“已配置的 DNS 服务器”时，也要靠 MAC 与网关不符抓到（dnsspoof 常见形态）。
+        var configuredSpoof = start.AddMinutes(11);
+        analyzer.Observe(Query(configuredSpoof, 1200, "configured-spoof.example", "192.168.1.1"), configuredSpoof);
+        analyzer.Observe(
+            Response(configuredSpoof.AddMilliseconds(10), 1200, "configured-spoof.example", "192.168.1.1", 0,
+                "bb:bb:bb:bb:bb:bb",
+                new DnsAnswer("configured-spoof.example", 1, 300, "6.6.6.6")),
+            configuredSpoof.AddMilliseconds(10));
+
+        CheckAssertion(results, "配置 DNS 的应答 MAC 与网关不符也报中危",
+            events.Any(item => item.Kind == LanEventKinds.DnsServerNotGateway
+                               && item.TargetIp == "192.168.1.1"));
+
         // 事务 ID 对不上任何未完成请求 → 高危。
         var mismatched = start.AddMinutes(2);
         analyzer.Observe(Query(mismatched, 300, "tx.example", "192.168.1.1"), mismatched);

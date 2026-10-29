@@ -464,7 +464,7 @@ public sealed class DnsAnalyzer
     private void CheckServerMacLocked(DnsMessage message, DateTime now)
     {
         if (string.IsNullOrWhiteSpace(message.SourceMac)
-            || IsConfiguredOrTrustedLocked(message.ServerAddress))
+            || IsTrustedLocked(message.ServerAddress))
         {
             return;
         }

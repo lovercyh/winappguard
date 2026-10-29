@@ -182,6 +182,10 @@ Assert-True '--ui-language-test 全部通过（含四子标签英文）' ($langE
 $dpiExit = $LASTEXITCODE
 Assert-True '--ui-dpi-test 全部通过' ($dpiExit -eq 0) "退出码 $dpiExit"
 
+& $selfCheck --ui-check --no-pause
+$uiExit = $LASTEXITCODE
+Assert-True '--ui-check 全部通过' ($uiExit -eq 0) "退出码 $uiExit"
+
 Write-Host ''
 Write-Host '===== 6. 服务端：DNS 安全（状态 / 服务器 / 信任 / 清空） =====' -ForegroundColor Cyan
 

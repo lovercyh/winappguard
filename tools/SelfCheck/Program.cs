@@ -11500,7 +11500,7 @@ internal static class Program
         }
 
         CheckAssertion(results, "服务版本是 4.2 或更高",
-            status.ServiceVersion.StartsWith("4.2", StringComparison.Ordinal));
+            VersionAtLeast(status.ServiceVersion, 4, 2));
         CheckAssertion(results, "局域网采集在跑", status.LanCollecting);
 
         var snapshot = QueryLanResponse(out var queryError);
@@ -11648,7 +11648,7 @@ internal static class Program
         }
 
         CheckAssertion(results, "服务版本是 4.3 或更高",
-            status.ServiceVersion.StartsWith("4.3", StringComparison.Ordinal));
+            VersionAtLeast(status.ServiceVersion, 4, 3));
         CheckAssertion(results, "DNS 安全采集在跑", status.DnsSecurityCollecting);
 
         var snapshot = QueryDnsSecurityResponse(out var queryError);
@@ -11768,7 +11768,7 @@ internal static class Program
         }
 
         CheckAssertion(results, "服务版本是 4.4 或更高",
-            status.ServiceVersion.StartsWith("4.4", StringComparison.Ordinal));
+            VersionAtLeast(status.ServiceVersion, 4, 4));
         CheckAssertion(results, "IPv6 邻接采集在跑", status.Ipv6SecurityCollecting);
 
         var snapshot = QueryIpv6Response(out var queryError);
@@ -11915,7 +11915,7 @@ internal static class Program
             return;
         }
 
-        CheckAssertion(results, "服务版本是 4.1 或更高", status.ServiceVersion.StartsWith("4.1", StringComparison.Ordinal));
+        CheckAssertion(results, "服务版本是 4.1 或更高", VersionAtLeast(status.ServiceVersion, 4, 1));
         CheckAssertion(results, "精确流量采集在跑", status.TrafficCollecting);
         CheckAssertion(results, "丢包计数可读", status.TrafficDropped >= 0);
 
@@ -16007,6 +16007,20 @@ internal static class Program
     /// （<c>RunFullTest</c> 里那个同名函数是**局部函数**，这类新模式下用不到，
     /// 所以单独提供一份静态版本。）
     /// </summary>
+    private static bool VersionAtLeast(string version, int major, int minor)
+    {
+        var core = version.Split('+')[0].Split('.');
+
+        if (core.Length < 2
+            || !int.TryParse(core[0], out var actualMajor)
+            || !int.TryParse(core[1], out var actualMinor))
+        {
+            return false;
+        }
+
+        return actualMajor > major || (actualMajor == major && actualMinor >= minor);
+    }
+
     private static void CheckAssertion(List<(string Title, bool Passed)> results, string title, bool passed)
     {
         W($"    [{(passed ? "通过" : "失败")}] {title}");

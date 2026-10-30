@@ -6,16 +6,17 @@ using WinAppGuard.Core.Diagnostics.AntiScan;
 namespace WinAppGuard.Core.Diagnostics.Lan;
 
 /// <summary>
-/// 4.2 / 4.3：ARP / DHCP / DNS 采集（独立的小会话）。
+/// 4.2 / 4.3 / 4.4：ARP / DHCP / DNS / IPv6 邻接采集（独立的小会话）。
 ///
-/// BPF：<c>arp or (udp and (port 67 or 68 or 53))</c>；snaplen 600（DHCP options 与 DNS 应答）；
-/// 混杂模式关闭；只解析 ARP、DHCP 头部/选项与 DNS 的 A/AAAA/CNAME，不保存报文。
+/// BPF：<c>arp or (udp and (port 67 or 68 or 53)) or (ip6 proto 58) or (ip6 and udp and (port 546 or 547))</c>；
+/// snaplen 600；混杂模式关闭；只解析头部/选项，不保存报文。
 /// </summary>
 public sealed class NpcapLanCapture : IDisposable
 {
     private const int SnapLength = 600;
     private const int ReadTimeoutMs = 100;
-    private const string BpfFilter = "arp or (udp and (port 67 or 68 or 53))";
+    private const string BpfFilter =
+        "arp or (udp and (port 67 or 68 or 53)) or (ip6 proto 58) or (ip6 and udp and (port 546 or 547))";
 
     private readonly object _gate = new();
     private readonly List<CaptureHandle> _captures = new();
@@ -32,6 +33,14 @@ public sealed class NpcapLanCapture : IDisposable
     public Action<DhcpMessage>? DhcpObserved { get; set; }
 
     public Action<DnsMessage>? DnsObserved { get; set; }
+
+    // ---- 4.4：IPv6 邻接安全 ----
+
+    public Action<Ipv6RaMessage>? Ipv6RaObserved { get; set; }
+
+    public Action<Ipv6NdMessage>? Ipv6NdObserved { get; set; }
+
+    public Action<Ipv6DhcpMessage>? Ipv6DhcpObserved { get; set; }
 
     public Action<string>? Log { get; set; }
 
@@ -324,6 +333,13 @@ public sealed class NpcapLanCapture : IDisposable
         if (etherType == 0x0806)
         {
             ParseArp(span, offset, length, adapter, now, span.Slice(6, 6));
+            return;
+        }
+
+        // 4.4：IPv6 / ICMPv6 / DHCPv6。
+        if (etherType == 0x86DD)
+        {
+            ParseIpv6(span, offset, length, adapter, now, span.Slice(6, 6));
             return;
         }
 
@@ -729,6 +745,671 @@ public sealed class NpcapLanCapture : IDisposable
             dns,
             lease,
             IsOffer: messageType == 2));
+    }
+
+    // ==================================================================
+    // 4.4：IPv6 / ICMPv6 / DHCPv6
+    // ==================================================================
+
+    private void ParseIpv6(
+        ReadOnlySpan<byte> span,
+        int offset,
+        int length,
+        string adapter,
+        DateTime now,
+        ReadOnlySpan<byte> ethernetSource)
+    {
+        if (length < offset + 40 || (span[offset] >> 4) != 6)
+        {
+            return;
+        }
+
+        var payloadLength = BinaryPrimitives.ReadUInt16BigEndian(span[(offset + 4)..]);
+        var nextHeader = span[offset + 6];
+        var hopLimit = span[offset + 7];
+        var sourceAddress = new IPAddress(span.Slice(offset + 8, 16)).ToString();
+        var destinationAddress = new IPAddress(span.Slice(offset + 24, 16)).ToString();
+        var sourceMac = LanEnvironment.FormatMac(ethernetSource);
+        var cursor = offset + 40;
+        var limit = Math.Min(length, offset + 40 + payloadLength);
+
+        if (limit < cursor)
+        {
+            return;
+        }
+
+        var guard = 0;
+
+        while (true)
+        {
+            if (nextHeader == 58)
+            {
+                ParseIcmpv6(
+                    span, cursor, limit, adapter, now, sourceAddress, destinationAddress,
+                    hopLimit, sourceMac);
+                return;
+            }
+
+            if (nextHeader == 17)
+            {
+                ParseUdp6(
+                    span, cursor, limit, adapter, now, sourceAddress, destinationAddress, sourceMac);
+                return;
+            }
+
+            // Hop-by-Hop / Routing / Destination Options
+            if (nextHeader is 0 or 43 or 60)
+            {
+                if (cursor + 2 > limit || guard++ > 8)
+                {
+                    return;
+                }
+
+                var optionLength = (span[cursor + 1] + 1) * 8;
+
+                if (optionLength < 8 || cursor + optionLength > limit)
+                {
+                    return;
+                }
+
+                nextHeader = span[cursor];
+                cursor += optionLength;
+                continue;
+            }
+
+            // Fragment：只看首片；非首片没有上层头。
+            if (nextHeader == 44)
+            {
+                if (cursor + 8 > limit)
+                {
+                    return;
+                }
+
+                var fragmentOffset = BinaryPrimitives.ReadUInt16BigEndian(span[(cursor + 2)..]) & 0xFFF8;
+
+                if (fragmentOffset != 0)
+                {
+                    return;
+                }
+
+                nextHeader = span[cursor];
+                cursor += 8;
+                continue;
+            }
+
+            // AH
+            if (nextHeader == 51)
+            {
+                if (cursor + 2 > limit)
+                {
+                    return;
+                }
+
+                var ahLength = (span[cursor + 1] + 2) * 4;
+
+                if (cursor + ahLength > limit)
+                {
+                    return;
+                }
+
+                nextHeader = span[cursor];
+                cursor += ahLength;
+                continue;
+            }
+
+            // ESP / 其他无法解析的上层协议。
+            return;
+        }
+    }
+
+    private void ParseUdp6(
+        ReadOnlySpan<byte> span,
+        int offset,
+        int length,
+        string adapter,
+        DateTime now,
+        string sourceAddress,
+        string destinationAddress,
+        string? sourceMac)
+    {
+        if (length < offset + 8)
+        {
+            return;
+        }
+
+        var sourcePort = BinaryPrimitives.ReadUInt16BigEndian(span[offset..]);
+        var destinationPort = BinaryPrimitives.ReadUInt16BigEndian(span[(offset + 2)..]);
+
+        if ((sourcePort != 547 && sourcePort != 546)
+            || (destinationPort != 547 && destinationPort != 546))
+        {
+            return;
+        }
+
+        if (TryParseDhcpv6Payload(
+                span[(offset + 8)..length],
+                now,
+                adapter,
+                sourceAddress,
+                destinationAddress,
+                sourcePort,
+                destinationPort,
+                sourceMac,
+                out var message))
+        {
+            Ipv6DhcpObserved?.Invoke(message);
+        }
+    }
+
+    private void ParseIcmpv6(
+        ReadOnlySpan<byte> span,
+        int offset,
+        int length,
+        string adapter,
+        DateTime now,
+        string sourceAddress,
+        string destinationAddress,
+        byte hopLimit,
+        string? sourceMac)
+    {
+        if (length < offset + 4)
+        {
+            return;
+        }
+
+        var type = span[offset];
+        var payload = span[offset..length];
+
+        if (type == 134
+            && TryParseRaPayload(
+                payload, now, adapter, sourceAddress, destinationAddress, hopLimit, sourceMac,
+                out var ra))
+        {
+            Ipv6RaObserved?.Invoke(ra);
+            return;
+        }
+
+        if (type is 135 or 136 or 137
+            && TryParseNdPayload(
+                payload, now, adapter, sourceAddress, destinationAddress, sourceMac, out var nd))
+        {
+            Ipv6NdObserved?.Invoke(nd);
+        }
+    }
+
+    /// <summary>4.4：解析 RA 载荷（不含 IPv6 头），供离线自检使用。</summary>
+    public static bool TryParseRaPayload(
+        ReadOnlySpan<byte> payload,
+        DateTime timeUtc,
+        string adapter,
+        string sourceAddress,
+        string destinationAddress,
+        byte hopLimit,
+        string? sourceMac,
+        out Ipv6RaMessage message)
+    {
+        message = null!;
+
+        if (payload.Length < 16 || payload[0] != 134)
+        {
+            return false;
+        }
+
+        var flags = payload[5];
+        var routerLifetime = BinaryPrimitives.ReadUInt16BigEndian(payload[6..]);
+        var reachableTime = BinaryPrimitives.ReadUInt32BigEndian(payload[8..]);
+        var retransTimer = BinaryPrimitives.ReadUInt32BigEndian(payload[12..]);
+        var prefixes = new List<Ipv6PrefixInfo>();
+        var routes = new List<Ipv6RouteInfo>();
+        var dnsServers = new List<string>();
+        var dnsDomains = new List<string>();
+        uint mtu = 0;
+        var cursor = 16;
+
+        while (cursor + 2 <= payload.Length)
+        {
+            var type = payload[cursor];
+            var totalLength = payload[cursor + 1] * 8;
+
+            if (totalLength < 2 || cursor + totalLength > payload.Length)
+            {
+                break;
+            }
+
+            var data = payload.Slice(cursor + 2, totalLength - 2);
+
+            switch (type)
+            {
+                case 3 when data.Length >= 30:
+                    prefixes.Add(new Ipv6PrefixInfo
+                    {
+                        PrefixLength = data[0],
+                        OnLink = (data[1] & 0x80) != 0,
+                        Autonomous = (data[1] & 0x40) != 0,
+                        ValidLifetime = BinaryPrimitives.ReadUInt32BigEndian(data[2..]),
+                        PreferredLifetime = BinaryPrimitives.ReadUInt32BigEndian(data[6..]),
+                        Prefix = FormatPrefix(data[14..30]),
+                    });
+                    break;
+
+                case 5 when data.Length >= 6:
+                    mtu = BinaryPrimitives.ReadUInt32BigEndian(data[2..]);
+                    break;
+
+                case 24 when data.Length >= 6:
+                    routes.Add(new Ipv6RouteInfo
+                    {
+                        PrefixLength = data[0],
+                        RouteLifetime = BinaryPrimitives.ReadUInt32BigEndian(data[2..]),
+                        Prefix = FormatPrefix(data[6..]),
+                    });
+                    break;
+
+                case 25 when data.Length >= 6:
+                    for (var i = 6; i + 16 <= data.Length; i += 16)
+                    {
+                        dnsServers.Add(new IPAddress(data.Slice(i, 16)).ToString());
+                    }
+
+                    break;
+
+                case 31 when data.Length > 6:
+                    ReadDnsNames(data[6..], dnsDomains);
+                    break;
+            }
+
+            cursor += totalLength;
+        }
+
+        message = new Ipv6RaMessage
+        {
+            TimeUtc = timeUtc,
+            Adapter = adapter,
+            SourceAddress = sourceAddress,
+            DestinationAddress = destinationAddress,
+            SourceMac = sourceMac,
+            HopLimit = hopLimit,
+            Managed = (flags & 0x80) != 0,
+            Other = (flags & 0x40) != 0,
+            HomeAgent = (flags & 0x20) != 0,
+            RouterLifetime = routerLifetime,
+            ReachableTime = reachableTime,
+            RetransTimer = retransTimer,
+            Mtu = mtu,
+            Prefixes = prefixes,
+            Routes = routes,
+            DnsServers = dnsServers,
+            DnsDomains = dnsDomains,
+        };
+
+        return true;
+    }
+
+    /// <summary>4.4：解析 NS / NA / Redirect 载荷，供离线自检使用。</summary>
+    public static bool TryParseNdPayload(
+        ReadOnlySpan<byte> payload,
+        DateTime timeUtc,
+        string adapter,
+        string sourceAddress,
+        string destinationAddress,
+        string? sourceMac,
+        out Ipv6NdMessage message)
+    {
+        message = null!;
+
+        if (payload.Length < 24)
+        {
+            return false;
+        }
+
+        var type = payload[0];
+
+        if (type is not (135 or 136 or 137))
+        {
+            return false;
+        }
+
+        var target = new IPAddress(payload.Slice(8, 16)).ToString();
+        string? targetMac = null;
+        string? redirectTarget = null;
+        var optionOffset = 24;
+
+        if (type == 136)
+        {
+            var flags = payload[4];
+            ReadLinkLayerOption(payload, optionOffset, out targetMac);
+
+            message = new Ipv6NdMessage
+            {
+                TimeUtc = timeUtc,
+                Adapter = adapter,
+                Type = type,
+                SourceAddress = sourceAddress,
+                DestinationAddress = destinationAddress,
+                SourceMac = sourceMac,
+                TargetAddress = target,
+                TargetMac = targetMac,
+                Router = (flags & 0x80) != 0,
+                Solicited = (flags & 0x40) != 0,
+                Override = (flags & 0x20) != 0,
+            };
+
+            return true;
+        }
+
+        if (type == 137)
+        {
+            if (payload.Length < 40)
+            {
+                return false;
+            }
+
+            redirectTarget = new IPAddress(payload.Slice(24, 16)).ToString();
+            optionOffset = 40;
+            ReadLinkLayerOption(payload, optionOffset, out targetMac);
+
+            message = new Ipv6NdMessage
+            {
+                TimeUtc = timeUtc,
+                Adapter = adapter,
+                Type = type,
+                SourceAddress = sourceAddress,
+                DestinationAddress = destinationAddress,
+                SourceMac = sourceMac,
+                TargetAddress = target,
+                TargetMac = targetMac,
+                RedirectTarget = redirectTarget,
+            };
+
+            return true;
+        }
+
+        // NS
+        ReadLinkLayerOption(payload, optionOffset, out targetMac);
+
+        message = new Ipv6NdMessage
+        {
+            TimeUtc = timeUtc,
+            Adapter = adapter,
+            Type = type,
+            SourceAddress = sourceAddress,
+            DestinationAddress = destinationAddress,
+            SourceMac = sourceMac,
+            TargetAddress = target,
+            TargetMac = targetMac,
+        };
+
+        return true;
+    }
+
+    /// <summary>4.4：解析 DHCPv6 载荷（不含 UDP 头），供离线自检使用。</summary>
+    public static bool TryParseDhcpv6Payload(
+        ReadOnlySpan<byte> payload,
+        DateTime timeUtc,
+        string adapter,
+        string sourceAddress,
+        string destinationAddress,
+        ushort sourcePort,
+        ushort destinationPort,
+        string? sourceMac,
+        out Ipv6DhcpMessage message)
+    {
+        message = null!;
+
+        if (payload.Length < 4)
+        {
+            return false;
+        }
+
+        string? serverId = null;
+        string? clientId = null;
+        var dnsServers = new List<string>();
+        var domains = new List<string>();
+        var iaAddresses = new List<Ipv6IaInfo>();
+        var minPreferred = uint.MaxValue;
+        var minValid = uint.MaxValue;
+        var cursor = 4;
+
+        while (cursor + 4 <= payload.Length)
+        {
+            var code = BinaryPrimitives.ReadUInt16BigEndian(payload[cursor..]);
+            var length = BinaryPrimitives.ReadUInt16BigEndian(payload[(cursor + 2)..]);
+            cursor += 4;
+
+            if (cursor + length > payload.Length)
+            {
+                break;
+            }
+
+            var data = payload.Slice(cursor, length);
+
+            switch (code)
+            {
+                case 1:
+                    clientId = ToHex(data);
+                    break;
+
+                case 2:
+                    serverId = ToHex(data);
+                    break;
+
+                case 23:
+                    for (var i = 0; i + 16 <= data.Length; i += 16)
+                    {
+                        dnsServers.Add(new IPAddress(data.Slice(i, 16)).ToString());
+                    }
+
+                    break;
+
+                case 24:
+                    ReadDnsNames(data, domains);
+                    break;
+
+                case 3:
+                    ParseIaNa(data, iaAddresses, ref minPreferred, ref minValid);
+                    break;
+
+                case 25:
+                    ParseIaPd(data, iaAddresses, ref minPreferred, ref minValid);
+                    break;
+            }
+
+            cursor += length;
+        }
+
+        message = new Ipv6DhcpMessage
+        {
+            TimeUtc = timeUtc,
+            Adapter = adapter,
+            ServerToClient = sourcePort == 547 && destinationPort == 546,
+            SourceAddress = sourceAddress,
+            DestinationAddress = destinationAddress,
+            SourcePort = sourcePort,
+            DestinationPort = destinationPort,
+            SourceMac = sourceMac,
+            MessageType = payload[0],
+            ServerId = serverId,
+            ClientId = clientId,
+            DnsServers = dnsServers,
+            Domains = domains,
+            IaAddresses = iaAddresses,
+            MinPreferredLifetime = iaAddresses.Count == 0 ? 0 : minPreferred,
+            MinValidLifetime = iaAddresses.Count == 0 ? 0 : minValid,
+        };
+
+        return true;
+    }
+
+    private static void ParseIaNa(
+        ReadOnlySpan<byte> data,
+        List<Ipv6IaInfo> addresses,
+        ref uint minPreferred,
+        ref uint minValid)
+    {
+        if (data.Length < 12)
+        {
+            return;
+        }
+
+        var cursor = 12;
+
+        while (cursor + 4 <= data.Length)
+        {
+            var code = BinaryPrimitives.ReadUInt16BigEndian(data[cursor..]);
+            var length = BinaryPrimitives.ReadUInt16BigEndian(data[(cursor + 2)..]);
+            cursor += 4;
+
+            if (cursor + length > data.Length)
+            {
+                return;
+            }
+
+            if (code == 5 && length >= 24)
+            {
+                var preferred = BinaryPrimitives.ReadUInt32BigEndian(data[(cursor + 16)..]);
+                var valid = BinaryPrimitives.ReadUInt32BigEndian(data[(cursor + 20)..]);
+                addresses.Add(new Ipv6IaInfo
+                {
+                    Address = new IPAddress(data.Slice(cursor, 16)).ToString(),
+                    PrefixLength = 128,
+                    PreferredLifetime = preferred,
+                    ValidLifetime = valid,
+                });
+                minPreferred = Math.Min(minPreferred, preferred);
+                minValid = Math.Min(minValid, valid);
+            }
+
+            cursor += length;
+        }
+    }
+
+    private static void ParseIaPd(
+        ReadOnlySpan<byte> data,
+        List<Ipv6IaInfo> addresses,
+        ref uint minPreferred,
+        ref uint minValid)
+    {
+        if (data.Length < 12)
+        {
+            return;
+        }
+
+        var cursor = 12;
+
+        while (cursor + 4 <= data.Length)
+        {
+            var code = BinaryPrimitives.ReadUInt16BigEndian(data[cursor..]);
+            var length = BinaryPrimitives.ReadUInt16BigEndian(data[(cursor + 2)..]);
+            cursor += 4;
+
+            if (cursor + length > data.Length)
+            {
+                return;
+            }
+
+            if (code == 26 && length >= 25)
+            {
+                var preferred = BinaryPrimitives.ReadUInt32BigEndian(data[cursor..]);
+                var valid = BinaryPrimitives.ReadUInt32BigEndian(data[(cursor + 4)..]);
+                var prefixLength = data[cursor + 8];
+                addresses.Add(new Ipv6IaInfo
+                {
+                    Address = FormatPrefix(data.Slice(cursor + 9, 16)),
+                    PrefixLength = prefixLength,
+                    PreferredLifetime = preferred,
+                    ValidLifetime = valid,
+                });
+                minPreferred = Math.Min(minPreferred, preferred);
+                minValid = Math.Min(minValid, valid);
+            }
+
+            cursor += length;
+        }
+    }
+
+    private static void ReadLinkLayerOption(
+        ReadOnlySpan<byte> payload,
+        int offset,
+        out string? mac)
+    {
+        mac = null;
+        var cursor = offset;
+
+        while (cursor + 2 <= payload.Length)
+        {
+            var type = payload[cursor];
+            var totalLength = payload[cursor + 1] * 8;
+
+            if (totalLength < 2 || cursor + totalLength > payload.Length)
+            {
+                return;
+            }
+
+            if ((type is 1 or 2) && totalLength >= 8)
+            {
+                mac = LanEnvironment.FormatMac(payload.Slice(cursor + 2, 6));
+                return;
+            }
+
+            cursor += totalLength;
+        }
+    }
+
+    private static void ReadDnsNames(ReadOnlySpan<byte> data, List<string> names)
+    {
+        var cursor = 0;
+
+        while (cursor < data.Length && names.Count < 8)
+        {
+            if (data[cursor] == 0)
+            {
+                cursor++;
+                continue;
+            }
+
+            var labels = new List<string>();
+
+            while (cursor < data.Length)
+            {
+                var length = data[cursor++];
+
+                if (length == 0)
+                {
+                    break;
+                }
+
+                if ((length & 0xC0) != 0 || cursor + length > data.Length)
+                {
+                    return;
+                }
+
+                labels.Add(System.Text.Encoding.ASCII.GetString(data.Slice(cursor, length)));
+                cursor += length;
+            }
+
+            if (labels.Count > 0)
+            {
+                names.Add(string.Join(".", labels));
+            }
+        }
+    }
+
+    private static string FormatPrefix(ReadOnlySpan<byte> bytes)
+    {
+        Span<byte> full = stackalloc byte[16];
+        var count = Math.Min(bytes.Length, 16);
+        bytes[..count].CopyTo(full);
+        return new IPAddress(full).ToString();
+    }
+
+    private static string? ToHex(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length == 0)
+        {
+            return null;
+        }
+
+        return Convert.ToHexString(bytes[..Math.Min(bytes.Length, 64)]);
     }
 
     private void CloseCapturesLocked()

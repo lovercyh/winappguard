@@ -95,6 +95,45 @@ public static class LanEnvironment
         return result;
     }
 
+    /// <summary>4.4：本机 IPv6 单播地址（DAD 冲突检测用）。</summary>
+    public static List<string> GetLocalIpv6Addresses()
+    {
+        var result = new List<string>();
+
+        try
+        {
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != OperationalStatus.Up || IsExcluded(nic))
+                {
+                    continue;
+                }
+
+                foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+                {
+                    var address = unicast.Address;
+
+                    if (address.AddressFamily != AddressFamily.InterNetworkV6
+                        || IPAddress.IsLoopback(address)
+                        || address.IsIPv6Multicast)
+                    {
+                        continue;
+                    }
+
+                    result.Add(address.ToString());
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // 枚举失败时 DAD 规则不启用，不影响其他检测。
+        }
+
+        return result
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public static List<LanGatewayHint> GetGatewayHints()    {
         var result = new List<LanGatewayHint>();
 

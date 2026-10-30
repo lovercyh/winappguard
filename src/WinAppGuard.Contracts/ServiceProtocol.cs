@@ -183,6 +183,20 @@ public static class ServiceProtocol
         /// <summary>4.3：信任 / 取消信任某个 DNS 服务器（写，需提权）。</summary>
         public const string TrustDnsServer = "write.dns-security.trust";
 
+        // ---- 4.4：IPv6 邻接安全 ----
+
+        /// <summary>4.4：读取 IPv6 邻接安全状态、端点与事件（只读）。</summary>
+        public const string QueryIpv6Security = "query.ipv6-security";
+
+        /// <summary>4.4：只清空 IPv6 邻接安全事件（写，需提权）。</summary>
+        public const string ClearIpv6Security = "write.ipv6-security.clear";
+
+        /// <summary>4.4：信任 / 取消信任路由器或 DHCPv6 服务器（写，需提权）。</summary>
+        public const string TrustIpv6 = "write.ipv6-security.trust";
+
+        /// <summary>4.4：清空 IPv6 基线并重新学习（写，需提权）。</summary>
+        public const string ResetIpv6Baseline = "write.ipv6-security.reset-baseline";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

@@ -23,8 +23,10 @@ internal static class LanHost
 
     private static LanAnalyzer? _analyzer;
     private static DnsAnalyzer? _dnsAnalyzer;
+    private static Ipv6Analyzer? _ipv6Analyzer;
     private static NpcapLanCapture? _capture;
     private static LanEventStore? _eventStore;
+    private static LanEventStore? _ipv6EventStore;
     private static System.Threading.Timer? _timer;
     private static bool _started;
     private static bool _dirty;
@@ -36,6 +38,7 @@ internal static class LanHost
     private static string? _lastError;
     private static int _eventCount;
     private static int _dnsEventCount;
+    private static int _ipv6EventCount;
 
     internal static bool Collecting
     {
@@ -84,6 +87,21 @@ internal static class LanHost
         };
         dnsAnalyzer.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
 
+        // 4.4：IPv6 邻接安全，独立状态/事件目录，复用同一个 Npcap 会话。
+        var ipv6State = Ipv6StateStore.Load(ServicePaths.Ipv6StateFile);
+        var ipv6Analyzer = new Ipv6Analyzer(ipv6State, DateTime.UtcNow);
+        var ipv6EventStore = new LanEventStore(ServicePaths.Ipv6Directory);
+        ipv6Analyzer.EventObserved = item => OnEvent(item);
+        ipv6Analyzer.StateChanged = () =>
+        {
+            lock (Gate)
+            {
+                _dirty = true;
+            }
+        };
+        ipv6Analyzer.SeedEvents(ipv6EventStore.ReadRecent(200));
+        ipv6Analyzer.UpdateLocalAddresses(LanEnvironment.GetLocalIpv6Addresses());
+
         // 历史事件读回内存，重启后仍能在页面里看到。
         analyzer.SeedEvents(eventStore.ReadRecent(200));
         analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
@@ -126,15 +144,19 @@ internal static class LanHost
         {
             _analyzer = analyzer;
             _dnsAnalyzer = dnsAnalyzer;
+            _ipv6Analyzer = ipv6Analyzer;
             _eventStore = eventStore;
+            _ipv6EventStore = ipv6EventStore;
             _started = true;
             _dirty = true;
             _eventCount = analyzer.Snapshot().Events.Count;
             _dnsEventCount = dnsAnalyzer.EventCount;
+            _ipv6EventCount = ipv6Analyzer.EventCount;
             _lastError = null;
         }
 
         eventStore.Prune(state.Settings.RetentionDays, DateTime.UtcNow);
+        ipv6EventStore.Prune(state.Settings.RetentionDays, DateTime.UtcNow);
         SaveState();
         EnsureCapture();
 
@@ -184,7 +206,9 @@ internal static class LanHost
         {
             _analyzer = null;
             _dnsAnalyzer = null;
+            _ipv6Analyzer = null;
             _eventStore = null;
+            _ipv6EventStore = null;
         }
 
         ServiceLog.Info("WAG-LAN-006", "LAN detection stopped.");
@@ -586,6 +610,169 @@ internal static class LanHost
         return QueryDns(request);
     }
 
+    internal static ServiceResponse QueryIpv6(ServiceRequest request)
+    {
+        Ipv6Analyzer? ipv6;
+        NpcapLanCapture? capture;
+        LanEventStore? store;
+
+        lock (Gate)
+        {
+            ipv6 = _ipv6Analyzer;
+            capture = _capture;
+            store = _ipv6EventStore;
+        }
+
+        if (ipv6 is null)
+        {
+            return new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = true,
+                Ipv6SecurityStatus = new Ipv6SecurityStatusDto
+                {
+                    Collecting = false,
+                    BaselineReady = false,
+                    NpcapVersion = NpcapLocator.GetVersion(),
+                    LastError = "IPv6 邻接安全检测未启动。",
+                },
+                Ipv6Routers = new List<Ipv6RouterDto>(),
+                Ipv6DhcpServers = new List<Ipv6DhcpServerDto>(),
+                Ipv6Neighbors = new List<Ipv6NeighborDto>(),
+                Ipv6SecurityEvents = new List<LanEventDto>(),
+            };
+        }
+
+        var snapshot = ipv6.Snapshot();
+        var history = store?.ReadRecent(200) ?? new List<LanEvent>();
+        var trustedRouters = ipv6.TrustedRouters.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var trustedDhcp = ipv6.TrustedDhcpServers.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var events = snapshot.Events
+            .Concat(history)
+            .GroupBy(item => item.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .OrderByDescending(item => item.TimeUtc)
+            .Take(200)
+            .ToList();
+
+        lock (Gate)
+        {
+            _ipv6EventCount = events.Count;
+        }
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Ipv6SecurityStatus = new Ipv6SecurityStatusDto
+            {
+                Collecting = capture?.IsRunning == true,
+                BaselineReady = snapshot.BaselineReady,
+                BaselineUtc = snapshot.BaselineUtc,
+                EventCount = events.Count,
+                RouterCount = snapshot.Routers.Count,
+                DhcpServerCount = snapshot.DhcpServers.Count,
+                NeighborCount = snapshot.Neighbors.Count,
+                NpcapVersion = NpcapLocator.GetVersion(),
+                LastError = capture?.LastError,
+            },
+            Ipv6Routers = snapshot.Routers.Select(item => ToDto(item, trustedRouters)).ToList(),
+            Ipv6DhcpServers = snapshot.DhcpServers.Select(item => ToDto(item, trustedDhcp)).ToList(),
+            Ipv6Neighbors = snapshot.Neighbors.Select(ToDto).ToList(),
+            Ipv6SecurityEvents = events.Select(ToDto).ToList(),
+        };
+    }
+
+    internal static ServiceResponse ClearIpv6(ServiceRequest request)
+    {
+        Ipv6Analyzer? ipv6;
+        LanEventStore? store;
+
+        lock (Gate)
+        {
+            ipv6 = _ipv6Analyzer;
+            store = _ipv6EventStore;
+        }
+
+        if (ipv6 is null)
+        {
+            return Error(request, "IPv6 邻接安全检测未启动。");
+        }
+
+        ipv6.ClearEvents();
+        store?.Clear();
+
+        lock (Gate)
+        {
+            _ipv6EventCount = 0;
+            _dirty = true;
+        }
+
+        ServiceLog.Operation("WAG-LAN-023", "IPv6 security events cleared.");
+        return QueryIpv6(request);
+    }
+
+    internal static ServiceResponse TrustIpv6(ServiceRequest request)
+    {
+        Ipv6Analyzer? ipv6;
+        var kind = request.Ipv6TrustKind;
+        var value = request.Ipv6TrustValue;
+        var mac = request.Ipv6TrustMac;
+
+        if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(value))
+        {
+            return Error(request, "缺少 IPv6 信任类型或目标。");
+        }
+
+        lock (Gate)
+        {
+            ipv6 = _ipv6Analyzer;
+        }
+
+        if (ipv6 is null)
+        {
+            return Error(request, "IPv6 邻接安全检测未启动。");
+        }
+
+        var ok = string.Equals(kind, "router", StringComparison.OrdinalIgnoreCase)
+            ? ipv6.TrustRouter(value.Trim(), mac ?? string.Empty, request.Ipv6TrustEnabled, DateTime.UtcNow)
+            : string.Equals(kind, "dhcpv6", StringComparison.OrdinalIgnoreCase)
+                ? ipv6.TrustDhcp(value.Trim(), mac, request.Ipv6TrustEnabled, DateTime.UtcNow)
+                : false;
+
+        if (!ok)
+        {
+            return Error(request, "IPv6 信任目标不合法。");
+        }
+
+        SaveState();
+        ServiceLog.Operation(
+            "WAG-LAN-024",
+            $"IPv6 {kind} {value} {(request.Ipv6TrustEnabled ? "trusted" : "untrusted")}.");
+        return QueryIpv6(request);
+    }
+
+    internal static ServiceResponse ResetIpv6Baseline(ServiceRequest request)
+    {
+        Ipv6Analyzer? ipv6;
+
+        lock (Gate)
+        {
+            ipv6 = _ipv6Analyzer;
+        }
+
+        if (ipv6 is null)
+        {
+            return Error(request, "IPv6 邻接安全检测未启动。");
+        }
+
+        ipv6.ResetBaseline(DateTime.UtcNow);
+        SaveState();
+        ServiceLog.Operation("WAG-LAN-025", "IPv6 baseline reset; learning again.");
+        return QueryIpv6(request);
+    }
+
     internal static LanStatusDto GetStatus()
     {
         lock (Gate)
@@ -599,6 +786,8 @@ internal static class LanHost
                 BlockedCount = _analyzer?.Blocks.Count ?? 0,
                 DnsSecurityCollecting = _capture?.IsRunning == true && _dnsAnalyzer is not null,
                 DnsSecurityEventCount = _dnsEventCount,
+                Ipv6SecurityCollecting = _capture?.IsRunning == true && _ipv6Analyzer is not null,
+                Ipv6SecurityEventCount = _ipv6EventCount,
                 NpcapVersion = NpcapLocator.GetVersion(),
                 LastError = _lastError ?? _capture?.LastError,
             };
@@ -615,6 +804,7 @@ internal static class LanHost
             LanAnalyzer? analyzer;
             NpcapLanCapture? capture;
             DnsAnalyzer? dns;
+            Ipv6Analyzer? ipv6;
 
             lock (Gate)
             {
@@ -626,6 +816,7 @@ internal static class LanHost
                 analyzer = _analyzer;
                 capture = _capture;
                 dns = _dnsAnalyzer;
+                ipv6 = _ipv6Analyzer;
             }
 
             if (analyzer is null)
@@ -635,6 +826,9 @@ internal static class LanHost
 
             // DNS 规则要用网关 MAC 判断“DNS 服务器非网关”，这里每秒同步一次副本。
             dns?.UpdateGatewayBaselines(analyzer.Gateways);
+
+            // 没有 IPv6 流量时也要让 5 分钟基线按时结束。
+            ipv6?.Tick(now);
 
             if (capture is not null && now >= _nextStatsUtc)
             {
@@ -646,6 +840,7 @@ internal static class LanHost
             {
                 analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
                 dns?.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
+                ipv6?.UpdateLocalAddresses(LanEnvironment.GetLocalIpv6Addresses());
 
                 _nextHintsUtc = now.Add(HintsInterval);
             }
@@ -681,6 +876,7 @@ internal static class LanHost
             {
                 var settings = analyzer.Settings;
                 _eventStore?.Prune(settings.RetentionDays, now);
+                _ipv6EventStore?.Prune(settings.RetentionDays, now);
                 _nextPruneUtc = now.AddHours(6);
             }
 
@@ -709,13 +905,19 @@ internal static class LanHost
     private static void OnEvent(LanEvent item)
     {
         LanEventStore? store;
+        var isDns = item.Kind.StartsWith("dns_", StringComparison.OrdinalIgnoreCase);
+        var isIpv6 = item.Kind.StartsWith("ipv6_", StringComparison.OrdinalIgnoreCase);
 
         lock (Gate)
         {
-            store = _eventStore;
+            store = isIpv6 ? _ipv6EventStore : _eventStore;
             _dirty = true;
 
-            if (item.Kind.StartsWith("dns_", StringComparison.OrdinalIgnoreCase))
+            if (isIpv6)
+            {
+                _ipv6EventCount = Math.Min(_ipv6EventCount + 1, Ipv6Analyzer.MaxEvents);
+            }
+            else if (isDns)
             {
                 _dnsEventCount = Math.Min(_dnsEventCount + 1, DnsAnalyzer.MaxEvents);
             }
@@ -729,7 +931,7 @@ internal static class LanHost
 
         ServiceLog.Operation(
             "WAG-LAN-017",
-            $"LAN/DNS event: kind={item.Kind}, severity={item.Severity}, adapter={item.Adapter}, " +
+            $"LAN/DNS/IPv6 event: kind={item.Kind}, severity={item.Severity}, adapter={item.Adapter}, " +
             $"source={item.SourceMac ?? "-"}, target={item.TargetIp ?? "-"}, detail={item.Detail}");
 
         // 高危事件立即保存，避免服务重启丢掉关键状态（例如新服务器记录）。
@@ -761,11 +963,15 @@ internal static class LanHost
 
         var analyzer = _analyzer;
         var dnsAnalyzer = _dnsAnalyzer;
+        var ipv6Analyzer = _ipv6Analyzer;
         var capture = new NpcapLanCapture
         {
             ArpObserved = frame => analyzer?.ObserveArp(frame, DateTime.UtcNow),
             DhcpObserved = message => analyzer?.ObserveDhcp(message, DateTime.UtcNow),
             DnsObserved = message => dnsAnalyzer?.Observe(message, DateTime.UtcNow),
+            Ipv6RaObserved = message => ipv6Analyzer?.ObserveRa(message, DateTime.UtcNow),
+            Ipv6NdObserved = message => ipv6Analyzer?.ObserveNd(message, DateTime.UtcNow),
+            Ipv6DhcpObserved = message => ipv6Analyzer?.ObserveDhcp(message, DateTime.UtcNow),
             Log = message => ServiceLog.Info("WAG-LAN-018", message),
         };
 
@@ -802,6 +1008,7 @@ internal static class LanHost
         }
 
         dnsAnalyzer?.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
+        ipv6Analyzer?.UpdateLocalAddresses(LanEnvironment.GetLocalIpv6Addresses());
 
         if (analyzer is not null)
         {
@@ -836,10 +1043,12 @@ internal static class LanHost
     private static void SaveState()
     {
         LanAnalyzer? analyzer;
+        Ipv6Analyzer? ipv6;
 
         lock (Gate)
         {
             analyzer = _analyzer;
+            ipv6 = _ipv6Analyzer;
         }
 
         if (analyzer is null)
@@ -861,6 +1070,21 @@ internal static class LanHost
                 TrustedDnsServers = _dnsAnalyzer?.TrustedServers ?? new List<string>(),
                 DnsBaselineReadyUtc = _dnsAnalyzer?.BaselineUtc,
             });
+
+            if (ipv6 is not null)
+            {
+                var ipv6Snapshot = ipv6.Snapshot();
+
+                Ipv6StateStore.Save(ServicePaths.Ipv6StateFile, new Ipv6State
+                {
+                    BaselineReadyUtc = ipv6Snapshot.BaselineUtc,
+                    Routers = ipv6Snapshot.Routers,
+                    DhcpServers = ipv6Snapshot.DhcpServers,
+                    Neighbors = ipv6Snapshot.Neighbors,
+                    TrustedRouters = ipv6.TrustedRouters,
+                    TrustedDhcpServers = ipv6.TrustedDhcpServers,
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -890,6 +1114,68 @@ internal static class LanHost
         Mac = item.Mac,
         Trusted = item.Trusted,
     };
+
+    private static Ipv6RouterDto ToDto(Ipv6Router item, HashSet<string> trusted) => new()
+    {
+        LinkLocal = item.LinkLocal,
+        Mac = item.Mac,
+        Prefixes = item.Prefixes.Count == 0
+            ? "—"
+            : string.Join(", ", item.Prefixes.Select(prefix => $"{prefix.Prefix}/{prefix.PrefixLength}")),
+        Flags = FormatIpv6Flags(item),
+        Lifetime = item.RouterLifetime,
+        Baseline = item.Baseline,
+        Trusted = trusted.Contains(Ipv6TrustKeys.Router(item.LinkLocal, item.Mac)),
+        FirstSeenUtc = item.FirstSeenUtc,
+        LastSeenUtc = item.LastSeenUtc,
+    };
+
+    private static Ipv6DhcpServerDto ToDto(Ipv6DhcpServer item, HashSet<string> trusted) => new()
+    {
+        ServerId = item.ServerId,
+        Address = item.Address,
+        Mac = item.Mac,
+        Dns = item.DnsServers.Count == 0 ? "—" : string.Join(", ", item.DnsServers),
+        Domains = item.Domains.Count == 0 ? "—" : string.Join(", ", item.Domains),
+        MinLeaseSeconds = item.MinValidLifetime == 0
+            ? 0
+            : (int)Math.Min(item.MinValidLifetime, int.MaxValue),
+        Baseline = item.Baseline,
+        Trusted = trusted.Contains(Ipv6TrustKeys.Dhcp(item.ServerId, item.Mac)),
+        FirstSeenUtc = item.FirstSeenUtc,
+        LastSeenUtc = item.LastSeenUtc,
+    };
+
+    private static Ipv6NeighborDto ToDto(Ipv6Neighbor item) => new()
+    {
+        Address = item.Address,
+        Mac = item.Mac,
+        IsRouter = item.IsRouter,
+        FirstSeenUtc = item.FirstSeenUtc,
+        LastSeenUtc = item.LastSeenUtc,
+    };
+
+    private static string FormatIpv6Flags(Ipv6Router item)
+    {
+        var flags = new List<string>();
+
+        if (item.Managed)
+        {
+            flags.Add("M");
+        }
+
+        if (item.Other)
+        {
+            flags.Add("O");
+        }
+
+        if (item.HomeAgent)
+        {
+            flags.Add("H");
+        }
+
+        return flags.Count == 0 ? "—" : string.Join("/", flags);
+    }
 
     private static LanGatewayDto ToDto(LanGateway item) => new()
     {

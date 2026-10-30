@@ -57,4 +57,12 @@ public static class ServicePaths
 
     /// <summary>4.2：局域网检测状态文件。</summary>
     public static string LanStateFile => Path.Combine(LanDirectory, "state.json");
+
+    // ---- 4.4：IPv6 邻接安全 ----
+
+    /// <summary>4.4：IPv6 邻接安全的基线、信任与事件。</summary>
+    public static string Ipv6Directory => Path.Combine(DataDirectory, "ipv6");
+
+    /// <summary>4.4：IPv6 邻接安全状态文件。</summary>
+    public static string Ipv6StateFile => Path.Combine(Ipv6Directory, "state.json");
 }

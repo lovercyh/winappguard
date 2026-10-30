@@ -580,6 +580,15 @@ internal sealed class ControlServer : IDisposable
 
             ServiceProtocol.Commands.TrustDnsServer => LanHost.TrustDns(request),
 
+            // 4.4：IPv6 邻接安全。
+            ServiceProtocol.Commands.QueryIpv6Security => LanHost.QueryIpv6(request),
+
+            ServiceProtocol.Commands.ClearIpv6Security => LanHost.ClearIpv6(request),
+
+            ServiceProtocol.Commands.TrustIpv6 => LanHost.TrustIpv6(request),
+
+            ServiceProtocol.Commands.ResetIpv6Baseline => LanHost.ResetIpv6Baseline(request),
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse
@@ -679,6 +688,10 @@ internal sealed class ControlServer : IDisposable
         // 4.3：DNS 安全。
         status.DnsSecurityCollecting = lan.DnsSecurityCollecting;
         status.DnsSecurityEventCount = lan.DnsSecurityEventCount;
+
+        // 4.4：IPv6 邻接安全。
+        status.Ipv6SecurityCollecting = lan.Ipv6SecurityCollecting;
+        status.Ipv6SecurityEventCount = lan.Ipv6SecurityEventCount;
 
         status.TamperRebuiltCount = Rules.TamperRebuiltCount;
         status.LastTamperUtc = Rules.LastTamperUtc;

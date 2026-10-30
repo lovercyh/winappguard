@@ -163,6 +163,7 @@ internal static class Program
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--ipv6-security-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--dns-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--wfp-dacl-sddl-test", StringComparer.OrdinalIgnoreCase)
@@ -442,6 +443,10 @@ internal static class Program
             {
                 RunDnsSecurityTest();
             }
+            else if (args.Contains("--ipv6-security-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunIpv6SecurityTest();
+            }
             else if (args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunTrafficCaptureTest();
@@ -453,6 +458,10 @@ internal static class Program
             else if (args.Contains("--service-dns-security-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceDnsSecurityTest();
+            }
+            else if (args.Contains("--service-ipv6-security-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceIpv6SecurityTest();
             }
             else if (args.Contains("--service-traffic-precise-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1458,6 +1467,15 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "11-dns-security.png"));
 
+            if (TryGetField<TabControl>(form, "_lanTabs", out var lanTabs)
+                && TryGetField<TabPage>(form, "_lanIpv6Page", out var ipv6Page))
+            {
+                TrySelectTab(form, "_tabLan");
+                lanTabs.SelectedTab = ipv6Page;
+                Application.DoEvents();
+                RenderFormTo(form, Path.Combine(outputDir, "12-ipv6-security.png"));
+            }
+
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
@@ -2044,6 +2062,193 @@ internal static class Program
         TrySetField(form, "_dnsSecServerSignature", null!);
         TrySetField(form, "_dnsSecEventSignature", null!);
         InvokePrivate(form, "RebuildDnsSecurityView", null);
+
+        // ---- IPv6 邻接页 ----
+        TrySetField(form, "_ipv6ServiceAvailable", true);
+        TrySetField(form, "_ipv6Status", new Ipv6SecurityStatusDto
+        {
+            Collecting = true,
+            BaselineReady = true,
+            BaselineUtc = now.ToUniversalTime().AddMinutes(-16),
+            EventCount = 8,
+            RouterCount = 2,
+            DhcpServerCount = 2,
+            NeighborCount = 3,
+            NpcapVersion = "1.90",
+        });
+
+        TrySetField(form, "_ipv6Routers", new List<Ipv6RouterDto>
+        {
+            new()
+            {
+                LinkLocal = "fe80::1",
+                Mac = "aa:bb:cc:00:11:22",
+                Prefixes = "fd00:4:4::/64",
+                Flags = "M/O",
+                Lifetime = 1800,
+                Baseline = true,
+                Trusted = true,
+            },
+            new()
+            {
+                LinkLocal = "fe80::66",
+                Mac = "de:ad:be:ef:00:66",
+                Prefixes = "fd00:6:6::/64",
+                Flags = "—",
+                Lifetime = 1800,
+                Baseline = false,
+                Trusted = false,
+            },
+        });
+
+        TrySetField(form, "_ipv6DhcpServers", new List<Ipv6DhcpServerDto>
+        {
+            new()
+            {
+                ServerId = "00010001ABCD",
+                Address = "fe80::1",
+                Mac = "aa:bb:cc:00:11:22",
+                Dns = "fd00:4:4::53",
+                Domains = "lan.example",
+                MinLeaseSeconds = 3600,
+                Baseline = true,
+                Trusted = true,
+            },
+            new()
+            {
+                ServerId = "00010002DEAD",
+                Address = "fe80::66",
+                Mac = "de:ad:be:ef:00:66",
+                Dns = "fd00:6:6::53",
+                Domains = "evil.example",
+                MinLeaseSeconds = 30,
+                Baseline = false,
+                Trusted = false,
+            },
+        });
+
+        TrySetField(form, "_ipv6Neighbors", new List<Ipv6NeighborDto>
+        {
+            new()
+            {
+                Address = "fd00:4:4::100",
+                Mac = "aa:bb:cc:00:11:22",
+                IsRouter = false,
+                FirstSeenUtc = now.ToUniversalTime().AddMinutes(-16),
+            },
+            new()
+            {
+                Address = "fe80::66",
+                Mac = "de:ad:be:ef:00:66",
+                IsRouter = true,
+                FirstSeenUtc = now.ToUniversalTime().AddMinutes(-3),
+            },
+            new()
+            {
+                Address = "fd00:4:4::101",
+                Mac = "de:ad:be:ef:00:66",
+                IsRouter = false,
+                FirstSeenUtc = now.ToUniversalTime().AddMinutes(-2),
+            },
+        });
+
+        TrySetField(form, "_ipv6Events", new List<LanEventDto>
+        {
+            new()
+            {
+                Id = "ipv6-1",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-2),
+                Kind = "ipv6_ra_unexpected_router",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "出现基线外的 IPv6 路由器 fe80::66（MAC de:ad:be:ef:00:66）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "fe80::66",
+            },
+            new()
+            {
+                Id = "ipv6-2",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-3),
+                Kind = "ipv6_ra_prefix_changed",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "路由器 fe80::1 的 on-link 前缀发生变化。",
+                SourceMac = "aa:bb:cc:00:11:22",
+                TargetIp = "fe80::1",
+            },
+            new()
+            {
+                Id = "ipv6-3",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-4),
+                Kind = "ipv6_dhcpv6_unexpected_server",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "出现基线外的 DHCPv6 服务器 fe80::66（Server ID 00010002DEAD）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "fe80::66",
+            },
+            new()
+            {
+                Id = "ipv6-4",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-5),
+                Kind = "ipv6_na_router_mac_changed",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "路由器 fe80::1 的 NA 声明的 MAC 从 aa:bb:cc:00:11:22 变为 de:ad:be:ef:00:01。",
+                SourceMac = "de:ad:be:ef:00:01",
+                TargetIp = "fe80::1",
+            },
+            new()
+            {
+                Id = "ipv6-5",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-7),
+                Kind = "ipv6_dhcpv6_short_lease",
+                Severity = "low",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "DHCPv6 服务器 fe80::66 下发的租期异常短（30 秒）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "fe80::66",
+            },
+            new()
+            {
+                Id = "ipv6-6",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-8),
+                Kind = "ipv6_redirect_unexpected",
+                Severity = "medium",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "非基线路由器 fe80::66 发送了 IPv6 Redirect。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "fd00:4:4::1",
+            },
+            new()
+            {
+                Id = "ipv6-7",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-10),
+                Kind = "ipv6_na_mac_behavior",
+                Severity = "medium",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "MAC de:ad:be:ef:00:66 声称了 9 个 IPv6 地址。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "fd00:4:4::101",
+            },
+            new()
+            {
+                Id = "ipv6-8",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-12),
+                Kind = "ipv6_dad_conflict",
+                Severity = "medium",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "本机地址 fd00:4:4::100 正在被其他设备做 DAD 探测。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "fd00:4:4::100",
+            },
+        });
+
+        TrySetField(form, "_ipv6RouterSignature", null!);
+        TrySetField(form, "_ipv6DhcpSignature", null!);
+        TrySetField(form, "_ipv6NeighborSignature", null!);
+        TrySetField(form, "_ipv6EventSignature", null!);
+        InvokePrivate(form, "RebuildIpv6View", null);
 
         // ---- DNS 页 ----
         TrySetField(form, "_dnsCollecting", true);
@@ -4915,6 +5120,69 @@ internal static class Program
                             W("    DNS 安全状态行 = " + dnsStatusLabel.Text);
                             CheckAssertion(results, "英文：DNS 安全状态行无中文",
                                 !HasCjk(dnsStatusLabel.Text));
+                        }
+
+                        // 4.4：局域网内的 IPv6 邻接二级页。
+                        if (TryGetField<TabControl>(form, "_lanTabs", out var lanTabs)
+                            && TryGetField<TabPage>(form, "_lanIpv6Page", out var ipv6Page))
+                        {
+                            lanTabs.SelectedTab = ipv6Page;
+                            Application.DoEvents();
+
+                            var lanSubTabs = lanTabs.TabPages.Cast<TabPage>()
+                                .Select(page => page.Text)
+                                .ToList();
+
+                            W("    局域网二级标签 = " + string.Join(" | ", lanSubTabs));
+                            CheckAssertion(results, "英文：局域网二级标签无中文",
+                                lanSubTabs.Count == 2 && lanSubTabs.All(text => !HasCjk(text)));
+
+                            var ipv6Buttons = new[]
+                            {
+                                "_ipv6RefreshButton", "_ipv6ClearButton", "_ipv6ResetBaselineButton",
+                                "_ipv6TrustRouterButton", "_ipv6TrustDhcpButton",
+                            }
+                                .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
+                                .Where(button => button is not null)
+                                .Select(button => button!)
+                                .ToList();
+
+                            W("    IPv6 邻接页按钮 = " + string.Join(" | ", ipv6Buttons.Select(button => button.Text)));
+                            CheckAssertion(results, "英文：IPv6 邻接页按钮无中文",
+                                ipv6Buttons.Count == 5 && ipv6Buttons.All(button => !HasCjk(button.Text)));
+
+                            foreach (var name in new[]
+                                     {
+                                         "_ipv6RouterGrid", "_ipv6DhcpGrid",
+                                         "_ipv6NeighborGrid", "_ipv6EventGrid",
+                                     })
+                            {
+                                if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, name, out var grid))
+                                {
+                                    var headers = grid.Columns.Cast<DataGridViewColumn>()
+                                        .Select(column => column.HeaderText)
+                                        .ToList();
+
+                                    W($"    {name} 列头 = " + string.Join(" | ", headers));
+                                    CheckAssertion(results, $"英文：{name} 列头/空状态无中文",
+                                        headers.All(text => !HasCjk(text)) && !HasCjk(grid.EmptyText));
+                                }
+                                else
+                                {
+                                    CheckAssertion(results, $"找得到 {name}", false);
+                                }
+                            }
+
+                            if (TryGetField<Label>(form, "_ipv6StatusLabel", out var ipv6StatusLabel))
+                            {
+                                W("    IPv6 邻接状态行 = " + ipv6StatusLabel.Text);
+                                CheckAssertion(results, "英文：IPv6 邻接状态行无中文",
+                                    !HasCjk(ipv6StatusLabel.Text));
+                            }
+                        }
+                        else
+                        {
+                            CheckAssertion(results, "找得到局域网二级标签与 IPv6 页", false);
                         }
                     }
                     else
@@ -11476,6 +11744,150 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
+    /// <summary>
+    /// 4.4：IPv6 邻接安全服务端实测（状态 / 信任 / 清空 / 重置基线）。
+    /// 只在 VM 上跑：会读写服务端状态文件。
+    /// </summary>
+    private static void RunServiceIpv6SecurityTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   4.4 IPv6 邻接安全服务端实测（状态 / 信任 / 清空 / 基线）    #");
+        W("################################################################");
+        W();
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            W("    服务不可用：请先安装/启动 WinAppGuardSvc。");
+            CheckAssertion(results, "服务可用", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        CheckAssertion(results, "服务版本是 4.4 或更高",
+            status.ServiceVersion.StartsWith("4.4", StringComparison.Ordinal));
+        CheckAssertion(results, "IPv6 邻接采集在跑", status.Ipv6SecurityCollecting);
+
+        var snapshot = QueryIpv6Response(out var queryError);
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取 IPv6 邻接失败：{snapshot?.Error ?? queryError}");
+            CheckAssertion(results, "读取 IPv6 邻接快照", false);
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    采集={snapshot.Ipv6SecurityStatus?.Collecting} " +
+          $"基线={snapshot.Ipv6SecurityStatus?.BaselineReady} " +
+          $"路由器={snapshot.Ipv6SecurityStatus?.RouterCount} " +
+          $"DHCPv6={snapshot.Ipv6SecurityStatus?.DhcpServerCount} " +
+          $"邻居={snapshot.Ipv6SecurityStatus?.NeighborCount} " +
+          $"事件={snapshot.Ipv6SecurityStatus?.EventCount}");
+
+        CheckAssertion(results, "返回 IPv6 状态与端点列表",
+            snapshot.Ipv6SecurityStatus is not null
+            && snapshot.Ipv6Routers is not null
+            && snapshot.Ipv6DhcpServers is not null
+            && snapshot.Ipv6Neighbors is not null);
+
+        const string testRouter = "fe80::4:4";
+        const string testMac = "02:00:00:00:00:44";
+
+        try
+        {
+            var trust = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.TrustIpv6,
+                    Ipv6TrustKind = "router",
+                    Ipv6TrustValue = testRouter,
+                    Ipv6TrustMac = testMac,
+                    Ipv6TrustEnabled = true,
+                },
+                TimeSpan.FromSeconds(15),
+                out var trustError);
+
+            CheckAssertion(results, "信任 IPv6 路由器命令成功", trust is { Ok: true });
+
+            if (trust is null)
+            {
+                W($"    信任失败：{trustError}");
+            }
+
+            var untrust = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.TrustIpv6,
+                    Ipv6TrustKind = "router",
+                    Ipv6TrustValue = testRouter,
+                    Ipv6TrustMac = testMac,
+                    Ipv6TrustEnabled = false,
+                },
+                TimeSpan.FromSeconds(15),
+                out var untrustError);
+
+            CheckAssertion(results, "取消信任 IPv6 路由器命令成功", untrust is { Ok: true });
+
+            if (untrust is null)
+            {
+                W($"    取消信任失败：{untrustError}");
+            }
+
+            var clear = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ClearIpv6Security },
+                TimeSpan.FromSeconds(15),
+                out var clearError);
+
+            CheckAssertion(results, "清空 IPv6 事件",
+                clear is { Ok: true } && clear.Ipv6SecurityEvents is { Count: 0 });
+
+            if (clear is null)
+            {
+                W($"    清空失败：{clearError}");
+            }
+
+            var reset = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.ResetIpv6Baseline },
+                TimeSpan.FromSeconds(15),
+                out var resetError);
+
+            CheckAssertion(results, "重置 IPv6 基线", reset is { Ok: true });
+
+            if (reset is null)
+            {
+                W($"    重置失败：{resetError}");
+            }
+        }
+        finally
+        {
+            ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.TrustIpv6,
+                    Ipv6TrustKind = "router",
+                    Ipv6TrustValue = testRouter,
+                    Ipv6TrustMac = testMac,
+                    Ipv6TrustEnabled = false,
+                },
+                TimeSpan.FromSeconds(15),
+                out _);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static ServiceResponse? QueryIpv6Response(out string? error)
+    {
+        return ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryIpv6Security },
+            TimeSpan.FromSeconds(5),
+            out error);
+    }
+
     private static ServiceResponse? QueryDnsSecurityResponse(out string? error)
     {
         return ServiceClient.TryRequest(
@@ -13627,6 +14039,514 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
+    /// <summary>
+    /// 4.4：IPv6 邻接安全离线自检（RA / DHCPv6 / NDP 解析与规则）。
+    /// 只构造字节与消息，不依赖 Npcap。
+    /// </summary>
+    private static void RunIpv6SecurityTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = new DateTime(2026, 10, 30, 10, 0, 0, DateTimeKind.Utc);
+        var gatewayMac = "aa:bb:cc:00:11:22";
+
+        static byte MacByte(string part) => Convert.ToByte(part, 16);
+
+        static void U16(List<byte> bytes, ushort value)
+        {
+            bytes.Add((byte)(value >> 8));
+            bytes.Add((byte)value);
+        }
+
+        static void U32(List<byte> bytes, uint value)
+        {
+            bytes.Add((byte)(value >> 24));
+            bytes.Add((byte)(value >> 16));
+            bytes.Add((byte)(value >> 8));
+            bytes.Add((byte)value);
+        }
+
+        static void AddMac(List<byte> bytes, string mac)
+        {
+            foreach (var part in mac.Split(':'))
+            {
+                bytes.Add(MacByte(part));
+            }
+        }
+
+        static void AddAddress(List<byte> bytes, string address)
+        {
+            bytes.AddRange(IPAddress.Parse(address).GetAddressBytes());
+        }
+
+        static byte[] BuildRa(
+            string prefix,
+            string dns,
+            string mac,
+            ushort lifetime = 1800,
+            byte flags = 0x80,
+            uint valid = 2592000,
+            uint preferred = 604800)
+        {
+            var bytes = new List<byte>
+            {
+                134, 0, 0, 0,
+                64,
+                flags,
+            };
+            U16(bytes, lifetime);
+            U32(bytes, 0);
+            U32(bytes, 0);
+
+            // SLLA
+            bytes.Add(1);
+            bytes.Add(1);
+            AddMac(bytes, mac);
+
+            // Prefix Information
+            bytes.Add(3);
+            bytes.Add(4);
+            bytes.Add(64);
+            bytes.Add(0xC0);
+            U32(bytes, valid);
+            U32(bytes, preferred);
+            U32(bytes, 0);
+            AddAddress(bytes, prefix);
+
+            // RDNSS
+            bytes.Add(25);
+            bytes.Add(3);
+            U16(bytes, 0);
+            U32(bytes, 300);
+            AddAddress(bytes, dns);
+
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildNa(
+            string target,
+            string targetMac,
+            string sourceMac,
+            bool router = false,
+            bool solicited = true)
+        {
+            var flags = (byte)((router ? 0x80 : 0) | (solicited ? 0x40 : 0));
+            var bytes = new List<byte> { 136, 0, 0, 0, flags };
+            bytes.AddRange(new byte[3]);
+            AddAddress(bytes, target);
+            bytes.Add(2);
+            bytes.Add(1);
+            AddMac(bytes, targetMac);
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildNs(string target, string sourceMac)
+        {
+            var bytes = new List<byte> { 135, 0, 0, 0 };
+            bytes.AddRange(new byte[4]);
+            AddAddress(bytes, target);
+            bytes.Add(1);
+            bytes.Add(1);
+            AddMac(bytes, sourceMac);
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildRedirect(string target, string destination, string targetMac)
+        {
+            var bytes = new List<byte> { 137, 0, 0, 0 };
+            bytes.AddRange(new byte[4]);
+            AddAddress(bytes, target);
+            AddAddress(bytes, destination);
+            bytes.Add(2);
+            bytes.Add(1);
+            AddMac(bytes, targetMac);
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildDhcp(
+            string serverIdHex,
+            string dns,
+            string address,
+            uint preferred,
+            uint valid,
+            byte messageType = 2)
+        {
+            var bytes = new List<byte> { messageType, 0x01, 0x02, 0x03 };
+
+            var serverId = Convert.FromHexString(serverIdHex);
+            U16(bytes, 2);
+            U16(bytes, (ushort)serverId.Length);
+            bytes.AddRange(serverId);
+
+            U16(bytes, 23);
+            U16(bytes, 16);
+            AddAddress(bytes, dns);
+
+            U16(bytes, 3);
+            U16(bytes, 40);
+            U32(bytes, 1);
+            U32(bytes, 0);
+            U32(bytes, 0);
+            U16(bytes, 5);
+            U16(bytes, 24);
+            AddAddress(bytes, address);
+            U32(bytes, preferred);
+            U32(bytes, valid);
+
+            return bytes.ToArray();
+        }
+
+        W("################################################################");
+        W("#   4.4 IPv6 邻接安全（离线：RA / DHCPv6 / NDP / 信任 / 落盘）  #");
+        W("################################################################");
+        W();
+
+        var raBytes = BuildRa("fd00:4:4::", "fd00:4:4::53", gatewayMac);
+
+        CheckAssertion(results, "解析 RA：源/前缀/DNS/标志",
+            NpcapLanCapture.TryParseRaPayload(
+                raBytes, start, "eth0", "fe80::1", "ff02::1", 64, gatewayMac, out var parsedRa)
+            && parsedRa.Managed
+            && parsedRa.RouterLifetime == 1800
+            && parsedRa.Prefixes.Count == 1
+            && parsedRa.Prefixes[0].Prefix == "fd00:4:4::"
+            && parsedRa.Prefixes[0].PrefixLength == 64
+            && parsedRa.DnsServers.Contains("fd00:4:4::53"));
+
+        var state = new Ipv6State();
+        var analyzer = new Ipv6Analyzer(state, start);
+        var events = new List<LanEvent>();
+        analyzer.EventObserved = item =>
+        {
+            events.Add(item);
+            W($"    IPv6 事件：{item.Kind} / {item.Severity} / {item.Detail}");
+        };
+        analyzer.UpdateLocalAddresses(new[] { "fd00:4:4::100" });
+
+        analyzer.ObserveRa(parsedRa, start);
+        CheckAssertion(results, "基线：首个带前缀的路由器被记录",
+            analyzer.Snapshot().Routers.Count == 1);
+
+        state.DhcpServers.Add(new Ipv6DhcpServer
+        {
+            ServerId = "00010000",
+            Address = "fe80::53",
+            Mac = gatewayMac,
+            Baseline = true,
+            FirstSeenUtc = start,
+            LastSeenUtc = start,
+        });
+
+        analyzer.ObserveRa(parsedRa, start.AddMilliseconds(10));
+        CheckAssertion(results, "基线：路由器 + DHCPv6 后立即就绪",
+            analyzer.BaselineReady);
+
+        var idleAnalyzer = new Ipv6Analyzer(new Ipv6State(), start);
+        idleAnalyzer.Tick(start.AddMinutes(5));
+        CheckAssertion(results, "基线：没有 IPv6 流量时 5 分钟后结束学习",
+            idleAnalyzer.BaselineReady);
+
+        var changedPrefix = BuildRa("fd00:4:5::", "fd00:4:4::53", gatewayMac);
+        NpcapLanCapture.TryParseRaPayload(
+            changedPrefix, start.AddSeconds(1), "eth0", "fe80::1", "ff02::1", 64, gatewayMac,
+            out var parsedPrefix);
+        analyzer.ObserveRa(parsedPrefix, start.AddSeconds(1));
+
+        CheckAssertion(results, "RA 前缀变化触发高危",
+            events.Any(item => item.Kind == Ipv6EventKinds.RaPrefixChanged
+                               && item.Severity == LanSeverity.High));
+
+        var changedLifetime = BuildRa("fd00:4:4::", "fd00:4:4::53", gatewayMac, lifetime: 100);
+        NpcapLanCapture.TryParseRaPayload(
+            changedLifetime, start.AddSeconds(2), "eth0", "fe80::1", "ff02::1", 64, gatewayMac,
+            out var parsedLifetime);
+        analyzer.ObserveRa(parsedLifetime, start.AddSeconds(2));
+
+        CheckAssertion(results, "RA 生命周期变化触发中危",
+            events.Any(item => item.Kind == Ipv6EventKinds.RaFlagsOrLifetimeChanged
+                               && item.Severity == LanSeverity.Medium));
+
+        var rogueRa = BuildRa("fd00:6:6::", "fd00:6:6::53", "bb:bb:bb:bb:bb:bb");
+        NpcapLanCapture.TryParseRaPayload(
+            rogueRa, start.AddSeconds(3), "eth0", "fe80::2", "ff02::1", 64, "bb:bb:bb:bb:bb:bb",
+            out var parsedRogue);
+        analyzer.ObserveRa(parsedRogue, start.AddSeconds(3));
+
+        CheckAssertion(results, "非基线路由器 RA 触发高危",
+            events.Any(item => item.Kind == Ipv6EventKinds.RaUnexpectedRouter
+                               && item.Severity == LanSeverity.High));
+
+        CheckAssertion(results, "多个 IPv6 路由器触发中危",
+            events.Any(item => item.Kind == Ipv6EventKinds.RaMultipleRouters));
+
+        var beforeRaFlood = events.Count;
+        for (var i = 0; i < 25; i++)
+        {
+            var flood = BuildRa("fd00:7:7::", "fd00:7:7::53", "cc:cc:cc:cc:cc:cc");
+            NpcapLanCapture.TryParseRaPayload(
+                flood, start.AddSeconds(10).AddMilliseconds(i), "eth0", "fe80::3", "ff02::1", 64,
+                "cc:cc:cc:cc:cc:cc", out var parsedFlood);
+            analyzer.ObserveRa(parsedFlood, start.AddSeconds(10).AddMilliseconds(i));
+        }
+
+        CheckAssertion(results, "RA 洪水触发低危",
+            events.Skip(beforeRaFlood).Any(item => item.Kind == Ipv6EventKinds.RaFlood));
+
+        var beforeTrust = events.Count(item => item.Kind == Ipv6EventKinds.RaUnexpectedRouter);
+        analyzer.TrustRouter("fe80::2", "bb:bb:bb:bb:bb:bb", true, start.AddMinutes(1));
+        analyzer.ObserveRa(parsedRogue, start.AddMinutes(1));
+
+        CheckAssertion(results, "信任路由器后不再报 RA 来源异常",
+            events.Count(item => item.Kind == Ipv6EventKinds.RaUnexpectedRouter) == beforeTrust);
+
+        // ---- DHCPv6 ----
+        var dhcpBytes = BuildDhcp("00010001", "fd00:4:4::53", "fd00:4:4::100", 3600, 7200);
+
+        CheckAssertion(results, "解析 DHCPv6：Server ID / DNS / IA",
+            NpcapLanCapture.TryParseDhcpv6Payload(
+                dhcpBytes, start, "eth0", "fe80::1", "fe80::100", 547, 546, gatewayMac,
+                out var parsedDhcp)
+            && parsedDhcp.ServerToClient
+            && parsedDhcp.ServerId == "00010001"
+            && parsedDhcp.DnsServers.Contains("fd00:4:4::53")
+            && parsedDhcp.IaAddresses.Count == 1
+            && parsedDhcp.IaAddresses[0].Address == "fd00:4:4::100");
+
+        var dhcpState = new Ipv6State { BaselineReadyUtc = start };
+        var dhcpAnalyzer = new Ipv6Analyzer(dhcpState, start);
+        var dhcpEvents = new List<LanEvent>();
+        dhcpAnalyzer.EventObserved = item => dhcpEvents.Add(item);
+
+        dhcpAnalyzer.ObserveDhcp(parsedDhcp, start);
+
+        CheckAssertion(results, "非基线 DHCPv6 服务器触发高危",
+            dhcpEvents.Any(item => item.Kind == Ipv6EventKinds.DhcpUnexpectedServer
+                                   && item.Severity == LanSeverity.High));
+
+        dhcpState.DhcpServers.Add(new Ipv6DhcpServer
+        {
+            ServerId = "00010002",
+            Address = "fe80::2",
+            Mac = "bb:bb:bb:bb:bb:bb",
+            DnsServers = new List<string> { "fd00:4:4::53" },
+            Baseline = true,
+            FirstSeenUtc = start,
+            LastSeenUtc = start,
+        });
+
+        var changedDhcp = BuildDhcp("00010002", "fd00:4:4::54", "fd00:4:4::100", 3600, 7200);
+        NpcapLanCapture.TryParseDhcpv6Payload(
+            changedDhcp, start.AddSeconds(1), "eth0", "fe80::2", "fe80::100", 547, 546,
+            "bb:bb:bb:bb:bb:bb", out var parsedChangedDhcp);
+        dhcpAnalyzer.ObserveDhcp(parsedChangedDhcp, start.AddSeconds(1));
+
+        CheckAssertion(results, "DHCPv6 参数变化触发中危",
+            dhcpEvents.Any(item => item.Kind == Ipv6EventKinds.DhcpOptionMismatch));
+
+        var shortDhcp = BuildDhcp("00010002", "fd00:4:4::53", "fd00:4:4::101", 30, 30);
+        NpcapLanCapture.TryParseDhcpv6Payload(
+            shortDhcp, start.AddSeconds(2), "eth0", "fe80::2", "fe80::100", 547, 546,
+            "bb:bb:bb:bb:bb:bb", out var parsedShortDhcp);
+        dhcpAnalyzer.ObserveDhcp(parsedShortDhcp, start.AddSeconds(2));
+
+        CheckAssertion(results, "DHCPv6 短租期触发低危",
+            dhcpEvents.Any(item => item.Kind == Ipv6EventKinds.DhcpShortLease));
+
+        CheckAssertion(results, "多个 DHCPv6 服务器触发中危",
+            dhcpEvents.Any(item => item.Kind == Ipv6EventKinds.DhcpMultipleServers));
+
+        // ---- NDP ----
+        var naBytes = BuildNa("fe80::1", "bb:bb:bb:bb:bb:bb", "bb:bb:bb:bb:bb:bb", router: true);
+
+        CheckAssertion(results, "解析 NA：R 标志 / target / TLLA",
+            NpcapLanCapture.TryParseNdPayload(
+                naBytes, start, "eth0", "fe80::1", "fe80::100", "bb:bb:bb:bb:bb:bb",
+                out var parsedNa)
+            && parsedNa.Type == 136
+            && parsedNa.Router
+            && parsedNa.TargetAddress == "fe80::1"
+            && parsedNa.TargetMac == "bb:bb:bb:bb:bb:bb");
+
+        var ndpState = new Ipv6State { BaselineReadyUtc = start };
+        ndpState.Routers.Add(new Ipv6Router
+        {
+            LinkLocal = "fe80::1",
+            Mac = gatewayMac,
+            Prefixes = new List<Ipv6PrefixInfo>
+            {
+                new() { Prefix = "fd00:4:4::", PrefixLength = 64, OnLink = true, Autonomous = true },
+            },
+            Baseline = true,
+            FirstSeenUtc = start,
+            LastSeenUtc = start,
+        });
+        ndpState.Neighbors.Add(new Ipv6Neighbor
+        {
+            Address = "fd00:4:4::100",
+            Mac = "aa:bb:cc:00:11:22",
+            FirstSeenUtc = start,
+            LastSeenUtc = start,
+        });
+
+        var ndpAnalyzer = new Ipv6Analyzer(ndpState, start);
+        var ndpEvents = new List<LanEvent>();
+        ndpAnalyzer.EventObserved = item => ndpEvents.Add(item);
+        ndpAnalyzer.UpdateLocalAddresses(new[] { "fd00:4:4::100" });
+
+        ndpAnalyzer.ObserveNd(parsedNa, start);
+
+        CheckAssertion(results, "路由器 NA MAC 变化触发高危",
+            ndpEvents.Any(item => item.Kind == Ipv6EventKinds.NaRouterMacChanged
+                                  && item.Severity == LanSeverity.High));
+
+        var cacheNa = BuildNa("fd00:4:4::100", "bb:bb:bb:bb:bb:bb", "bb:bb:bb:bb:bb:bb");
+        NpcapLanCapture.TryParseNdPayload(
+            cacheNa, start.AddSeconds(1), "eth0", "fd00:4:4::100", "fe80::1", "bb:bb:bb:bb:bb:bb",
+            out var parsedCacheNa);
+        ndpAnalyzer.ObserveNd(parsedCacheNa, start.AddSeconds(1));
+
+        CheckAssertion(results, "邻居缓存不一致触发中危",
+            ndpEvents.Any(item => item.Kind == Ipv6EventKinds.NaCacheMismatch));
+
+        var senderNa = BuildNa("fd00:4:4::200", "bb:bb:bb:bb:bb:bb", "dd:dd:dd:dd:dd:dd");
+        NpcapLanCapture.TryParseNdPayload(
+            senderNa, start.AddSeconds(2), "eth0", "fe80::9", "fe80::100", "dd:dd:dd:dd:dd:dd",
+            out var parsedSenderNa);
+        ndpAnalyzer.ObserveNd(parsedSenderNa, start.AddSeconds(2));
+
+        CheckAssertion(results, "NDP SLLA/TLLA 与源 MAC 不一致触发中危",
+            ndpEvents.Any(item => item.Kind == Ipv6EventKinds.NdSenderMismatch));
+
+        var dadNs = BuildNs("fd00:4:4::100", "ee:ee:ee:ee:ee:ee");
+        NpcapLanCapture.TryParseNdPayload(
+            dadNs, start.AddSeconds(3), "eth0", "::", "ff02::1:ff00:100", "ee:ee:ee:ee:ee:ee",
+            out var parsedDadNs);
+        ndpAnalyzer.ObserveNd(parsedDadNs, start.AddSeconds(3));
+
+        CheckAssertion(results, "DAD 冲突触发中危",
+            ndpEvents.Any(item => item.Kind == Ipv6EventKinds.DadConflict));
+
+        var redirect = BuildRedirect("fd00:4:4::1", "fd00:4:4::2", "ee:ee:ee:ee:ee:ee");
+        NpcapLanCapture.TryParseNdPayload(
+            redirect, start.AddSeconds(4), "eth0", "fe80::66", "fe80::100", "ee:ee:ee:ee:ee:ee",
+            out var parsedRedirect);
+        ndpAnalyzer.ObserveNd(parsedRedirect, start.AddSeconds(4));
+
+        CheckAssertion(results, "非网关 Redirect 触发中危",
+            ndpEvents.Any(item => item.Kind == Ipv6EventKinds.RedirectUnexpected));
+
+        for (var i = 0; i < 10; i++)
+        {
+            var behavior = BuildNa($"fd00:4:5::{i + 1}", "ff:ff:ff:ff:ff:ff", "ff:ff:ff:ff:ff:ff");
+            NpcapLanCapture.TryParseNdPayload(
+                behavior, start.AddSeconds(20 + i), "eth0", "fe80::9", "fe80::100",
+                "ff:ff:ff:ff:ff:ff", out var parsedBehavior);
+            ndpAnalyzer.ObserveNd(parsedBehavior, start.AddSeconds(20 + i));
+        }
+
+        CheckAssertion(results, "同一 MAC 声称多个地址触发中危",
+            ndpEvents.Any(item => item.Kind == Ipv6EventKinds.NaMacBehavior));
+
+        // ---- 状态 / 落盘 / DTO ----
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-Ipv6Test-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var statePath = Path.Combine(directory, "state.json");
+            var saved = new Ipv6State
+            {
+                BaselineReadyUtc = start,
+                Routers = ndpState.Routers,
+                DhcpServers = dhcpState.DhcpServers,
+                Neighbors = ndpState.Neighbors,
+                TrustedRouters = new List<string> { Ipv6TrustKeys.Router("fe80::1", gatewayMac) },
+                TrustedDhcpServers = new List<string> { Ipv6TrustKeys.Dhcp("00010002", "bb:bb:bb:bb:bb:bb") },
+            };
+
+            Ipv6StateStore.Save(statePath, saved);
+            var loaded = Ipv6StateStore.Load(statePath);
+
+            CheckAssertion(results, "状态文件：路由器 / DHCPv6 / 邻居 / 信任往返",
+                loaded.BaselineReadyUtc == start
+                && loaded.Routers.Count == 1
+                && loaded.DhcpServers.Count >= 1
+                && loaded.Neighbors.Count >= 1
+                && loaded.TrustedRouters.Count == 1
+                && loaded.TrustedDhcpServers.Count == 1);
+
+            var eventStore = new LanEventStore(directory);
+            eventStore.Append(new LanEvent
+            {
+                TimeUtc = start,
+                Kind = Ipv6EventKinds.RaUnexpectedRouter,
+                Severity = LanSeverity.High,
+                Adapter = "eth0",
+                Detail = "test",
+            });
+
+            CheckAssertion(results, "IPv6 事件独立落盘",
+                eventStore.ReadRecent(10).Count == 1);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录删不掉不影响自检。
+            }
+        }
+
+        var response = new ServiceResponse
+        {
+            Ok = true,
+            Ipv6SecurityStatus = new Ipv6SecurityStatusDto
+            {
+                Collecting = true,
+                BaselineReady = true,
+                BaselineUtc = start,
+                EventCount = 1,
+                RouterCount = 1,
+                DhcpServerCount = 1,
+                NeighborCount = 1,
+                NpcapVersion = "1.90",
+            },
+            Ipv6Routers = new List<Ipv6RouterDto>
+            {
+                new() { LinkLocal = "fe80::1", Mac = gatewayMac, Prefixes = "fd00:4:4::/64", Trusted = true },
+            },
+            Ipv6DhcpServers = new List<Ipv6DhcpServerDto>
+            {
+                new() { ServerId = "00010001", Address = "fe80::1", Dns = "fd00:4:4::53" },
+            },
+            Ipv6Neighbors = new List<Ipv6NeighborDto>
+            {
+                new() { Address = "fd00:4:4::100", Mac = gatewayMac, IsRouter = false },
+            },
+            Ipv6SecurityEvents = new List<LanEventDto>
+            {
+                new() { Id = "ipv6-1", Kind = Ipv6EventKinds.RaUnexpectedRouter, Severity = "high" },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+
+        CheckAssertion(results, "协议 DTO：IPv6 状态 / 路由器 / DHCPv6 / 邻居 / 事件往返",
+            back?.Ipv6SecurityStatus is { Collecting: true, BaselineReady: true, RouterCount: 1 }
+            && back.Ipv6Routers is { Count: 1 }
+            && back.Ipv6DhcpServers is { Count: 1 }
+            && back.Ipv6Neighbors is { Count: 1 }
+            && back.Ipv6SecurityEvents is { Count: 1 });
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunAntiScanTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -14452,6 +15372,66 @@ internal static class Program
                     else
                     {
                         CheckAssertion(results, "找得到 DNS 安全子标签与两张表", false);
+                    }
+
+                    // 4.4：局域网内的 IPv6 邻接页布局与深链。
+                    if (TryGetField<TabControl>(form, "_protectionTabs", out var ipv6ProtectionTabs)
+                        && TryGetField<TabPage>(form, "_tabLan", out var ipv6LanTab)
+                        && TryGetField<TabControl>(form, "_lanTabs", out var lanTabs)
+                        && TryGetField<TabPage>(form, "_lanIpv6Page", out var ipv6Page)
+                        && TryGetField<TabControl>(form, "_ipv6EndpointTabs", out var ipv6EndpointTabs)
+                        && TryGetField<DataGridView>(form, "_ipv6EventGrid", out var ipv6EventGrid)
+                        && TryGetField<DataGridView>(form, "_ipv6RouterGrid", out var ipv6RouterGrid)
+                        && TryGetField<DataGridView>(form, "_ipv6DhcpGrid", out var ipv6DhcpGrid)
+                        && TryGetField<DataGridView>(form, "_ipv6NeighborGrid", out var ipv6NeighborGrid))
+                    {
+                        ipv6ProtectionTabs.SelectedTab = ipv6LanTab;
+                        lanTabs.SelectedTab = ipv6Page;
+                        form.PerformLayout();
+                        Application.DoEvents();
+
+                        var ipv6Fixed = ipv6EventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Where(column => column.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
+                            .Sum(column => column.Width);
+                        var ipv6Fill = ipv6EventGrid.Columns.Cast<DataGridViewColumn>()
+                            .Where(column => column.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
+                            .Sum(column => column.MinimumWidth);
+
+                        W($"    980 宽 IPv6 邻接：列宽合计 {ipv6Fixed + ipv6Fill}px / " +
+                          $"客户区 {ipv6EventGrid.ClientSize.Width}px；" +
+                          $"端点标签 {ipv6EndpointTabs.TabPages.Count} 个");
+
+                        CheckAssertion(results, "最小宽度下 IPv6 邻接列不溢出",
+                            ipv6Fixed + ipv6Fill <= ipv6EventGrid.ClientSize.Width);
+                        CheckAssertion(results, "IPv6 页四张表都已加载",
+                            ipv6RouterGrid.Columns.Count > 0
+                            && ipv6DhcpGrid.Columns.Count > 0
+                            && ipv6NeighborGrid.Columns.Count > 0
+                            && ipv6EventGrid.Columns.Count > 0);
+                        CheckAssertion(results, "IPv6 端点页为路由器 / DHCPv6 / 邻居",
+                            ipv6EndpointTabs.TabPages.Count == 3);
+
+                        var ipv6SelectMethod = typeof(MainForm).GetMethod(
+                            "SelectProtectionTab",
+                            BindingFlags.Instance | BindingFlags.NonPublic);
+
+                        if (ipv6SelectMethod is not null)
+                        {
+                            ipv6SelectMethod.Invoke(form, new object[] { ipv6LanTab });
+                            lanTabs.SelectedTab = ipv6Page;
+
+                            CheckAssertion(results, "深链：切到防护 → 局域网 → IPv6 邻接",
+                                ipv6ProtectionTabs.SelectedTab == ipv6LanTab
+                                && lanTabs.SelectedTab == ipv6Page);
+                        }
+                        else
+                        {
+                            CheckAssertion(results, "找得到 IPv6 邻接深链方法", false);
+                        }
+                    }
+                    else
+                    {
+                        CheckAssertion(results, "找得到 IPv6 邻接页与四张表", false);
                     }
                 }
             }

@@ -46,6 +46,12 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 > DNS 服务器非网关）与**明文 DNS 绕过**；**只告警、不阻断**，
 > 事件复用 4.2 的落盘与保留期。详见
 > [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md)。
+>
+> **4.4 新增 IPv6 邻接安全**：「局域网」页新增 **IPv6 邻接** 二级页，
+> 检测 RA（非基线路由器、前缀/标志变化、RA 洪水）、DHCPv6 欺骗与 NDP 欺骗
+> （路由器 NA MAC 变化、邻居缓存不一致、Redirect、DAD 冲突等）；**默认只告警**，
+> RA/DHCPv6 阻断需 VM POC 通过，NDP 不阻断。详见
+> [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
@@ -92,6 +98,13 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
   DNS 服务器非网关）与**明文 DNS 绕过**；8 条规则、2 分钟静默基线、信任列表、
   事件按 7/15/30 天落盘；**只告警、不阻断**。只抓 IPv4 UDP 53，
   DoH/DoT 不在 4.3 范围；IPv6 DNS 与邻接安全放 4.4。
+- **IPv6 邻接安全（4.4）**：「防护 → 局域网 → IPv6 邻接」检测 **RA**
+  （非基线路由器、多路由器、前缀/标志/生命周期变化、RA 洪水）、**DHCPv6 欺骗**
+  （非基线服务器、多服务器、DNS/前缀/生命周期变化、短租期）与 **NDP 欺骗**
+  （路由器 NA MAC 变化、邻居缓存不一致、同一 MAC 多地址/频繁换、免费 NA 突发、
+  SLLA/TLLA 不一致、非网关 Redirect、DAD 冲突）；16 条规则、5 分钟静默基线、
+  路由器/DHCPv6 信任、事件按 7/15/30 天落盘；**默认只告警**。
+  真正的 RA Guard 是交换机功能，本工具做主机侧检测；NDP 不阻断。
 - **临时锁网**：严格模式面板 / 托盘菜单提供 **30 分钟 / 2 小时**；
   到点自动恢复，服务停止或崩溃也会立即恢复，不残留断网状态。
 - **提权/受保护进程路径**：界面读不到时由服务（SYSTEM）代查并补全，
@@ -134,6 +147,9 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
   DNS 安全只解析 DNS 头、问题段与 A/AAAA/CNAME，不保存报文
 - ❌ **DNS 安全只告警、不阻断**；只抓 **IPv4 UDP 53**，DoH/DoT 看不到内容；
   上游 DNS 自己返回假数据时，只有与同请求的其它应答冲突才会命中
+- ❌ **IPv6 邻接安全默认只告警**；真正的 RA Guard 是交换机/网桥功能，
+  本工具只做 Windows 主机侧检测；**NDP 不阻断**（NA/NS 是 IPv6 必需协议）；
+  RA/DHCPv6 阻断需 VM POC 通过后才会提供
 - ❌ 反扫描只检测**入站 TCP SYN**，不做 UDP 扫描、载荷检测或永久自动封禁；
   Npcap 缺失时流量统计与反扫描都显示不可用（安装器要求必须安装 Npcap）
 - ❌ **不**阻止系统关键进程（`lsass.exe`、`svchost.exe`、它自己……）——
@@ -204,6 +220,8 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 | ![IDS 页](docs/screenshots/06-ids.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
 | **DNS 安全（4.3）** | **局域网（4.2）** |
 | ![DNS 安全页](docs/screenshots/11-dns-security.png) | ![局域网页](docs/screenshots/10-lan.png) |
+| **IPv6 邻接（4.4）** | **局域网（4.2）** |
+| ![IPv6 邻接页](docs/screenshots/12-ipv6-security.png) | ![局域网页](docs/screenshots/10-lan.png) |
 | **流量** | **DNS** |
 | ![流量页](docs/screenshots/07-traffic.png) | ![DNS 页](docs/screenshots/08-dns.png) |
 | **黑名单** | **严格模式下白名单** |
@@ -277,6 +295,7 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 | 实时速率 | 服务端 1 秒桶 + 5 分钟环形缓冲，界面自绘曲线；每程序速率取 3 秒滑动平均 |
 | DNS 记录 | ETW `Microsoft-Windows-DNS-Client`，只取域名、PID 和结果码；内存保留最近 2000 条 |
 | DNS 安全 | 复用 4.2 的 Npcap 会话（BPF 增加 UDP 53），只解析 DNS 头、问题段与 A/AAAA/CNAME；按「网卡 + 客户端端口 + 事务 ID」匹配请求/应答；8 条规则只告警，不阻断 |
+| IPv6 邻接安全 | 复用同一个 Npcap 会话（BPF 增加 ICMPv6 / DHCPv6），解析 RA/NS/NA/Redirect 与 DHCPv6 选项；5 分钟基线 + 16 条规则；状态/事件独立存 `ipv6/`，默认只告警 |
 | Flow IDS | 复用两个 ETW 会话，把连接五元组 / 次数 / 域名交给内存规则引擎；只产生告警，不 inline 阻断（ETW 不再参与流量统计） |
 | 反端口扫描 | Npcap 在 NDIS 层只抓入站 TCP SYN（BPF 过滤），按来源 IP 统计端口 / 主机数；不读载荷 |
 | 临时 IP 封禁 | 用户态 WFP `ALE_AUTH_RECV_ACCEPT_V4/V6` 过滤器，按远端 IP 拦新入站连接；到期或手动解除，不切断已有连接 |
@@ -491,6 +510,8 @@ WinAppGuard.exe --recover
 | [`docs/4.2-VM验收.md`](docs/4.2-VM验收.md) | 4.2 ARP 欺骗/rogue DHCP 实测与 24h 误报观察 |
 | [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md) | 4.3 DNS 应答校验、8 条规则、基线、落盘与边界 |
 | [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) | 4.3 dnsspoof/ettercap/Scapy、明文绕过与 24h 验收 |
+| [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md) | 4.4 RA/DHCPv6/NDP 规则、5 分钟基线、存储与阻断 POC |
+| [`docs/4.4-VM验收.md`](docs/4.4-VM验收.md) | 4.4 IPv6 实验网、radvd/thc-ipv6/dnsmasq 与 24h 验收 |
 
 ## 参与贡献
 

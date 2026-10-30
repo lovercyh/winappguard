@@ -29,6 +29,9 @@ public sealed partial class MainForm
     private DataGridViewBuffered _lanGatewayGrid = null!;
     private DataGridViewBuffered _lanDhcpGrid = null!;
     private DataGridViewBuffered _lanEventGrid = null!;
+    private TabControl _lanTabs = null!;
+    private TabPage _lanIpv4Page = null!;
+    private TabPage _lanIpv6Page = null!;
     private System.Windows.Forms.Timer? _lanTimer;
 
     private List<LanEventDto> _lanEvents = new();
@@ -232,8 +235,48 @@ public sealed partial class MainForm
         _lanGatewayGrid.SelectionChanged += (_, _) => UpdateLanButtons();
         _lanDhcpGrid.SelectionChanged += (_, _) => UpdateLanButtons();
 
-        _tabLan.Controls.Add(mainSplit);
-        _tabLan.Controls.Add(top);
+        _lanTabs = new TabControl
+        {
+            Dock = DockStyle.Fill,
+            Name = "_lanTabs",
+        };
+
+        _lanIpv4Page = new TabPage(Localizer.T("IPv4（ARP / DHCP）"))
+        {
+            Name = "_lanIpv4Page",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
+        _lanIpv6Page = new TabPage(Localizer.T("IPv6 邻接"))
+        {
+            Name = "_lanIpv6Page",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
+        _lanIpv4Page.Controls.Add(mainSplit);
+        _lanIpv4Page.Controls.Add(top);
+        _lanTabs.Controls.Add(_lanIpv4Page);
+        _lanTabs.Controls.Add(_lanIpv6Page);
+        _tabLan.Controls.Add(_lanTabs);
+
+        _lanTabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (!IsProtectionTab(_tabLan))
+            {
+                return;
+            }
+
+            if (_lanTabs.SelectedTab == _lanIpv6Page)
+            {
+                _ = RefreshIpv6Async();
+            }
+            else
+            {
+                _ = RefreshLanAsync();
+            }
+        };
 
         _lanTimer = new System.Windows.Forms.Timer
         {
@@ -242,7 +285,7 @@ public sealed partial class MainForm
         };
         _lanTimer.Tick += (_, _) =>
         {
-            if (_lanAutoRefreshCheckBox.Checked && IsProtectionTab(_tabLan))
+            if (_lanAutoRefreshCheckBox.Checked && IsLanIpv4Tab)
             {
                 _ = RefreshLanAsync();
             }
@@ -251,6 +294,12 @@ public sealed partial class MainForm
         UpdateLanButtons();
         UpdateLanSummary();
     }
+
+    private bool IsLanIpv4Tab
+        => IsProtectionTab(_tabLan) && _lanTabs.SelectedTab == _lanIpv4Page;
+
+    private bool IsLanIpv6Tab
+        => IsProtectionTab(_tabLan) && _lanTabs.SelectedTab == _lanIpv6Page;
 
     private static DataGridViewBuffered CreateLanGrid(string emptyText) => new()
     {
@@ -908,6 +957,22 @@ public sealed partial class MainForm
             "dns_ttl_suspicious" => "TTL 异常",
             "dns_server_not_gateway" => "DNS 服务器非网关",
             "dns_plaintext_bypass" => "明文 DNS 绕过",
+            "ipv6_ra_unexpected_router" => "非基线路由器 RA",
+            "ipv6_ra_multiple_routers" => "多个 IPv6 路由器",
+            "ipv6_ra_prefix_changed" => "RA 前缀变化",
+            "ipv6_ra_flags_or_lifetime_changed" => "RA 标志/生命周期变化",
+            "ipv6_ra_flood" => "RA 洪水",
+            "ipv6_dhcpv6_unexpected_server" => "非基线 DHCPv6 服务器",
+            "ipv6_dhcpv6_multiple_servers" => "多个 DHCPv6 服务器",
+            "ipv6_dhcpv6_option_mismatch" => "DHCPv6 参数变化",
+            "ipv6_dhcpv6_short_lease" => "DHCPv6 租期异常短",
+            "ipv6_na_router_mac_changed" => "路由器 NA MAC 变化",
+            "ipv6_na_cache_mismatch" => "邻居缓存不一致",
+            "ipv6_na_mac_behavior" => "NA MAC 异常",
+            "ipv6_na_unsolicited_burst" => "免费 NA 突发",
+            "ipv6_nd_sender_mismatch" => "NDP 源 MAC 不一致",
+            "ipv6_redirect_unexpected" => "非网关 Redirect",
+            "ipv6_dad_conflict" => "DAD 冲突",
             _ => Kind,
         });
     }

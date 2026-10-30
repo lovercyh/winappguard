@@ -13,7 +13,7 @@
     <AssemblyName>WinAppGuard.Wfp</AssemblyName>
     <RootNamespace>WinAppGuard</RootNamespace>
 
-    <Version>4.3</Version>
+    <Version>4.4</Version>
     <Company>lovercyh</Company>
     <Copyright>Copyright © 2026 lovercyh</Copyright>
   </PropertyGroup>

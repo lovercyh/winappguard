@@ -14,6 +14,47 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
+## [4.4] - 2026-10-30
+
+> 功能版本：新增「IPv6 邻接安全」（RA / DHCPv6 / NDP），放在「防护 → 局域网」的
+> IPv6 二级页；默认只告警，RA/DHCPv6 阻断需 VM POC 通过后才会提供。
+
+### 新增
+
+- 「防护 → 局域网」新增二级标签：**IPv4（ARP / DHCP） / IPv6 邻接**。
+- 「IPv6 邻接」页：
+  - **RA**：非基线路由器、多路由器、前缀变化、标志/生命周期变化、RA 洪水；
+  - **DHCPv6**：非基线服务器、多服务器、DNS/前缀/生命周期变化、短租期；
+  - **NDP**：路由器 NA MAC 变化、邻居缓存不一致、同一 MAC 多地址/频繁换 MAC、
+    免费 NA 突发、SLLA/TLLA 与源 MAC 不一致、非网关 Redirect、DAD 冲突；
+  - 路由器 / DHCPv6 / 邻居三张端点表 + 事件表；
+  - 5 分钟静默基线（或路由器 + DHCPv6 + 前缀同时出现）；
+  - 信任路由器 / 信任 DHCPv6；重置 IPv6 基线；只清 `ipv6_*` 事件；
+  - 高危 IPv6 事件托盘气泡，点击定位到「局域网 → IPv6 邻接」。
+- 采集复用 4.2 的 Npcap 会话，BPF 增加 ICMPv6 / DHCPv6；只解析头部与选项，不保存报文。
+- 状态与事件独立存放：`%ProgramData%\WinAppGuard\ipv6\state.json` 与
+  `ipv6\events-YYYYMMDD.jsonl`；保留期跟随 4.2 的 7/15/30 天。
+- 协议新增：`query.ipv6-security`、`write.ipv6-security.clear`、
+  `write.ipv6-security.trust`、`write.ipv6-security.reset-baseline`。
+
+### 变更
+
+- 「局域网」页从单页改为 IPv4 / IPv6 两个二级标签；顶层防护页仍是四个子标签。
+- 4.2 的 `lan/events` 与 4.3 的 DNS 事件不受影响；IPv6 清空只删自己的事件。
+
+### 边界说明
+
+- 真正的 RA Guard 是交换机功能；本版本做的是 **Windows 主机侧 RA 检测**，
+  可选阻断需 WFP POC，通过前不提供阻断按钮。
+- NDP 只检测、不阻断：NA/NS 是 IPv6 必需协议，拦错会断网。
+- 只处理 IPv6 邻接报文；不做 IPv6 流量统计、DPI 或载荷保存。
+- 无 IPv6 的网络不会产生事件；验收需要 IPv6 实验网（路由器 VM + radvd）。
+
+### 升级说明
+
+- 从 4.3 覆盖安装即可；IPv4 局域网、DNS 安全、规则、白名单、事件全部保留。
+- IPv6 状态/事件是新增目录，不需要迁移；首次启动静默学习 5 分钟。
+
 ## [4.3] - 2026-10-30
 
 > 功能版本：新增「DNS 安全」检测（本地 DNS 劫持 / 投毒 / 明文 DNS 绕过），

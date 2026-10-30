@@ -48,6 +48,12 @@ and finish with *"blocked."*
 > answers, suspicious TTL, DNS server not gateway) and **plaintext DNS bypass**. Alert only,
 > never blocks; events reuse the 4.2 store and retention. See
 > [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md).
+>
+> **4.4 adds IPv6 neighbour security.** The *LAN* page gains an **IPv6 neighbour** sub-tab that
+> detects rogue Router Advertisements (unexpected router, prefix/flags changes, RA flood),
+> DHCPv6 spoofing, and NDP spoofing (router NA MAC change, neighbour cache mismatch, Redirect,
+> DAD conflict, …). **Alert only by default**; RA/DHCPv6 blocking is gated on VM POC, and NDP is
+> never blocked. See [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
@@ -108,6 +114,14 @@ and finish with *"blocked."*
   8 rules, a 2-minute quiet baseline, a trust list, and 7 / 15 / 30-day event retention;
   **alert only, never blocks**. It captures IPv4 UDP 53 only; DoH/DoT is out of scope,
   and IPv6 DNS / neighbour security is planned for 4.4.
+- **IPv6 neighbour security (4.4)** — the *LAN → IPv6 neighbour* sub-tab detects **rogue RA**
+  (unexpected router, multiple routers, prefix/flags/lifetime changes, RA flood), **DHCPv6
+  spoofing** (unexpected/multiple servers, DNS/prefix/lifetime changes, short leases), and
+  **NDP spoofing** (router NA MAC change, neighbour cache mismatch, MAC claiming many
+  addresses, unsolicited NA burst, SLLA/TLLA mismatch, non-gateway Redirect, DAD conflict).
+  16 rules, a 5-minute quiet baseline, router/DHCPv6 trust, and 7 / 15 / 30-day retention;
+  **alert only**. True RA Guard is a switch feature; this is host-side detection, and NDP is
+  never blocked.
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
@@ -165,6 +179,9 @@ This needs to be explicit.
 - ❌ DNS security is **alert only** and never blocks; it captures **IPv4 UDP 53** only, so DoH/DoT
   is invisible; an upstream server returning forged data is only caught when it conflicts with
   another response to the same query.
+- ❌ IPv6 neighbour security is **alert only by default**; true RA Guard is a switch/bridge
+  feature and this is host-side detection only. **NDP is never blocked** (NA/NS are required
+  for IPv6), and RA/DHCPv6 blocking is only considered after a VM POC.
 - ❌ Anti-port-scan only inspects **inbound TCP SYN**; no UDP scans, payload inspection or
   permanent automatic blocking. Without Npcap both traffic statistics and anti-scan are
   unavailable (the installer requires Npcap).
@@ -246,6 +263,8 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 | ![IDS tab](docs/screenshots/06-ids.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
 | **DNS security (4.3)** | **LAN (4.2)** |
 | ![DNS security tab](docs/screenshots/11-dns-security.png) | ![LAN tab](docs/screenshots/10-lan.png) |
+| **IPv6 neighbour (4.4)** | **LAN (4.2)** |
+| ![IPv6 neighbour tab](docs/screenshots/12-ipv6-security.png) | ![LAN tab](docs/screenshots/10-lan.png) |
 | **Traffic** | **DNS** |
 | ![Traffic tab](docs/screenshots/07-traffic.png) | ![DNS tab](docs/screenshots/08-dns.png) |
 | **Blocklist** | **Strict-mode whitelist** |
@@ -529,6 +548,8 @@ Most project documentation is in Chinese.
 | [`docs/4.2-VM验收.md`](docs/4.2-VM验收.md) | 4.2 ARP spoof / rogue DHCP tests and 24h false-positive watch |
 | [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md) | 4.3 DNS response validation, 8 rules, baseline, storage and limits |
 | [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) | 4.3 dnsspoof/ettercap/Scapy, plaintext bypass and 24h acceptance |
+| [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md) | 4.4 RA/DHCPv6/NDP rules, 5-minute baseline, storage and blocking POC |
+| [`docs/4.4-VM验收.md`](docs/4.4-VM验收.md) | 4.4 IPv6 lab, radvd/thc-ipv6/dnsmasq and 24h acceptance |
 
 ## Contributing
 

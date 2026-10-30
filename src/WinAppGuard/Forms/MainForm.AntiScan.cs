@@ -543,6 +543,7 @@ public sealed partial class MainForm
 
         InitializeLanPage();
         InitializeDnsSecurityPage();
+        InitializeIpv6Page();
 
         _protectionTabs.SelectedIndexChanged += (_, _) =>
         {
@@ -557,7 +558,15 @@ public sealed partial class MainForm
             }
             else if (_protectionTabs.SelectedTab == _tabLan)
             {
-                _ = RefreshLanAsync();
+                if (_lanTabs.SelectedTab == _lanIpv6Page)
+                {
+                    _ipv6BalloonPending = false;
+                    _ = RefreshIpv6Async();
+                }
+                else
+                {
+                    _ = RefreshLanAsync();
+                }
             }
             else if (_protectionTabs.SelectedTab == _tabDnsSecurity)
             {
@@ -577,7 +586,15 @@ public sealed partial class MainForm
             {
                 if (_protectionTabs.SelectedTab == _tabLan)
                 {
-                    _ = RefreshLanAsync();
+                    if (_lanTabs.SelectedTab == _lanIpv6Page)
+                    {
+                        _ipv6BalloonPending = false;
+                        _ = RefreshIpv6Async();
+                    }
+                    else
+                    {
+                        _ = RefreshLanAsync();
+                    }
                 }
                 else if (_protectionTabs.SelectedTab == _tabDnsSecurity)
                 {

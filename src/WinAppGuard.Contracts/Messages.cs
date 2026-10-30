@@ -112,6 +112,20 @@ public sealed class ServiceRequest
 
     /// <summary>true = 信任，false = 取消信任。</summary>
     public bool DnsTrustEnabled { get; set; }
+
+    // ---- 4.4：IPv6 邻接安全 ----
+
+    /// <summary>router / dhcpv6。</summary>
+    public string? Ipv6TrustKind { get; set; }
+
+    /// <summary>路由器链路本地地址，或 DHCPv6 Server ID。</summary>
+    public string? Ipv6TrustValue { get; set; }
+
+    /// <summary>路由器 / DHCPv6 服务器的 MAC。</summary>
+    public string? Ipv6TrustMac { get; set; }
+
+    /// <summary>true = 信任，false = 取消信任。</summary>
+    public bool Ipv6TrustEnabled { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -217,6 +231,18 @@ public sealed class ServiceResponse
     public List<DnsSecurityServerDto>? DnsSecurityServers { get; set; }
 
     public List<LanEventDto>? DnsSecurityEvents { get; set; }
+
+    // ---- 4.4：IPv6 邻接安全 ----
+
+    public Ipv6SecurityStatusDto? Ipv6SecurityStatus { get; set; }
+
+    public List<Ipv6RouterDto>? Ipv6Routers { get; set; }
+
+    public List<Ipv6DhcpServerDto>? Ipv6DhcpServers { get; set; }
+
+    public List<Ipv6NeighborDto>? Ipv6Neighbors { get; set; }
+
+    public List<LanEventDto>? Ipv6SecurityEvents { get; set; }
 
     public AntiScanSettingsDto? AntiScanSettings { get; set; }
 }
@@ -545,6 +571,12 @@ public sealed class LanStatusDto
 
     public int DnsSecurityEventCount { get; set; }
 
+    // ---- 4.4：IPv6 邻接安全 ----
+
+    public bool Ipv6SecurityCollecting { get; set; }
+
+    public int Ipv6SecurityEventCount { get; set; }
+
     public string? NpcapVersion { get; set; }
 
     public string? LastError { get; set; }
@@ -583,6 +615,90 @@ public sealed class DnsSecurityStatusDto
     public string? NpcapVersion { get; set; }
 
     public string? LastError { get; set; }
+}
+
+// ---- 4.4：IPv6 邻接安全 ----
+
+/// <summary>4.4：IPv6 邻接安全运行状态。</summary>
+public sealed class Ipv6SecurityStatusDto
+{
+    public bool Collecting { get; set; }
+
+    public bool BaselineReady { get; set; }
+
+    public DateTime? BaselineUtc { get; set; }
+
+    public int EventCount { get; set; }
+
+    public int RouterCount { get; set; }
+
+    public int DhcpServerCount { get; set; }
+
+    public int NeighborCount { get; set; }
+
+    public string? NpcapVersion { get; set; }
+
+    public string? LastError { get; set; }
+}
+
+/// <summary>4.4：一个 IPv6 路由器。</summary>
+public sealed class Ipv6RouterDto
+{
+    public string LinkLocal { get; set; } = string.Empty;
+
+    public string Mac { get; set; } = string.Empty;
+
+    public string Prefixes { get; set; } = string.Empty;
+
+    public string Flags { get; set; } = string.Empty;
+
+    public int Lifetime { get; set; }
+
+    public bool Baseline { get; set; }
+
+    public bool Trusted { get; set; }
+
+    public DateTime FirstSeenUtc { get; set; }
+
+    public DateTime LastSeenUtc { get; set; }
+}
+
+/// <summary>4.4：一个 DHCPv6 服务器。</summary>
+public sealed class Ipv6DhcpServerDto
+{
+    public string ServerId { get; set; } = string.Empty;
+
+    public string Address { get; set; } = string.Empty;
+
+    public string? Mac { get; set; }
+
+    public string Dns { get; set; } = string.Empty;
+
+    public string Domains { get; set; } = string.Empty;
+
+    public int MinLeaseSeconds { get; set; }
+
+    public bool Baseline { get; set; }
+
+    public bool Trusted { get; set; }
+
+    public DateTime FirstSeenUtc { get; set; }
+
+    public DateTime LastSeenUtc { get; set; }
+}
+
+/// <summary>4.4：一个 IPv6 邻居。</summary>
+public sealed class Ipv6NeighborDto
+{
+    public string Address { get; set; } = string.Empty;
+
+    public string Mac { get; set; } = string.Empty;
+
+    public bool IsRouter { get; set; }
+
+    public DateTime FirstSeenUtc { get; set; }
+
+    public DateTime LastSeenUtc { get; set; }
 }
 
 /// <summary>
@@ -830,6 +946,12 @@ public sealed class ServiceStatus
     public bool DnsSecurityCollecting { get; set; }
 
     public int DnsSecurityEventCount { get; set; }
+
+    // ---- 4.4：IPv6 邻接安全 ----
+
+    public bool Ipv6SecurityCollecting { get; set; }
+
+    public int Ipv6SecurityEventCount { get; set; }
 
     /// <summary>审计设置：域名推测。</summary>
     public bool AuditDomainLookup { get; set; }

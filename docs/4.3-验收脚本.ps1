@@ -1,4 +1,4 @@
-# 4.3 自动验收（VM）
+﻿# 4.3 自动验收（VM）
 #
 # 用法（管理员 PowerShell）：
 #   cd <项目>\dist-tools

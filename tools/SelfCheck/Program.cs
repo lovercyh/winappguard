@@ -15586,6 +15586,7 @@ internal static class Program
             "System.Net.NetworkInformation.NetworkInterfaceType",
             "System.Net.NetworkInformation.OperationalStatus",
             "System.Net.NetworkInformation.IPInterfaceProperties",
+            "System.Net.NetworkInformation.IPAddressCollection",
             "System.Net.NetworkInformation.IPAddressInformation",
             "System.Net.NetworkInformation.UnicastIPAddressInformation",
             "System.Net.NetworkInformation.UnicastIPAddressInformationCollection",

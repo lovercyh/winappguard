@@ -42,6 +42,12 @@ and finish with *"blocked."*
 > ARP spoofing (gateway MAC changes, etc.) and rogue DHCP servers. Detection only by default;
 > baselines and events are stored locally, with an optional temporary DHCP block. See
 > [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md).
+>
+> **4.3 adds DNS security.** A new *DNS security* sub-tab detects local DNS hijacking/poisoning
+> (unexpected response server, transaction/name mismatch, NXDOMAIN with answers, conflicting
+> answers, suspicious TTL, DNS server not gateway) and **plaintext DNS bypass**. Alert only,
+> never blocks; events reuse the 4.2 store and retention. See
+> [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
@@ -96,6 +102,12 @@ and finish with *"blocked."*
   (unexpected/multiple servers, changed options, very short leases). Detection only by default;
   baselines can be trusted; events are stored locally with 7 / 15 / 30-day retention; an optional
   temporary DHCP server block is available (off by default).
+- **DNS security (4.3)** — the *Protection → DNS security* tab detects **local DNS hijacking /
+  poisoning** (unexpected response server, transaction/name mismatch, NXDOMAIN with answers,
+  conflicting answers, suspicious TTL, DNS server not gateway) and **plaintext DNS bypass**.
+  8 rules, a 2-minute quiet baseline, a trust list, and 7 / 15 / 30-day event retention;
+  **alert only, never blocks**. It captures IPv4 UDP 53 only; DoH/DoT is out of scope,
+  and IPv6 DNS / neighbour security is planned for 4.4.
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
@@ -148,7 +160,11 @@ This needs to be explicit.
   does not decrypt HTTPS, and does not fetch external threat intelligence.
 - ❌ It does **not** store packets or payloads and does not do DPI/HTTPS decryption:
   precise traffic reads only IP/TCP/UDP headers (lengths, ports, flags) for accounting;
-  DNS stores names only, never URL paths.
+  DNS stores names only, never URL paths; DNS security parses only DNS headers, the question
+  section and A/AAAA/CNAME answers, and never stores packets.
+- ❌ DNS security is **alert only** and never blocks; it captures **IPv4 UDP 53** only, so DoH/DoT
+  is invisible; an upstream server returning forged data is only caught when it conflicts with
+  another response to the same query.
 - ❌ Anti-port-scan only inspects **inbound TCP SYN**; no UDP scans, payload inspection or
   permanent automatic blocking. Without Npcap both traffic statistics and anti-scan are
   unavailable (the installer requires Npcap).
@@ -225,9 +241,9 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 
 ## Screenshots
 
-| IDS (detection only) | Protection (anti-port-scan) |
+| IDS (detection only) | Protection (port scan) |
 |---|---|
-| ![IDS tab](docs/screenshots/06-ids.png) | ![Protection tab](docs/screenshots/09-protection.png) |
+| ![IDS tab](docs/screenshots/06-ids.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
 | **Traffic** | **DNS** |
 | ![Traffic tab](docs/screenshots/07-traffic.png) | ![DNS tab](docs/screenshots/08-dns.png) |
 | **Blocklist** | **Strict-mode whitelist** |
@@ -242,6 +258,9 @@ its full path, the scope of the change, and the rule that is about to be created
 
 > The IDS page only raises alerts and never blocks automatically; acknowledging, suppressing,
 > clearing and changing its settings each require one UAC prompt.
+>
+> Since 4.3 the *Protection* tab has four sub-tabs (Port scan / LAN / DNS security / IDS);
+> see [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) for the DNS security page and its acceptance steps.
 
 ## Download (only two files from Releases)
 
@@ -506,6 +525,8 @@ Most project documentation is in Chinese.
 | [`docs/4.1-VM验收.md`](docs/4.1-VM验收.md) | 4.1 install paths, accuracy tests and soak acceptance |
 | [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md) | 4.2 ARP/DHCP detection, baselines, storage and DHCP blocking |
 | [`docs/4.2-VM验收.md`](docs/4.2-VM验收.md) | 4.2 ARP spoof / rogue DHCP tests and 24h false-positive watch |
+| [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md) | 4.3 DNS response validation, 8 rules, baseline, storage and limits |
+| [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) | 4.3 dnsspoof/ettercap/Scapy, plaintext bypass and 24h acceptance |
 
 ## Contributing
 

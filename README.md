@@ -40,6 +40,12 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
 > （网关 MAC 变化等）与虚假 DHCP；默认只告警，基线/事件本地落盘，
 > 可选临时阻断 DHCP 服务器。详见
 > [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md)。
+>
+> **4.3 新增 DNS 安全**：「防护」页新增「DNS 安全」子标签，检测本地 DNS 劫持 / 投毒
+> （应答来源不符、事务 ID/域名不符、NXDOMAIN 带答案、冲突应答、TTL 异常、
+> DNS 服务器非网关）与**明文 DNS 绕过**；**只告警、不阻断**，
+> 事件复用 4.2 的落盘与保留期。详见
+> [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md)。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
@@ -81,6 +87,11 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
   MAC 声称多个 IP、IP 频繁换 MAC 等）与**虚假 DHCP**（未知/多个服务器、
   下发参数变化、租期异常短）；默认只告警，基线可“信任”，事件按 7/15/30 天落盘；
   可选临时阻断 DHCP 服务器（默认关闭）。
+- **DNS 安全（4.3）**：「防护 → DNS 安全」检测 **本地 DNS 劫持 / 投毒**
+  （应答来源异常、事务 ID/域名不符、NXDOMAIN 带答案、冲突应答、TTL 异常、
+  DNS 服务器非网关）与**明文 DNS 绕过**；8 条规则、2 分钟静默基线、信任列表、
+  事件按 7/15/30 天落盘；**只告警、不阻断**。只抓 IPv4 UDP 53，
+  DoH/DoT 不在 4.3 范围；IPv6 DNS 与邻接安全放 4.4。
 - **临时锁网**：严格模式面板 / 托盘菜单提供 **30 分钟 / 2 小时**；
   到点自动恢复，服务停止或崩溃也会立即恢复，不残留断网状态。
 - **提权/受保护进程路径**：界面读不到时由服务（SYSTEM）代查并补全，
@@ -119,7 +130,10 @@ WinAppGuard 是一个 Windows 程序联网控制工具，但它和多数同类�
   **严格模式也不例外**：它只在进程内建立会话，退出即撤销
 - ❌ **不**碰别人创建的过滤器或规则 —— 只看、只删自己子层 GUID 下的过滤器
 - ❌ **不**保存任何数据包或载荷、不做 DPI / HTTPS 解密：
-  精确流量只读 IP/TCP/UDP 头（长度、端口、标志）做计数；DNS 只记域名，不记 URL 路径
+  精确流量只读 IP/TCP/UDP 头（长度、端口、标志）做计数；DNS 只记域名，不记 URL 路径；
+  DNS 安全只解析 DNS 头、问题段与 A/AAAA/CNAME，不保存报文
+- ❌ **DNS 安全只告警、不阻断**；只抓 **IPv4 UDP 53**，DoH/DoT 看不到内容；
+  上游 DNS 自己返回假数据时，只有与同请求的其它应答冲突才会命中
 - ❌ 反扫描只检测**入站 TCP SYN**，不做 UDP 扫描、载荷检测或永久自动封禁；
   Npcap 缺失时流量统计与反扫描都显示不可用（安装器要求必须安装 Npcap）
 - ❌ **不**阻止系统关键进程（`lsass.exe`、`svchost.exe`、它自己……）——
@@ -185,9 +199,9 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 
 ## 界面
 
-| IDS（只检测、不阻断） | 防护（反端口扫描） |
+| IDS（只检测、不阻断） | 防护（端口扫描） |
 |---|---|
-| ![IDS 页](docs/screenshots/06-ids.png) | ![防护页](docs/screenshots/09-protection.png) |
+| ![IDS 页](docs/screenshots/06-ids.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
 | **流量** | **DNS** |
 | ![流量页](docs/screenshots/07-traffic.png) | ![DNS 页](docs/screenshots/08-dns.png) |
 | **黑名单** | **严格模式下白名单** |
@@ -201,6 +215,9 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 影响范围、**即将创建或删除的规则名**。
 
 > IDS 页只产生告警，不会自动阻断；确认 / 抑制 / 清空和改设置同样要过一次 UAC。
+>
+> 4.3 起「防护」页有四个子标签（端口扫描 / 局域网 / DNS 安全 / IDS）；
+> DNS 安全子页的截图与验收步骤见 [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md)。
 
 ## 下载（Releases 只需要两个文件）
 
@@ -257,6 +274,7 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 | 流量统计 | **Npcap** 在 NDIS 层抓 TCP/UDP 包头（BPF 过滤，不读载荷），按「本机端点 → PID」归属到程序；多网卡 2 秒去重；只存内存 |
 | 实时速率 | 服务端 1 秒桶 + 5 分钟环形缓冲，界面自绘曲线；每程序速率取 3 秒滑动平均 |
 | DNS 记录 | ETW `Microsoft-Windows-DNS-Client`，只取域名、PID 和结果码；内存保留最近 2000 条 |
+| DNS 安全 | 复用 4.2 的 Npcap 会话（BPF 增加 UDP 53），只解析 DNS 头、问题段与 A/AAAA/CNAME；按「网卡 + 客户端端口 + 事务 ID」匹配请求/应答；8 条规则只告警，不阻断 |
 | Flow IDS | 复用两个 ETW 会话，把连接五元组 / 次数 / 域名交给内存规则引擎；只产生告警，不 inline 阻断（ETW 不再参与流量统计） |
 | 反端口扫描 | Npcap 在 NDIS 层只抓入站 TCP SYN（BPF 过滤），按来源 IP 统计端口 / 主机数；不读载荷 |
 | 临时 IP 封禁 | 用户态 WFP `ALE_AUTH_RECV_ACCEPT_V4/V6` 过滤器，按远端 IP 拦新入站连接；到期或手动解除，不切断已有连接 |
@@ -272,13 +290,16 @@ WinAppGuard.SelfCheck.exe --audit
 它**不是搜源码**，而是直接读**编译出来的程序集的元数据** —— 包括间接引用和框架自动带进来的东西：
 
 ```
-引用的程序集            25 个，全部来自 .NET 框架    → 零第三方库
-网络相关类型引用        2 个：TcpClient / NetworkStream
-                        → 都在预期清单内，只属于 IP 归属查询
-原生 API 调用（P/Invoke）  17 个
+引用的程序集            全部来自 .NET 框架       → 零第三方库
+网络相关类型引用        TcpClient / NetworkStream（IP 归属）
+                        + 只读本机网卡 / DNS 配置类型
+                        → 都在预期清单内，不主动建立连接
+原生 API 调用           WFP + Win32，全部在清单内
 网络相关原生调用        无                          → 没有绕过托管检查直接用网络 API
 注册表访问              无
 ```
+
+> 以上是示例输出；具体数量会随版本变化，以当前版本实际的 `--audit` 输出为准。
 
 关于这份输出，有两句话要说：
 
@@ -287,7 +308,7 @@ WinAppGuard.SelfCheck.exe --audit
   **一份「绿的但藏着联网路径」的审计，比没有审计更糟。**
 - `--audit` 不需要管理员权限，所以 CI 里也能跑。
 
-那 17 个原生调用就是程序能碰到的**全部**非托管函数：
+这些原生调用就是程序能碰到的**全部**非托管函数（WFP 之外的部分）：
 
 ```
 iphlpapi.dll!GetExtendedTcpTable                    读 TCP 连接表
@@ -309,7 +330,7 @@ wintrust.dll!WTHelperGetProvSignerFromChain         取签名者
 wintrust.dll!WTHelperGetProvCertFromChain           取签名者证书
 ```
 
-**29 个（17 个 Win32 + 12 个 WFP），除此之外它碰不到任何东西。**
+WFP 与 Win32 的全部原生调用都在审计清单内，除此之外它碰不到任何东西。
 
 ## 安全护栏
 
@@ -466,6 +487,8 @@ WinAppGuard.exe --recover
 | [`docs/4.1-VM验收.md`](docs/4.1-VM验收.md) | 4.1 安装路径、精度测试与 soak 验收 |
 | [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md) | 4.2 ARP/DHCP 检测、基线、落盘与 DHCP 阻断 |
 | [`docs/4.2-VM验收.md`](docs/4.2-VM验收.md) | 4.2 ARP 欺骗/rogue DHCP 实测与 24h 误报观察 |
+| [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md) | 4.3 DNS 应答校验、8 条规则、基线、落盘与边界 |
+| [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) | 4.3 dnsspoof/ettercap/Scapy、明文绕过与 24h 验收 |
 
 ## 参与贡献
 

@@ -125,6 +125,21 @@ Write-Host "  验收包服务：$distSvcVersion"
 Write-Host "  Npcap：$(if (Test-Path $wpcap) { "$npcapVersion（$wpcap）" } else { '未安装' })"
 Write-Host "  脚本目录：$scriptDir"
 
+# 4.3 的“配置 DNS”来自网卡 IPv4 DNS；这里提前提示，避免 24h 误报失真。
+$ipv4Dns = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.ServerAddresses -and $_.ServerAddresses.Count -gt 0 })
+
+if ($ipv4Dns.Count -gt 0) {
+    foreach ($item in $ipv4Dns) {
+        Write-Host "  IPv4 DNS：$($item.InterfaceAlias) -> $($item.ServerAddresses -join ', ')"
+    }
+}
+else {
+    Write-Host '  [警告] 没有可用的 IPv4 DNS。' -ForegroundColor Yellow
+    Write-Host '         4.3 会把所有 DNS 查询当成“非配置服务器”，24h 误报会失真。' -ForegroundColor Yellow
+    Write-Host '         请固定 223.5.5.5 或网关，不要用没有 IPv4 DNS 的 DHCP 默认。' -ForegroundColor Yellow
+}
+
 Assert-True '界面版本是 4.3' ($uiVersion -like '4.3*') "$uiVersion"
 Assert-True '服务版本是 4.3' ($svcVersion -like '4.3*') "$svcVersion"
 Assert-True '已安装的界面与验收包一致' ($uiVersion -eq $distUiVersion) "安装=$uiVersion 包=$distUiVersion"
@@ -138,8 +153,13 @@ Write-Host ''
 Write-Host '===== 2. 重启服务 =====' -ForegroundColor Cyan
 
 if (-not $SkipServiceRestart) {
-    Restart-Service $serviceName -Force
-    Start-Sleep -Seconds 5
+    try {
+        Restart-Service $serviceName -Force -ErrorAction Stop
+        Start-Sleep -Seconds 5
+    }
+    catch {
+        Write-Host "  [警告] 重启服务失败：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 $service = Get-Service $serviceName -ErrorAction SilentlyContinue

@@ -244,6 +244,8 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 | IDS (detection only) | Protection (port scan) |
 |---|---|
 | ![IDS tab](docs/screenshots/06-ids.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
+| **DNS security (4.3)** | **LAN (4.2)** |
+| ![DNS security tab](docs/screenshots/11-dns-security.png) | ![LAN tab](docs/screenshots/10-lan.png) |
 | **Traffic** | **DNS** |
 | ![Traffic tab](docs/screenshots/07-traffic.png) | ![DNS tab](docs/screenshots/08-dns.png) |
 | **Blocklist** | **Strict-mode whitelist** |
@@ -260,7 +262,7 @@ its full path, the scope of the change, and the rule that is about to be created
 > clearing and changing its settings each require one UAC prompt.
 >
 > Since 4.3 the *Protection* tab has four sub-tabs (Port scan / LAN / DNS security / IDS);
-> see [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) for the DNS security page and its acceptance steps.
+> see [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) for the DNS security acceptance steps.
 
 ## Download (only two files from Releases)
 

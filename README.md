@@ -202,6 +202,8 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 | IDS（只检测、不阻断） | 防护（端口扫描） |
 |---|---|
 | ![IDS 页](docs/screenshots/06-ids.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
+| **DNS 安全（4.3）** | **局域网（4.2）** |
+| ![DNS 安全页](docs/screenshots/11-dns-security.png) | ![局域网页](docs/screenshots/10-lan.png) |
 | **流量** | **DNS** |
 | ![流量页](docs/screenshots/07-traffic.png) | ![DNS 页](docs/screenshots/08-dns.png) |
 | **黑名单** | **严格模式下白名单** |
@@ -217,7 +219,7 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 > IDS 页只产生告警，不会自动阻断；确认 / 抑制 / 清空和改设置同样要过一次 UAC。
 >
 > 4.3 起「防护」页有四个子标签（端口扫描 / 局域网 / DNS 安全 / IDS）；
-> DNS 安全子页的截图与验收步骤见 [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md)。
+> DNS 安全子页的验收步骤见 [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md)。
 
 ## 下载（Releases 只需要两个文件）
 

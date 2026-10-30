@@ -1454,6 +1454,10 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "10-lan.png"));
 
+            TrySelectTab(form, "_tabDnsSecurity");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "11-dns-security.png"));
+
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
@@ -1896,6 +1900,150 @@ internal static class Program
         });
 
         InvokePrivate(form, "RebuildLanView", null);
+
+        // ---- DNS 安全页 ----
+        TrySetField(form, "_dnsSecServiceAvailable", true);
+        TrySetField(form, "_dnsSecStatus", new DnsSecurityStatusDto
+        {
+            Collecting = true,
+            BaselineReady = true,
+            BaselineUtc = now.ToUniversalTime().AddMinutes(-18),
+            ConfiguredCount = 2,
+            EventCount = 8,
+            NpcapVersion = "1.90",
+        });
+
+        TrySetField(form, "_dnsSecServers", new List<DnsSecurityServerDto>
+        {
+            new()
+            {
+                Address = "192.168.1.1",
+                Adapter = "Intel(R) Ethernet Connection",
+                Source = "configured",
+                Mac = "aa:bb:cc:00:11:22",
+                Trusted = true,
+            },
+            new()
+            {
+                Address = "223.5.5.5",
+                Adapter = "Intel(R) Ethernet Connection",
+                Source = "configured",
+                Mac = "aa:bb:cc:00:11:22",
+                Trusted = false,
+            },
+            new()
+            {
+                Address = "192.168.1.66",
+                Adapter = "Intel(R) Ethernet Connection",
+                Source = "observed",
+                Mac = "de:ad:be:ef:00:66",
+                Trusted = false,
+            },
+            new()
+            {
+                Address = "1.1.1.1",
+                Adapter = "Intel(R) Ethernet Connection",
+                Source = "observed",
+                Mac = "de:ad:be:ef:00:01",
+                Trusted = false,
+            },
+        });
+
+        TrySetField(form, "_dnsSecEvents", new List<LanEventDto>
+        {
+            new()
+            {
+                Id = "dns-1",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-2),
+                Kind = "dns_response_unexpected_server",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "查询 bank.example 发往 192.168.1.1，应答却来自 192.168.1.66。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "dns-2",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-3),
+                Kind = "dns_transaction_mismatch",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "DNS 应答的事务 ID 与请求不一致（域名 login.example，来源 192.168.1.66）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "dns-3",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-4),
+                Kind = "dns_answer_name_mismatch",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "请求 pay.example，应答里的域名却是 evil.example。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "dns-4",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-6),
+                Kind = "dns_nxdomain_with_answer",
+                Severity = "high",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "NXDOMAIN 应答却带了 1 条答案（域名 nx.example）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "dns-5",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-7),
+                Kind = "dns_conflicting_answers",
+                Severity = "medium",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "同一请求 cdn.example 在 2 秒内收到不同应答。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "dns-6",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-9),
+                Kind = "dns_server_not_gateway",
+                Severity = "medium",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "DNS 服务器 192.168.1.66 的 MAC de:ad:be:ef:00:66 与网关 MAC aa:bb:cc:00:11:22 不一致。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+            new()
+            {
+                Id = "dns-7",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-11),
+                Kind = "dns_plaintext_bypass",
+                Severity = "medium",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "明文 DNS 查询发往非配置服务器 1.1.1.1（域名 bypass.example）。",
+                SourceMac = "de:ad:be:ef:00:01",
+                TargetIp = "1.1.1.1",
+            },
+            new()
+            {
+                Id = "dns-8",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-13),
+                Kind = "dns_ttl_suspicious",
+                Severity = "low",
+                Adapter = "Intel(R) Ethernet Connection",
+                Detail = "应答 ttl.example 的 TTL 异常短（0 秒）。",
+                SourceMac = "de:ad:be:ef:00:66",
+                TargetIp = "192.168.1.66",
+            },
+        });
+
+        TrySetField(form, "_dnsSecServerSignature", null!);
+        TrySetField(form, "_dnsSecEventSignature", null!);
+        InvokePrivate(form, "RebuildDnsSecurityView", null);
 
         // ---- DNS 页 ----
         TrySetField(form, "_dnsCollecting", true);

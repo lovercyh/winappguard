@@ -313,6 +313,10 @@ internal sealed class WfpEngine : IDisposable
     /// 4.4：通用入站过滤（POC 用）。
     /// 条件：IP 协议 + 远端地址 + 可选远端端口 + 可选本地端口/ICMP 类型。
     /// </summary>
+    /// <param name="layerKey">
+    /// 指定挂载的 WFP 层；null = 默认的 ALE 入站授权层。
+    /// 4.4 POC 需要换层实测（ALE 对长期存在的 DHCPv6 套接字可能命中缓存）。
+    /// </param>
     internal ulong AddTransportInboundFilter(
         Guid filterKey,
         string displayName,
@@ -323,14 +327,16 @@ internal sealed class WfpEngine : IDisposable
         ushort? localPort,
         uint action,
         ulong weight,
-        bool persistent)
+        bool persistent,
+        Guid? layerKey = null)
     {
         ThrowIfDisposed();
 
         var isV4 = remoteAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
-        var layerKey = isV4
-            ? WfpNativeMethods.LayerAleAuthRecvAcceptV4
-            : WfpNativeMethods.LayerAleAuthRecvAcceptV6;
+        var layer = layerKey
+            ?? (isV4
+                ? WfpNativeMethods.LayerAleAuthRecvAcceptV4
+                : WfpNativeMethods.LayerAleAuthRecvAcceptV6);
         var bytes = remoteAddress.GetAddressBytes();
         var conditions = new List<WfpNativeMethods.FwpmFilterCondition>();
 
@@ -430,7 +436,7 @@ internal sealed class WfpEngine : IDisposable
                     Description = descriptionPtr,
                 },
                 Flags = persistent ? WfpNativeMethods.FWPM_FILTER_FLAG_PERSISTENT : 0,
-                LayerKey = layerKey,
+                LayerKey = layer,
                 SubLayerKey = WfpNativeMethods.OurSubLayerKey,
                 Weight = new WfpNativeMethods.FwpValue
                 {

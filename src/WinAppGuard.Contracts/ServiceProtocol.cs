@@ -197,6 +197,9 @@ public static class ServiceProtocol
         /// <summary>4.4：清空 IPv6 基线并重新学习（写，需提权）。</summary>
         public const string ResetIpv6Baseline = "write.ipv6-security.reset-baseline";
 
+        /// <summary>4.4：临时阻断 / 解除某个 IPv6 路由器或 DHCPv6 服务器（写，需提权）。</summary>
+        public const string BlockIpv6 = "write.ipv6-security.block";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

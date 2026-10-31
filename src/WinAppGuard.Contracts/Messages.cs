@@ -126,6 +126,18 @@ public sealed class ServiceRequest
 
     /// <summary>true = 信任，false = 取消信任。</summary>
     public bool Ipv6TrustEnabled { get; set; }
+
+    /// <summary>dhcpv6（RA 在 POC 通过前不支持阻断）。</summary>
+    public string? Ipv6BlockKind { get; set; }
+
+    /// <summary>要临时阻断 / 解除的 IPv6 服务器链路本地地址。</summary>
+    public string? Ipv6BlockAddress { get; set; }
+
+    /// <summary>阻断分钟数，服务端会再钳到 1–10 分钟。</summary>
+    public int Ipv6BlockMinutes { get; set; } = 10;
+
+    /// <summary>true = 阻断，false = 解除。</summary>
+    public bool Ipv6BlockEnabled { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -636,6 +648,9 @@ public sealed class Ipv6SecurityStatusDto
 
     public int NeighborCount { get; set; }
 
+    /// <summary>当前临时阻断中的 IPv6 目标数。</summary>
+    public int BlockedCount { get; set; }
+
     public string? NpcapVersion { get; set; }
 
     public string? LastError { get; set; }
@@ -681,6 +696,12 @@ public sealed class Ipv6DhcpServerDto
     public bool Baseline { get; set; }
 
     public bool Trusted { get; set; }
+
+    /// <summary>4.4：当前是否被临时阻断。</summary>
+    public bool Blocked { get; set; }
+
+    /// <summary>4.4：临时阻断的到期时间（UTC）。</summary>
+    public DateTime? BlockExpiresUtc { get; set; }
 
     public DateTime FirstSeenUtc { get; set; }
 

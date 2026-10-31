@@ -132,6 +132,21 @@ internal static class WfpNativeMethods
     /// <summary>4.0：FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6。</summary>
     internal static readonly Guid LayerAleAuthRecvAcceptV6 = new("a3b42c97-9f04-4672-b87e-cee9c483257f");
 
+    /// <summary>
+    /// 4.4：FWPM_LAYER_INBOUND_TRANSPORT_V6，入站传输层。
+    ///
+    /// 和 ALE 的区别：ALE 是"每条流授权一次"，同一个五元组之后的包直接放行；
+    /// 传输层是**逐包判定**，适合拦 DHCPv6 这种客户端套接字长期存在的协议。
+    /// GUID 取自 fwpmu.h（634a869f-fc23-4b90-b0c1-bf620a36ae6f）。
+    /// </summary>
+    internal static readonly Guid LayerInboundTransportV6 = new("634a869f-fc23-4b90-b0c1-bf620a36ae6f");
+
+    /// <summary>
+    /// 4.4：FWPM_LAYER_DATAGRAM_DATA_V6，入站数据报层（比传输层更靠近套接字）。
+    /// GUID 取自 fwpmu.h（fa45fe2f-3cba-4427-87fc-57b9a4b10d00）。
+    /// </summary>
+    internal static readonly Guid LayerDatagramDataV6 = new("fa45fe2f-3cba-4427-87fc-57b9a4b10d00");
+
     /// <summary>FWPM_CONDITION_ALE_APP_ID：按程序身份（可执行文件路径）匹配。</summary>
     internal static readonly Guid ConditionAleAppId = new("d78e1e87-8644-4ea5-9437-d809ecefc971");
 

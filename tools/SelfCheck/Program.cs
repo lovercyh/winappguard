@@ -981,13 +981,35 @@ internal static class Program
     // 模式 4：只读状态
     // ==================================================================
 
+    /// <summary>读取 <c>--name value</c> 或 <c>--name=value</c> 形式的参数。</summary>
+    private static string? ReadOption(string[] args, string name)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i].StartsWith(name + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i][(name.Length + 1)..];
+            }
+
+            if (args[i].Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return i + 1 < args.Length ? args[i + 1] : null;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// 4.4 WFP POC：临时加一条 IPv6 阻断过滤器，保持 N 秒，再删除。
     ///
     /// 用法：
-    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc ra   fe80::xxxx 120
-    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc dhcp fe80::xxxx 120
+    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc ra   fe80::xxxx 120 [--layer ale|transport|datagram|all]
+    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc dhcp fe80::xxxx 120 [--layer ale|transport|datagram|all]
     ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc clean
+    ///
+    /// 默认挂传输层（transport）。ALE 层是"每条流授权一次"，DHCPv6 客户端套接字
+    /// 长期存在，过滤器加上去以后仍然可能吃旧的放行缓存，所以不再作为默认层。
     /// </summary>
     private static void RunIpv6WfpPoc(string[] args)
     {
@@ -1003,12 +1025,15 @@ internal static class Program
             : string.Empty;
         var seconds = 60;
 
-        if (index >= 0 && index + 3 < args.Length)
+        if (index >= 0 && index + 3 < args.Length
+            && !args[index + 3].StartsWith("--", StringComparison.Ordinal))
         {
             _ = int.TryParse(args[index + 3], out seconds);
         }
 
         seconds = Math.Clamp(seconds, 5, 600);
+
+        var layerText = ReadOption(args, "--layer");
 
         W("################################################################");
         W("#   4.4 WFP IPv6 阻断 POC（RA / DHCPv6）                       #");
@@ -1027,41 +1052,78 @@ internal static class Program
             || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
         {
             W("  用法：");
-            W("    --ipv6-wfp-poc ra|dhcp <攻击机链路本地 IPv6> [秒]");
+            W("    --ipv6-wfp-poc ra|dhcp <攻击机链路本地 IPv6> [秒] [--layer ale|transport|datagram|all]");
             W("    --ipv6-wfp-poc clean");
-            W("  例：--ipv6-wfp-poc ra fe80::1234 120");
+            W("  例：--ipv6-wfp-poc dhcp fe80::1234 120 --layer transport");
+            W("    （不给 --layer 时默认 transport；all = 三层都挂，用来一次确定哪层有效）");
             return;
+        }
+
+        var layers = new List<Ipv6Wfp.BlockLayer>();
+
+        if (string.Equals(layerText, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            layers.Add(Ipv6Wfp.BlockLayer.Ale);
+            layers.Add(Ipv6Wfp.BlockLayer.Transport);
+            layers.Add(Ipv6Wfp.BlockLayer.Datagram);
+        }
+        else
+        {
+            if (!Ipv6Wfp.TryParseLayer(layerText, out var parsed))
+            {
+                W($"  未知层：{layerText}（可用 ale / transport / datagram / all）");
+                return;
+            }
+
+            layers.Add(parsed);
         }
 
         var removed = Ipv6Wfp.RemoveAll();
         W($"  先清理旧 POC 过滤器：{removed} 条");
+        W($"  本次挂载层：{string.Join(" + ", layers.Select(Ipv6Wfp.LayerName))}");
 
         try
         {
-            string scope;
+            foreach (var layer in layers)
+            {
+                string scope;
+
+                if (kind == "ra")
+                {
+                    _ = Ipv6Wfp.AddRouter(address, layer, out scope);
+                    W($"  已添加 RA 阻断：{address}（{scope}）");
+                }
+                else if (kind == "dhcp")
+                {
+                    _ = Ipv6Wfp.AddDhcp(address, layer, out scope);
+                    W($"  已添加 DHCPv6 阻断：{address}（{scope}）");
+                }
+                else
+                {
+                    W($"  未知 kind：{kind}（可用 ra / dhcp / clean）");
+                    return;
+                }
+            }
 
             if (kind == "ra")
             {
-                _ = Ipv6Wfp.AddRouter(address, out scope);
-                W($"  已添加 RA 阻断：{address}（{scope}）");
                 W("  Kali 上执行（把 <iface> 换成实际网卡）：");
-                W($"    sudo fake_router6 <iface> fd00:6:6::/64");
+                W("    sudo fake_router6 <iface> fd00:6:6::/64");
                 W($"  确认 rogue RA 的源地址就是 {address}；");
                 W("  Windows 上应看不到 rogue 前缀/默认路由被安装。");
             }
-            else if (kind == "dhcp")
-            {
-                _ = Ipv6Wfp.AddDhcp(address, out scope);
-                W($"  已添加 DHCPv6 阻断：{address}（{scope}）");
-                W("  Kali 上执行（把 <iface> 换成实际网卡）：");
-                W("    sudo ip -6 addr add fd00:6:6::1/64 dev <iface>");
-                W("    sudo dnsmasq --no-daemon --port=0 --dhcp-range=fd00:6:6::100,fd00:6:6::200,64");
-                W("  Windows 上应不会新增 fd00:6:6:: 地址。");
-            }
             else
             {
-                W($"  未知 kind：{kind}（可用 ra / dhcp / clean）");
-                return;
+                W("  Kali 上执行（把 <iface> 换成实际网卡）：");
+                W("    sudo ip -6 addr add fd00:6:6::1/64 dev <iface>");
+                W("    sudo dnsmasq --no-daemon --port=0 --log-dhcp --interface=<iface> --bind-dynamic \\");
+                W("      --dhcp-range=fd00:6:6::100,fd00:6:6::200,64");
+                W("  Windows 另一个管理员窗口（必须在过滤器生效期间执行）：");
+                W("    ipconfig /release6");
+                W("    ipconfig /renew6");
+                W("    Get-NetIPAddress -AddressFamily IPv6 | ? { $_.IPAddress -like 'fd00:6:6::*' }");
+                W("    Get-DnsClientServerAddress -AddressFamily IPv6");
+                W("  应看不到 fd00:6:6:: 地址 / DNS fd00:6:6::53。");
             }
 
             W($"  当前 IPv6 POC 过滤器数：{Ipv6Wfp.Count()}");
@@ -1578,6 +1640,28 @@ internal static class Program
             {
                 TrySelectTab(form, "_tabLan");
                 lanTabs.SelectedTab = ipv6Page;
+
+                // 4.4：截图要能看见「阻断」列和「解除阻断」，所以落在 DHCPv6 标签页、
+                // 并选中被阻断的那一行（第二个 DHCPv6 服务器是演示用的 rogue）。
+                if (TryGetField<TabControl>(form, "_ipv6EndpointTabs", out var ipv6Tabs))
+                {
+                    var dhcpTab = ipv6Tabs.TabPages.Cast<TabPage>()
+                        .FirstOrDefault(page => page.Name == "_ipv6DhcpTab");
+
+                    if (dhcpTab is not null)
+                    {
+                        ipv6Tabs.SelectedTab = dhcpTab;
+                    }
+                }
+
+                if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, "_ipv6DhcpGrid", out var dhcpGrid)
+                    && dhcpGrid.Rows.Count > 1)
+                {
+                    dhcpGrid.CurrentCell = dhcpGrid.Rows[1].Cells[0];
+                    Application.DoEvents();
+                    InvokePrivate(form, "UpdateIpv6Buttons", null);
+                }
+
                 Application.DoEvents();
                 RenderFormTo(form, Path.Combine(outputDir, "12-ipv6-security.png"));
             }
@@ -2180,6 +2264,7 @@ internal static class Program
             RouterCount = 2,
             DhcpServerCount = 2,
             NeighborCount = 3,
+            BlockedCount = 1,
             NpcapVersion = "1.90",
         });
 
@@ -2230,6 +2315,8 @@ internal static class Program
                 MinLeaseSeconds = 30,
                 Baseline = false,
                 Trusted = false,
+                Blocked = true,
+                BlockExpiresUtc = DateTime.UtcNow.AddMinutes(8),
             },
         });
 
@@ -5246,7 +5333,7 @@ internal static class Program
                             var ipv6Buttons = new[]
                             {
                                 "_ipv6RefreshButton", "_ipv6ClearButton", "_ipv6ResetBaselineButton",
-                                "_ipv6TrustRouterButton", "_ipv6TrustDhcpButton",
+                                "_ipv6TrustRouterButton", "_ipv6TrustDhcpButton", "_ipv6BlockDhcpButton",
                             }
                                 .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
                                 .Where(button => button is not null)
@@ -5255,7 +5342,7 @@ internal static class Program
 
                             W("    IPv6 邻接页按钮 = " + string.Join(" | ", ipv6Buttons.Select(button => button.Text)));
                             CheckAssertion(results, "英文：IPv6 邻接页按钮无中文",
-                                ipv6Buttons.Count == 5 && ipv6Buttons.All(button => !HasCjk(button.Text)));
+                                ipv6Buttons.Count == 6 && ipv6Buttons.All(button => !HasCjk(button.Text)));
 
                             foreach (var name in new[]
                                      {
@@ -11859,7 +11946,7 @@ internal static class Program
         var results = new List<(string Title, bool Passed)>();
 
         W("################################################################");
-        W("#   4.4 IPv6 邻接安全服务端实测（状态 / 信任 / 清空 / 基线）    #");
+        W("#   4.4 IPv6 邻接安全服务端实测（状态 / 信任 / 阻断 / 清空 / 基线）  #");
         W("################################################################");
         W();
 
@@ -11902,9 +11989,94 @@ internal static class Program
 
         const string testRouter = "fe80::4:4";
         const string testMac = "02:00:00:00:00:44";
+        string? blockTarget = null;
 
         try
         {
+            // RA 阻断在 POC 通过前必须被服务端拒绝，避免界面出现"看似能拦"的假象。
+            var raBlock = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.BlockIpv6,
+                    Ipv6BlockKind = "ra",
+                    Ipv6BlockAddress = testRouter,
+                    Ipv6BlockMinutes = 1,
+                    Ipv6BlockEnabled = true,
+                },
+                TimeSpan.FromSeconds(15),
+                out _);
+
+            CheckAssertion(results, "RA 阻断被拒绝（POC 尚未通过）", raBlock is { Ok: false });
+
+            var unknownBlock = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.BlockIpv6,
+                    Ipv6BlockKind = "dhcpv6",
+                    Ipv6BlockAddress = "fe80::dead:beef",
+                    Ipv6BlockMinutes = 1,
+                    Ipv6BlockEnabled = true,
+                },
+                TimeSpan.FromSeconds(15),
+                out _);
+
+            CheckAssertion(results, "未检测到的地址不能阻断", unknownBlock is { Ok: false });
+
+            var blockTargetServer = snapshot.Ipv6DhcpServers?
+                .FirstOrDefault(item => !item.Trusted && !item.Blocked);
+
+            if (blockTargetServer is null)
+            {
+                W("    未检测到可阻断的 DHCPv6 服务器，跳过实际阻断用例。");
+            }
+            else
+            {
+                blockTarget = blockTargetServer.Address;
+
+                var block = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.BlockIpv6,
+                        Ipv6BlockKind = "dhcpv6",
+                        Ipv6BlockAddress = blockTarget,
+                        Ipv6BlockMinutes = 1,
+                        Ipv6BlockEnabled = true,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var blockError);
+
+                CheckAssertion(results, "临时阻断 DHCPv6 服务器",
+                    block is { Ok: true }
+                    && block.Ipv6DhcpServers?.Any(item =>
+                        string.Equals(item.Address, blockTarget, StringComparison.OrdinalIgnoreCase)
+                        && item.Blocked) == true);
+
+                if (block is not { Ok: true })
+                {
+                    W($"    阻断失败：{block?.Error ?? blockError}");
+                }
+
+                var release = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.BlockIpv6,
+                        Ipv6BlockKind = "dhcpv6",
+                        Ipv6BlockAddress = blockTarget,
+                        Ipv6BlockEnabled = false,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var releaseError);
+
+                CheckAssertion(results, "解除 DHCPv6 阻断",
+                    release is { Ok: true }
+                    && release.Ipv6DhcpServers?.All(item => !item.Blocked) == true);
+
+                if (release is not { Ok: true })
+                {
+                    W($"    解除失败：{release?.Error ?? releaseError}");
+                }
+            }
+
             var trust = ServiceClient.TryRequest(
                 new ServiceRequest
                 {
@@ -11981,6 +12153,20 @@ internal static class Program
                 },
                 TimeSpan.FromSeconds(15),
                 out _);
+
+            if (!string.IsNullOrWhiteSpace(blockTarget))
+            {
+                ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.BlockIpv6,
+                        Ipv6BlockKind = "dhcpv6",
+                        Ipv6BlockAddress = blockTarget,
+                        Ipv6BlockEnabled = false,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out _);
+            }
         }
 
         PrintSummary(results, showFirewallResidue: false);

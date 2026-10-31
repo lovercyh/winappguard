@@ -27,6 +27,7 @@ internal static class LanHost
     private static NpcapLanCapture? _capture;
     private static LanEventStore? _eventStore;
     private static LanEventStore? _ipv6EventStore;
+    private static Ipv6BlockRegistry? _ipv6Blocks;
     private static System.Threading.Timer? _timer;
     private static bool _started;
     private static bool _dirty;
@@ -122,11 +123,29 @@ internal static class LanHost
             ServiceLog.Warning("WAG-LAN-002", "Failed to clean stale DHCP block filters.", ex);
         }
 
+        // 4.4：IPv6 阻断过滤器同样不能跨重启信任：非持久过滤器不会随进程退出消失，
+        // 服务崩溃时可能留下旧的阻断。先全部清掉，再由本次运行重新登记。
+        try
+        {
+            var removed = Ipv6Wfp.RemoveAll();
+
+            if (removed > 0)
+            {
+                ServiceLog.Operation("WAG-LAN-026", $"Removed {removed} stale IPv6 block filter(s).");
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-027", "Failed to clean stale IPv6 block filters.", ex);
+        }
+
+        // 阻断登记册只在内存里：服务重启即解除，和"临时阻断 10 分钟"的语义一致。
+        var ipv6Blocks = new Ipv6BlockRegistry();
+
         if (!state.Settings.DhcpBlockEnabled && state.Blocks.Count > 0)
         {
             state.Blocks.Clear();
         }
-
         foreach (var block in state.Blocks.ToList())
         {
             try
@@ -147,6 +166,7 @@ internal static class LanHost
             _ipv6Analyzer = ipv6Analyzer;
             _eventStore = eventStore;
             _ipv6EventStore = ipv6EventStore;
+            _ipv6Blocks = ipv6Blocks;
             _started = true;
             _dirty = true;
             _eventCount = analyzer.Snapshot().Events.Count;
@@ -200,6 +220,23 @@ internal static class LanHost
         catch (Exception ex)
         {
             ServiceLog.Warning("WAG-LAN-005", "Failed to remove DHCP block filters on stop.", ex);
+        }
+
+        Ipv6BlockRegistry? ipv6Blocks;
+
+        lock (Gate)
+        {
+            ipv6Blocks = _ipv6Blocks;
+            _ipv6Blocks = null;
+        }
+
+        try
+        {
+            ipv6Blocks?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-028", "Failed to release IPv6 block filters on stop.", ex);
         }
 
         lock (Gate)
@@ -615,12 +652,14 @@ internal static class LanHost
         Ipv6Analyzer? ipv6;
         NpcapLanCapture? capture;
         LanEventStore? store;
+        Ipv6BlockRegistry? blocks;
 
         lock (Gate)
         {
             ipv6 = _ipv6Analyzer;
             capture = _capture;
             store = _ipv6EventStore;
+            blocks = _ipv6Blocks;
         }
 
         if (ipv6 is null)
@@ -674,11 +713,14 @@ internal static class LanHost
                 RouterCount = snapshot.Routers.Count,
                 DhcpServerCount = snapshot.DhcpServers.Count,
                 NeighborCount = snapshot.Neighbors.Count,
+                BlockedCount = blocks?.Count ?? 0,
                 NpcapVersion = NpcapLocator.GetVersion(),
                 LastError = capture?.LastError,
             },
             Ipv6Routers = snapshot.Routers.Select(item => ToDto(item, trustedRouters)).ToList(),
-            Ipv6DhcpServers = snapshot.DhcpServers.Select(item => ToDto(item, trustedDhcp)).ToList(),
+            Ipv6DhcpServers = snapshot.DhcpServers
+                .Select(item => ToDto(item, trustedDhcp, blocks))
+                .ToList(),
             Ipv6Neighbors = snapshot.Neighbors.Select(ToDto).ToList(),
             Ipv6SecurityEvents = events.Select(ToDto).ToList(),
         };
@@ -716,6 +758,7 @@ internal static class LanHost
     internal static ServiceResponse TrustIpv6(ServiceRequest request)
     {
         Ipv6Analyzer? ipv6;
+        Ipv6BlockRegistry? blocks;
         var kind = request.Ipv6TrustKind;
         var value = request.Ipv6TrustValue;
         var mac = request.Ipv6TrustMac;
@@ -728,6 +771,7 @@ internal static class LanHost
         lock (Gate)
         {
             ipv6 = _ipv6Analyzer;
+            blocks = _ipv6Blocks;
         }
 
         if (ipv6 is null)
@@ -746,10 +790,105 @@ internal static class LanHost
             return Error(request, "IPv6 信任目标不合法。");
         }
 
+        // 信任一个 DHCPv6 服务器时顺手解除它的临时阻断，避免"已信任但还在拦"的矛盾状态。
+        if (request.Ipv6TrustEnabled
+            && string.Equals(kind, "dhcpv6", StringComparison.OrdinalIgnoreCase)
+            && blocks is not null)
+        {
+            var server = ipv6.Snapshot().DhcpServers.FirstOrDefault(item =>
+                string.Equals(item.ServerId, value.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            if (server is not null && blocks.Release(server.Address))
+            {
+                ServiceLog.Operation(
+                    "WAG-LAN-032",
+                    $"IPv6 block released for trusted DHCPv6 {server.Address}.");
+            }
+        }
+
         SaveState();
         ServiceLog.Operation(
             "WAG-LAN-024",
             $"IPv6 {kind} {value} {(request.Ipv6TrustEnabled ? "trusted" : "untrusted")}.");
+        return QueryIpv6(request);
+    }
+
+    internal static ServiceResponse BlockIpv6(ServiceRequest request)
+    {
+        Ipv6Analyzer? ipv6;
+        Ipv6BlockRegistry? blocks;
+        var addressText = request.Ipv6BlockAddress;
+
+        if (string.IsNullOrWhiteSpace(addressText)
+            || !System.Net.IPAddress.TryParse(addressText.Trim(), out var address)
+            || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return Error(request, "缺少或非法的 IPv6 服务器地址。");
+        }
+
+        if (System.Net.IPAddress.IsLoopback(address)
+            || address.Equals(System.Net.IPAddress.IPv6Any)
+            || address.IsIPv6Multicast)
+        {
+            return Error(request, "不能阻断回环 / 组播 / 未指定地址。");
+        }
+
+        lock (Gate)
+        {
+            ipv6 = _ipv6Analyzer;
+            blocks = _ipv6Blocks;
+        }
+
+        if (ipv6 is null || blocks is null)
+        {
+            return Error(request, "IPv6 邻接安全检测未启动。");
+        }
+
+        var text = address.ToString();
+        var kind = string.IsNullOrWhiteSpace(request.Ipv6BlockKind)
+            ? Ipv6BlockRegistry.DhcpKind
+            : request.Ipv6BlockKind.Trim().ToLowerInvariant();
+
+        if (!request.Ipv6BlockEnabled)
+        {
+            if (!blocks.Release(text))
+            {
+                return Error(request, "该地址没有正在生效的临时阻断。");
+            }
+
+            ServiceLog.Operation("WAG-LAN-030", $"IPv6 block released for {text}.");
+            return QueryIpv6(request);
+        }
+
+        if (!string.Equals(kind, Ipv6BlockRegistry.DhcpKind, StringComparison.Ordinal))
+        {
+            return Error(request, "RA 阻断尚未通过 POC，当前只告警。");
+        }
+
+        // 只允许阻断当前确实检测到的 DHCPv6 服务器：IPC 不能被用来封任意地址。
+        var server = ipv6.Snapshot().DhcpServers.FirstOrDefault(
+            item => string.Equals(item.Address, text, StringComparison.OrdinalIgnoreCase));
+
+        if (server is null)
+        {
+            return Error(request, "该地址不是当前检测到的 DHCPv6 服务器。");
+        }
+
+        if (ipv6.TrustedDhcpServers.Contains(
+                Ipv6TrustKeys.Dhcp(server.ServerId, server.Mac), StringComparer.OrdinalIgnoreCase))
+        {
+            return Error(request, "该 DHCPv6 服务器已信任；请先取消信任再阻断。");
+        }
+
+        if (!blocks.TryBlock(kind, address, request.Ipv6BlockMinutes, out var scope, out var blockError))
+        {
+            return Error(request, blockError);
+        }
+
+        var minutes = Math.Clamp(request.Ipv6BlockMinutes, 1, Ipv6BlockRegistry.MaxMinutes);
+        ServiceLog.Operation(
+            "WAG-LAN-029",
+            $"IPv6 DHCPv6 block for {text} ({scope}), {minutes} min.");
         return QueryIpv6(request);
     }
 
@@ -805,6 +944,7 @@ internal static class LanHost
             NpcapLanCapture? capture;
             DnsAnalyzer? dns;
             Ipv6Analyzer? ipv6;
+            Ipv6BlockRegistry? ipv6Blocks;
 
             lock (Gate)
             {
@@ -817,6 +957,7 @@ internal static class LanHost
                 capture = _capture;
                 dns = _dnsAnalyzer;
                 ipv6 = _ipv6Analyzer;
+                ipv6Blocks = _ipv6Blocks;
             }
 
             if (analyzer is null)
@@ -870,6 +1011,19 @@ internal static class LanHost
                 }
 
                 ServiceLog.Operation("WAG-LAN-015", "Expired DHCP block(s) released.");
+            }
+
+            // 4.4：到期的 IPv6 临时阻断。
+            if (ipv6Blocks is not null)
+            {
+                var expired = ipv6Blocks.Prune(now);
+
+                if (expired.Count > 0)
+                {
+                    ServiceLog.Operation(
+                        "WAG-LAN-031",
+                        $"Expired IPv6 block(s) released: {string.Join(", ", expired)}.");
+                }
             }
 
             if (now >= _nextPruneUtc)
@@ -1130,21 +1284,30 @@ internal static class LanHost
         LastSeenUtc = item.LastSeenUtc,
     };
 
-    private static Ipv6DhcpServerDto ToDto(Ipv6DhcpServer item, HashSet<string> trusted) => new()
+    private static Ipv6DhcpServerDto ToDto(
+        Ipv6DhcpServer item, HashSet<string> trusted, Ipv6BlockRegistry? blocks)
     {
-        ServerId = item.ServerId,
-        Address = item.Address,
-        Mac = item.Mac,
-        Dns = item.DnsServers.Count == 0 ? "—" : string.Join(", ", item.DnsServers),
-        Domains = item.Domains.Count == 0 ? "—" : string.Join(", ", item.Domains),
-        MinLeaseSeconds = item.MinValidLifetime == 0
-            ? 0
-            : (int)Math.Min(item.MinValidLifetime, int.MaxValue),
-        Baseline = item.Baseline,
-        Trusted = trusted.Contains(Ipv6TrustKeys.Dhcp(item.ServerId, item.Mac)),
-        FirstSeenUtc = item.FirstSeenUtc,
-        LastSeenUtc = item.LastSeenUtc,
-    };
+        Ipv6BlockEntry? entry = null;
+        var blocked = blocks is not null && blocks.TryGet(item.Address, out entry);
+
+        return new Ipv6DhcpServerDto
+        {
+            ServerId = item.ServerId,
+            Address = item.Address,
+            Mac = item.Mac,
+            Dns = item.DnsServers.Count == 0 ? "—" : string.Join(", ", item.DnsServers),
+            Domains = item.Domains.Count == 0 ? "—" : string.Join(", ", item.Domains),
+            MinLeaseSeconds = item.MinValidLifetime == 0
+                ? 0
+                : (int)Math.Min(item.MinValidLifetime, int.MaxValue),
+            Baseline = item.Baseline,
+            Trusted = trusted.Contains(Ipv6TrustKeys.Dhcp(item.ServerId, item.Mac)),
+            Blocked = blocked,
+            BlockExpiresUtc = blocked ? entry!.ExpiresUtc : null,
+            FirstSeenUtc = item.FirstSeenUtc,
+            LastSeenUtc = item.LastSeenUtc,
+        };
+    }
 
     private static Ipv6NeighborDto ToDto(Ipv6Neighbor item) => new()
     {

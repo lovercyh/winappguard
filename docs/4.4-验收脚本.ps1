@@ -279,8 +279,10 @@ Write-Host '     → 路由器 NA MAC 变化（高）、邻居缓存不一致、
 Write-Host '  E) 信任路由器 / DHCPv6 后不再重复；取消信任后恢复。'
 Write-Host '  F) IPv6 页「清空」只删 ipv6_*；IPv4/DNS 事件不受影响；重启后基线/信任仍在。'
 Write-Host '  G) 24h：合法 IPv6 网络正常使用，高危/中危应为 0；低危严格冷却。'
-Write-Host '  H) WFP 阻断 POC：RA（ICMPv6 type 134）和 DHCPv6（UDP 547->546）分别试；'
-Write-Host '     通过才提供“临时阻断”，NDP 永不阻断。'
+Write-Host '  H) DHCPv6 临时阻断（POC 已通过）：选中非信任 DHCPv6 →「临时阻断此 DHCPv6（10 分钟）」；'
+Write-Host '     release6/renew6 应拿不到 rogue 地址/DNS；解除后立即恢复；服务重启也解除。'
+Write-Host '     RA 阻断仍待 POC（--ipv6-wfp-poc ra <Kali-LL> 120 --layer transport），通过前只告警。'
+Write-Host '     NDP 永不阻断。'
 Write-Host '  I) 3.4–4.3 回归：IPv4 局域网、DNS 安全、IDS、反扫描、记录、流量。'
 
 Write-Host ''

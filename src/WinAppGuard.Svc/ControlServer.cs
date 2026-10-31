@@ -587,6 +587,8 @@ internal sealed class ControlServer : IDisposable
 
             ServiceProtocol.Commands.TrustIpv6 => LanHost.TrustIpv6(request),
 
+            ServiceProtocol.Commands.BlockIpv6 => LanHost.BlockIpv6(request),
+
             ServiceProtocol.Commands.ResetIpv6Baseline => LanHost.ResetIpv6Baseline(request),
 
             _ when isRuleCommand => Rules.Handle(request),

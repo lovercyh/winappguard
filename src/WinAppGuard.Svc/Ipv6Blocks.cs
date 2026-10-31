@@ -4,19 +4,22 @@ using WinAppGuard.Core.Wfp;
 namespace WinAppGuard.Service;
 
 /// <summary>
-/// 4.4：IPv6 临时阻断登记册（只做 DHCPv6，10 分钟上限）。
+/// 4.4：IPv6 临时阻断登记册（DHCPv6 / RA，10 分钟上限）。
 ///
 /// 阻断是**临时**的，不落盘：
 /// - 服务重启 → 会话消失 → 过滤器由 WFP 自动删除，阻断跟着解除；
 /// - 到期 → 由 <see cref="Prune"/> 删除过滤器并移除登记。
 ///
-/// RA 在 POC 通过前不支持阻断，这里直接拒绝 ra 类型，避免"按钮看起来能用、
-/// 实际拦不住"的假安全感。
+/// DHCPv6 与 RA 都已在 VM 实验网通过 WFP 传输层 POC（2026-10-31）：
+/// - DHCPv6：UDP 547→546，精确到服务器；
+/// - RA：传输层不支持 ICMP type，等价于拦该地址的**全部 ICMPv6**
+///   （含 NS/NA），所以只允许对"已检测到且未信任"的路由器临时使用。
 /// </summary>
 internal sealed class Ipv6BlockRegistry : IDisposable
 {
     internal const int MaxMinutes = 10;
     internal const string DhcpKind = "dhcpv6";
+    internal const string RaKind = "ra";
 
     private readonly object _gate = new();
     private readonly Dictionary<string, Ipv6BlockEntry> _blocks =
@@ -59,9 +62,10 @@ internal sealed class Ipv6BlockRegistry : IDisposable
         scope = string.Empty;
         error = string.Empty;
 
-        if (!string.Equals(kind, DhcpKind, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(kind, DhcpKind, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(kind, RaKind, StringComparison.OrdinalIgnoreCase))
         {
-            error = "RA 阻断尚未通过 POC，当前只告警。";
+            error = "不支持的 IPv6 阻断类型。";
             return false;
         }
 
@@ -80,7 +84,11 @@ internal sealed class Ipv6BlockRegistry : IDisposable
             {
                 _host ??= new Ipv6BlockHost();
 
-                if (!_host.AddDhcp(address, out scope))
+                var added = string.Equals(kind, RaKind, StringComparison.OrdinalIgnoreCase)
+                    ? _host.AddRouter(address, out scope)
+                    : _host.AddDhcp(address, out scope);
+
+                if (!added)
                 {
                     error = "添加阻断过滤器失败。";
                     return false;
@@ -94,7 +102,7 @@ internal sealed class Ipv6BlockRegistry : IDisposable
 
             _blocks[text] = new Ipv6BlockEntry
             {
-                Kind = DhcpKind,
+                Kind = kind,
                 Address = text,
                 ExpiresUtc = DateTime.UtcNow.Add(duration),
             };
@@ -108,23 +116,12 @@ internal sealed class Ipv6BlockRegistry : IDisposable
     {
         lock (_gate)
         {
-            if (!_blocks.Remove(address, out _))
+            if (!_blocks.Remove(address, out var entry))
             {
                 return false;
             }
 
-            try
-            {
-                if (IPAddress.TryParse(address, out var parsed))
-                {
-                    _host?.RemoveDhcp(parsed);
-                }
-            }
-            catch (Exception)
-            {
-                // 删失败也不要紧：动态会话结束时会自动清，或下次启动时 RemoveAll。
-            }
-
+            RemoveFilter(entry);
             return true;
         }
     }
@@ -157,27 +154,15 @@ internal sealed class Ipv6BlockRegistry : IDisposable
         {
             var expired = _blocks
                 .Where(item => item.Value.ExpiresUtc <= nowUtc)
-                .Select(item => item.Key)
                 .ToList();
 
-            foreach (var address in expired)
+            foreach (var item in expired)
             {
-                _blocks.Remove(address);
-
-                try
-                {
-                    if (IPAddress.TryParse(address, out var parsed))
-                    {
-                        _host?.RemoveDhcp(parsed);
-                    }
-                }
-                catch (Exception)
-                {
-                    // 动态会话结束时 WFP 会兜底删除。
-                }
+                _blocks.Remove(item.Key);
+                RemoveFilter(item.Value);
             }
 
-            return expired;
+            return expired.Select(item => item.Key).ToList();
         }
     }
 
@@ -204,6 +189,30 @@ internal sealed class Ipv6BlockRegistry : IDisposable
             }
 
             _host = null;
+        }
+    }
+
+    private void RemoveFilter(Ipv6BlockEntry entry)
+    {
+        try
+        {
+            if (!IPAddress.TryParse(entry.Address, out var parsed))
+            {
+                return;
+            }
+
+            if (string.Equals(entry.Kind, RaKind, StringComparison.OrdinalIgnoreCase))
+            {
+                _host?.RemoveRouter(parsed);
+            }
+            else
+            {
+                _host?.RemoveDhcp(parsed);
+            }
+        }
+        catch (Exception)
+        {
+            // 删失败也不要紧：动态会话结束时会自动清，或下次启动时 RemoveAll。
         }
     }
 }

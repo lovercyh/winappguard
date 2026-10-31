@@ -5333,7 +5333,8 @@ internal static class Program
                             var ipv6Buttons = new[]
                             {
                                 "_ipv6RefreshButton", "_ipv6ClearButton", "_ipv6ResetBaselineButton",
-                                "_ipv6TrustRouterButton", "_ipv6TrustDhcpButton", "_ipv6BlockDhcpButton",
+                                "_ipv6TrustRouterButton", "_ipv6TrustDhcpButton",
+                                "_ipv6BlockDhcpButton", "_ipv6BlockRouterButton",
                             }
                                 .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
                                 .Where(button => button is not null)
@@ -5342,7 +5343,7 @@ internal static class Program
 
                             W("    IPv6 邻接页按钮 = " + string.Join(" | ", ipv6Buttons.Select(button => button.Text)));
                             CheckAssertion(results, "英文：IPv6 邻接页按钮无中文",
-                                ipv6Buttons.Count == 6 && ipv6Buttons.All(button => !HasCjk(button.Text)));
+                                ipv6Buttons.Count == 7 && ipv6Buttons.All(button => !HasCjk(button.Text)));
 
                             foreach (var name in new[]
                                      {
@@ -11990,24 +11991,10 @@ internal static class Program
         const string testRouter = "fe80::4:4";
         const string testMac = "02:00:00:00:00:44";
         string? blockTarget = null;
+        string? blockTargetRouter = null;
 
         try
         {
-            // RA 阻断在 POC 通过前必须被服务端拒绝，避免界面出现"看似能拦"的假象。
-            var raBlock = ServiceClient.TryRequest(
-                new ServiceRequest
-                {
-                    Command = ServiceProtocol.Commands.BlockIpv6,
-                    Ipv6BlockKind = "ra",
-                    Ipv6BlockAddress = testRouter,
-                    Ipv6BlockMinutes = 1,
-                    Ipv6BlockEnabled = true,
-                },
-                TimeSpan.FromSeconds(15),
-                out _);
-
-            CheckAssertion(results, "RA 阻断被拒绝（POC 尚未通过）", raBlock is { Ok: false });
-
             var unknownBlock = ServiceClient.TryRequest(
                 new ServiceRequest
                 {
@@ -12074,6 +12061,61 @@ internal static class Program
                 if (release is not { Ok: true })
                 {
                     W($"    解除失败：{release?.Error ?? releaseError}");
+                }
+            }
+
+            var blockTargetRouters = snapshot.Ipv6Routers?
+                .FirstOrDefault(item => !item.Trusted && !item.Blocked);
+
+            if (blockTargetRouters is null)
+            {
+                W("    未检测到可阻断的 IPv6 路由器，跳过 RA 阻断用例。");
+            }
+            else
+            {
+                blockTargetRouter = blockTargetRouters.LinkLocal;
+
+                var raBlock = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.BlockIpv6,
+                        Ipv6BlockKind = "ra",
+                        Ipv6BlockAddress = blockTargetRouter,
+                        Ipv6BlockMinutes = 1,
+                        Ipv6BlockEnabled = true,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var raBlockError);
+
+                CheckAssertion(results, "临时阻断 IPv6 路由器",
+                    raBlock is { Ok: true }
+                    && raBlock.Ipv6Routers?.Any(item =>
+                        string.Equals(item.LinkLocal, blockTargetRouter, StringComparison.OrdinalIgnoreCase)
+                        && item.Blocked) == true);
+
+                if (raBlock is not { Ok: true })
+                {
+                    W($"    RA 阻断失败：{raBlock?.Error ?? raBlockError}");
+                }
+
+                var raRelease = ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.BlockIpv6,
+                        Ipv6BlockKind = "ra",
+                        Ipv6BlockAddress = blockTargetRouter,
+                        Ipv6BlockEnabled = false,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out var raReleaseError);
+
+                CheckAssertion(results, "解除 RA 阻断",
+                    raRelease is { Ok: true }
+                    && raRelease.Ipv6Routers?.All(item => !item.Blocked) == true);
+
+                if (raRelease is not { Ok: true })
+                {
+                    W($"    RA 解除失败：{raRelease?.Error ?? raReleaseError}");
                 }
             }
 
@@ -12162,6 +12204,20 @@ internal static class Program
                         Command = ServiceProtocol.Commands.BlockIpv6,
                         Ipv6BlockKind = "dhcpv6",
                         Ipv6BlockAddress = blockTarget,
+                        Ipv6BlockEnabled = false,
+                    },
+                    TimeSpan.FromSeconds(15),
+                    out _);
+            }
+
+            if (!string.IsNullOrWhiteSpace(blockTargetRouter))
+            {
+                ServiceClient.TryRequest(
+                    new ServiceRequest
+                    {
+                        Command = ServiceProtocol.Commands.BlockIpv6,
+                        Ipv6BlockKind = "ra",
+                        Ipv6BlockAddress = blockTargetRouter,
                         Ipv6BlockEnabled = false,
                     },
                     TimeSpan.FromSeconds(15),

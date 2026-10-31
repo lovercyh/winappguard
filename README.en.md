@@ -52,10 +52,9 @@ and finish with *"blocked."*
 > **4.4 adds IPv6 neighbour security.** The *LAN* page gains an **IPv6 neighbour** sub-tab that
 > detects rogue Router Advertisements (unexpected router, prefix/flags changes, RA flood),
 > DHCPv6 spoofing, and NDP spoofing (router NA MAC change, neighbour cache mismatch, Redirect,
-> DAD conflict, …). **Alert only by default**; an untrusted DHCPv6 server can be blocked
-> temporarily for 10 minutes (WFP transport layer, POC passed), RA blocking is still gated on
-> POC, and NDP is never blocked. See
-> [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md).
+> DAD conflict, …). **Alert only by default**; an untrusted DHCPv6 server or router can be
+> blocked temporarily for 10 minutes (WFP transport layer, POC passed), and NDP is never
+> blocked. See [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
@@ -122,9 +121,9 @@ and finish with *"blocked."*
   **NDP spoofing** (router NA MAC change, neighbour cache mismatch, MAC claiming many
   addresses, unsolicited NA burst, SLLA/TLLA mismatch, non-gateway Redirect, DAD conflict).
   16 rules, a 5-minute quiet baseline, router/DHCPv6 trust, and 7 / 15 / 30-day retention;
-  **alert only**, except that an untrusted DHCPv6 server can be blocked for 10 minutes
-  (WFP transport layer, POC passed). True RA Guard is a switch feature; this is host-side
-  detection; NDP is never blocked and RA blocking is still gated on its POC.
+  **alert only**, except that an untrusted DHCPv6 server or router can be blocked for
+  10 minutes (WFP transport layer, POC passed); RA blocking also drops that address's NS/NA.
+  True RA Guard is a switch feature; this is host-side detection; NDP is never blocked.
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /
@@ -184,7 +183,8 @@ This needs to be explicit.
   another response to the same query.
 - ❌ IPv6 neighbour security is **alert only by default**; true RA Guard is a switch/bridge
   feature and this is host-side detection only. **NDP is never blocked** (NA/NS are required
-  for IPv6), and RA/DHCPv6 blocking is only considered after a VM POC.
+  for IPv6); DHCPv6/RA blocks are temporary (10 min), target only untrusted detected peers
+  after a passed VM POC, and an RA block also drops that address's NS/NA.
 - ❌ Anti-port-scan only inspects **inbound TCP SYN**; no UDP scans, payload inspection or
   permanent automatic blocking. Without Npcap both traffic statistics and anti-scan are
   unavailable (the installer requires Npcap).

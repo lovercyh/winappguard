@@ -23,6 +23,7 @@ public sealed partial class MainForm
     private Button _ipv6ResetBaselineButton = null!;
     private Button _ipv6TrustRouterButton = null!;
     private Button _ipv6TrustDhcpButton = null!;
+    private Button _ipv6BlockRouterButton = null!;
     private Button _ipv6BlockDhcpButton = null!;
     private CheckBox _ipv6AutoRefreshCheckBox = null!;
     private TabControl _ipv6EndpointTabs = null!;
@@ -105,6 +106,14 @@ public sealed partial class MainForm
         };
         _ipv6BlockDhcpButton.Click += OnIpv6BlockDhcpClick;
 
+        _ipv6BlockRouterButton = new Button
+        {
+            Text = Localizer.T("临时阻断此 RA（10 分钟）"),
+            AutoSize = true,
+            MinimumSize = new Size(120, 27),
+        };
+        _ipv6BlockRouterButton.Click += OnIpv6BlockRouterClick;
+
         var actions = new FlowLayoutPanel
         {
             Location = new Point(0, 2),
@@ -116,7 +125,8 @@ public sealed partial class MainForm
         actions.Controls.AddRange(new Control[]
         {
             _ipv6RefreshButton, _ipv6ClearButton, _ipv6ResetBaselineButton,
-            _ipv6TrustRouterButton, _ipv6TrustDhcpButton, _ipv6BlockDhcpButton,
+            _ipv6TrustRouterButton, _ipv6TrustDhcpButton,
+            _ipv6BlockDhcpButton, _ipv6BlockRouterButton,
         });
 
         _ipv6AutoRefreshCheckBox = new CheckBox
@@ -156,6 +166,7 @@ public sealed partial class MainForm
         AddLanColumn(_ipv6RouterGrid, Localizer.T("前缀"), nameof(Ipv6RouterRow.Prefixes), 220);
         AddLanColumn(_ipv6RouterGrid, Localizer.T("标志"), nameof(Ipv6RouterRow.Flags), 55);
         AddLanColumn(_ipv6RouterGrid, Localizer.T("生命周期"), nameof(Ipv6RouterRow.LifetimeText), 80);
+        AddLanColumn(_ipv6RouterGrid, Localizer.T("阻断"), nameof(Ipv6RouterRow.BlockText), 110);
         AddLanColumn(_ipv6RouterGrid, Localizer.T("信任"), nameof(Ipv6RouterRow.TrustedText), 70, fill: true);
 
         _ipv6DhcpGrid = CreateLanGrid(
@@ -370,7 +381,8 @@ public sealed partial class MainForm
         var routerRows = _ipv6Routers.Select(item => new Ipv6RouterRow(item)).ToList();
         var routerSignature = string.Join(
             "|",
-            routerRows.Select(row => $"{row.LinkLocal}/{row.Mac}/{row.Prefixes}/{row.Trusted}"));
+            routerRows.Select(row =>
+                $"{row.LinkLocal}/{row.Mac}/{row.Prefixes}/{row.Trusted}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}"));
 
         if (!string.Equals(routerSignature, _ipv6RouterSignature, StringComparison.Ordinal))
         {
@@ -468,13 +480,17 @@ public sealed partial class MainForm
         _ipv6TrustRouterButton.Text = router?.Trusted == true
             ? Localizer.T("取消信任此路由器")
             : Localizer.T("信任此路由器");
+        _ipv6BlockRouterButton.Enabled = available && router is not null && router.Trusted != true;
+        _ipv6BlockRouterButton.Text = router?.Blocked == true
+            ? Localizer.T("解除 RA 阻断")
+            : Localizer.T("临时阻断此 RA（10 分钟）");
         _ipv6TrustDhcpButton.Enabled = available && dhcp is not null;
         _ipv6TrustDhcpButton.Text = dhcp?.Trusted == true
             ? Localizer.T("取消信任此 DHCPv6")
             : Localizer.T("信任此 DHCPv6");
         _ipv6BlockDhcpButton.Enabled = available && dhcp is not null && dhcp.Trusted != true;
         _ipv6BlockDhcpButton.Text = dhcp?.Blocked == true
-            ? Localizer.T("解除阻断")
+            ? Localizer.T("解除 DHCPv6 阻断")
             : Localizer.T("临时阻断此 DHCPv6（10 分钟）");
         _ipv6AutoRefreshCheckBox.Enabled = available;
     }
@@ -626,7 +642,7 @@ public sealed partial class MainForm
 
     /// <summary>
     /// 4.4：临时阻断 / 解除该 DHCPv6 服务器。
-    /// 已通过 WFP 传输层 POC（2026-10-31）；RA 未通过前不提供按钮。
+    /// 已通过 WFP 传输层 POC（2026-10-31）。
     /// </summary>
     private void OnIpv6BlockDhcpClick(object? sender, EventArgs e)
     {
@@ -665,18 +681,70 @@ public sealed partial class MainForm
             }
         }
 
+        ApplyIpv6Block("dhcpv6", row.Address, enabling);
+    }
+
+    /// <summary>
+    /// 4.4：临时阻断 / 解除该 RA 源。
+    ///
+    /// 传输层拿不到 ICMP type，实际拦的是该地址的**全部 ICMPv6**（含 NS/NA），
+    /// 所以确认框必须把范围说清楚；已经装上的 rogue 前缀/默认路由不会被自动删除。
+    /// 已通过 WFP 传输层 POC（2026-10-31）。
+    /// </summary>
+    private void OnIpv6BlockRouterClick(object? sender, EventArgs e)
+    {
+        if (_ipv6RouterGrid.CurrentRow?.DataBoundItem is not Ipv6RouterRow row)
+        {
+            return;
+        }
+
+        var enabling = !row.Blocked;
+
+        if (enabling)
+        {
+            var confirmed = ConfirmForm.Show(
+                owner: DialogOwner,
+                title: Localizer.T("临时阻断此 RA"),
+                question: Localizer.F("确定要临时阻断 IPv6 路由器「{0}」吗？", row.LinkLocal),
+                details: new[]
+                {
+                    new KeyValuePair<string, string>(
+                        Localizer.T("将要做的"),
+                        Localizer.T("用 WFP 传输层阻断该地址的全部 ICMPv6，最长 10 分钟")),
+                    new KeyValuePair<string, string>(
+                        Localizer.T("不会影响"),
+                        Localizer.T("其它 IPv6 流量、合法路由器/DHCPv6 和其它防护功能")),
+                },
+                warnings: new[]
+                {
+                    Localizer.T("传输层不支持只拦 RA，该地址的 NS/NA 也会被拦。"),
+                    Localizer.T("已安装的 rogue 前缀/默认路由不会被自动删除，需要手动清理。"),
+                },
+                confirmText: Localizer.T("阻断 10 分钟"));
+
+            if (!confirmed)
+            {
+                return;
+            }
+        }
+
+        ApplyIpv6Block("ra", row.LinkLocal, enabling);
+    }
+
+    private void ApplyIpv6Block(string kind, string address, bool enabling)
+    {
         try
         {
             var response = CallService(
                 ServiceProtocol.Commands.BlockIpv6,
                 new ServiceRequest
                 {
-                    Ipv6BlockKind = "dhcpv6",
-                    Ipv6BlockAddress = row.Address,
+                    Ipv6BlockKind = kind,
+                    Ipv6BlockAddress = address,
                     Ipv6BlockMinutes = 10,
                     Ipv6BlockEnabled = enabling,
                 },
-                Localizer.T(enabling ? "临时阻断此 DHCPv6" : "解除 DHCPv6 阻断"));
+                Localizer.T(enabling ? "临时阻断此 IPv6 目标" : "解除 IPv6 阻断"));
 
             if (response is null)
             {
@@ -694,14 +762,14 @@ public sealed partial class MainForm
             _ipv6Status = response.Ipv6SecurityStatus ?? _ipv6Status;
             RebuildIpv6View();
             ShowTrayBalloon(
-                Localizer.T(enabling ? "已临时阻断 DHCPv6 服务器" : "已解除 DHCPv6 阻断"),
+                Localizer.T(enabling ? "已临时阻断 IPv6 目标" : "已解除 IPv6 阻断"),
                 enabling
-                    ? Localizer.F("{0}\n10 分钟后自动解除。", row.Address)
-                    : row.Address);
+                    ? Localizer.F("{0}\n10 分钟后自动解除。", address)
+                    : address);
         }
         catch (Exception ex)
         {
-            ShowError(Localizer.T("修改 DHCPv6 阻断失败"), ex, "Failed to change IPv6 DHCPv6 block");
+            ShowError(Localizer.T("修改 IPv6 阻断失败"), ex, "Failed to change IPv6 block");
         }
     }
 
@@ -806,6 +874,8 @@ public sealed partial class MainForm
             Lifetime = item.Lifetime;
             Trusted = item.Trusted;
             Baseline = item.Baseline;
+            Blocked = item.Blocked;
+            BlockExpiresUtc = item.BlockExpiresUtc;
         }
 
         public string LinkLocal { get; }
@@ -822,7 +892,17 @@ public sealed partial class MainForm
 
         public bool Baseline { get; }
 
+        public bool Blocked { get; }
+
+        public DateTime? BlockExpiresUtc { get; }
+
         public string LifetimeText => Lifetime <= 0 ? "—" : Localizer.F("{0} 秒", Lifetime);
+
+        public string BlockText => !Blocked || BlockExpiresUtc is null
+            ? "—"
+            : Localizer.F(
+                "剩余 {0} 分钟",
+                Math.Max(1, (int)Math.Ceiling((BlockExpiresUtc.Value - DateTime.UtcNow).TotalMinutes)));
 
         public string TrustedText => Localizer.T(Trusted ? "已信任" : Baseline ? "基线" : "未信任");
     }

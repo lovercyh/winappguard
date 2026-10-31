@@ -673,6 +673,12 @@ public sealed class Ipv6RouterDto
 
     public bool Trusted { get; set; }
 
+    /// <summary>4.4：当前是否被临时阻断（拦该地址的全部 ICMPv6）。</summary>
+    public bool Blocked { get; set; }
+
+    /// <summary>4.4：临时阻断的到期时间（UTC）。</summary>
+    public DateTime? BlockExpiresUtc { get; set; }
+
     public DateTime FirstSeenUtc { get; set; }
 
     public DateTime LastSeenUtc { get; set; }

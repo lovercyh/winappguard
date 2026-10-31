@@ -233,6 +233,9 @@ internal static class Ipv6Wfp
     internal static bool RemoveDhcp(WfpEngine engine, IPAddress address, BlockLayer layer)
         => engine.TryDeleteFilter(DhcpKey(address, layer));
 
+    internal static bool RemoveRouter(WfpEngine engine, IPAddress address, BlockLayer layer)
+        => engine.TryDeleteFilter(RouterKey(address, layer));
+
     internal static int RemoveAll()
     {
         using var engine = WfpEngine.Open();
@@ -300,6 +303,15 @@ internal sealed class Ipv6BlockHost : IDisposable
         }
     }
 
+    internal bool AddRouter(IPAddress address, out string scope)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return Ipv6Wfp.AddRouterCore(_engine, address, Ipv6Wfp.BlockLayer.Transport, out scope);
+        }
+    }
+
     internal bool RemoveDhcp(IPAddress address)
     {
         lock (_gate)
@@ -310,6 +322,19 @@ internal sealed class Ipv6BlockHost : IDisposable
             }
 
             return Ipv6Wfp.RemoveDhcp(_engine, address, Ipv6Wfp.BlockLayer.Transport);
+        }
+    }
+
+    internal bool RemoveRouter(IPAddress address)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            return Ipv6Wfp.RemoveRouter(_engine, address, Ipv6Wfp.BlockLayer.Transport);
         }
     }
 

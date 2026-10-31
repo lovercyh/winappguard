@@ -17,8 +17,8 @@
 ## [4.4] - 2026-10-30
 
 > 功能版本：新增「IPv6 邻接安全」（RA / DHCPv6 / NDP），放在「防护 → 局域网」的
-> IPv6 二级页；默认只告警，非信任 DHCPv6 服务器可临时阻断 10 分钟（WFP POC 已通过），
-> RA 阻断待 POC。
+> IPv6 二级页；默认只告警，非信任 DHCPv6 服务器 / 路由器可临时阻断 10 分钟
+> （WFP 传输层 POC 已通过）。
 
 ### 新增
 
@@ -34,7 +34,11 @@
   - 高危 IPv6 事件托盘气泡，点击定位到「局域网 → IPv6 邻接」。
 - **临时阻断 DHCPv6**：选中非信任的 DHCPv6 服务器 → 「临时阻断此 DHCPv6（10 分钟）」；
   在 WFP **传输层**按「远端地址 + UDP 547→546」逐包拦截，到期/解除/服务重启自动恢复；
-  DHCPv6 表新增「阻断」列显示剩余分钟数。RA 仍只告警。
+  DHCPv6 表新增「阻断」列显示剩余分钟数。
+- **临时阻断 RA**：选中非信任的 IPv6 路由器 → 「临时阻断此 RA（10 分钟）」；
+  传输层不支持 ICMP type，实际拦该地址的**全部 ICMPv6**（含 NS/NA）；
+  已安装的 rogue 前缀/默认路由不会被自动删除，界面会提示手动清理；
+  路由器表同样有「阻断」列。
 - 采集复用 4.2 的 Npcap 会话，BPF 增加 ICMPv6 / DHCPv6；只解析头部与选项，不保存报文。
 - 状态与事件独立存放：`%ProgramData%\WinAppGuard\ipv6\state.json` 与
   `ipv6\events-YYYYMMDD.jsonl`；保留期跟随 4.2 的 7/15/30 天。
@@ -42,8 +46,8 @@
   `write.ipv6-security.trust`、`write.ipv6-security.reset-baseline`、
   `write.ipv6-security.block`。
 - 新增 `--ipv6-wfp-poc ra|dhcp|clean [--layer ale|transport|datagram|all]`：
-  VM 上验证 WFP 能否拦住 RA / DHCPv6。**DHCPv6 已通过（transport 层）**；
-  ALE 层因入站授权按流缓存而失败，保留作对照；RA 仍在验收。
+  VM 上验证 WFP 能否拦住 RA / DHCPv6。**DHCPv6 与 RA 都已通过（transport 层）**；
+  ALE 层因入站授权按流缓存而失败，保留作对照。
 
 ### 变更
 
@@ -52,9 +56,9 @@
 
 ### 边界说明
 
-- 真正的 RA Guard 是交换机功能；本版本做的是 **Windows 主机侧 RA 检测**；
-  RA 阻断要通过 WFP POC 才提供，当前只告警。
-- DHCPv6 阻断只针对**当前检测到的、未信任的**服务器，最长 10 分钟；
+- 真正的 RA Guard 是交换机功能；本版本做的是 **Windows 主机侧 RA 检测**，
+  阻断用 WFP 传输层，只针对已检测到且未信任的路由器，最长 10 分钟。
+- DHCPv6 / RA 阻断都只针对**当前检测到的、未信任的**目标，最长 10 分钟；
   不落盘，服务重启即解除，不会留下永久封禁。
 - NDP 只检测、不阻断：NA/NS 是 IPv6 必需协议，拦错会断网。
 - 只处理 IPv6 邻接报文；不做 IPv6 流量统计、DPI 或载荷保存。

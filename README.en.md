@@ -2,16 +2,16 @@
 
 **See what's online. Block it in two clicks.**
 
-**An open-source firewall** · WFP-based program network control · **source available for audit and self-build**
+**An open-source simple firewall** · WFP-based · **source available for audit and self-build**
 
 [简体中文](README.md) · English
 
 > Source & license: [github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard) (MIT)
 
-WinAppGuard is a Windows program network-control tool that starts from the opposite end
-of most tools in its class. Instead of asking you to browse a list of installed programs,
-it shows you **live TCP connections** — so you start with *"what is online right now?"*
-and finish with *"blocked."*
+WinAppGuard is a simple firewall with anti-network-attack capabilities that also controls
+which programs can go online. It starts from the opposite end of most tools in its class:
+instead of asking you to browse a list of installed programs, it shows you **live TCP
+connections** — so you start with *"what is online right now?"* and finish with *"blocked."*
 
 > WinAppGuard does not forward or modify traffic itself. The real work is done by an independent
 > filtering engine built on WFP: WinAppGuard only creates and removes WFP filters on your

@@ -19,30 +19,6 @@ and finish with *"blocked."*
 > The 4.0 anti-scan reads inbound TCP headers only; it does not read payloads or drop packets inline.
 > Since 2.0 it no longer uses Windows Firewall, and it never changes any Windows Firewall setting.
 >
-> **Since 3.0 the product is split into a protection service and a UI.** Rule writes, the
-> strict-mode session and audit collection all live in `WinAppGuardSvc`; the UI runs as a
-> normal process and only asks for UAC when it needs to change a rule.
->
-> **Since 3.1 the service runs in protected mode.** The account that installs the app becomes
-> the **sole owner**. The service only accepts requests signed by that owner, so other accounts
-> — including other administrators — cannot change rules through the UI or IPC. The private key
-> is encrypted with user-scoped DPAPI; the service only stores the public key. See
-> [`docs/受保护模式设计.md`](docs/受保护模式设计.md) for details.
->
-> **4.0 adds anti-port-scan.** It uses Npcap to inspect inbound TCP SYNs, detects port
-> scans, and can temporarily block the source IP. Automatic blocking is **off by default** and
-> only affects new connections. See [`docs/4.0-反端口扫描设计.md`](docs/4.0-反端口扫描设计.md).
->
-> **4.1 makes traffic statistics precise and Npcap mandatory.** Traffic is counted per packet
-> (TCP + UDP, short-lived and failed connections included), with live rates and a 5-minute chart.
-> Declining Npcap aborts the installation without changing the system. See
-> [`docs/4.1-精确流量与实时速率设计.md`](docs/4.1-精确流量与实时速率设计.md).
->
-> **4.2 adds LAN spoofing detection.** The *Protection* tab now has a *LAN* sub-tab that detects
-> ARP spoofing (gateway MAC changes, etc.) and rogue DHCP servers. Detection only by default;
-> baselines and events are stored locally, with an optional temporary DHCP block. See
-> [`docs/4.2-局域网欺骗检测设计.md`](docs/4.2-局域网欺骗检测设计.md).
->
 > **4.3 adds DNS security.** A new *DNS security* sub-tab detects local DNS hijacking/poisoning
 > (unexpected response server, transaction/name mismatch, NXDOMAIN with answers, conflicting
 > answers, suspicious TTL, DNS server not gateway) and **plaintext DNS bypass**. Alert only,
@@ -55,6 +31,9 @@ and finish with *"blocked."*
 > DAD conflict, …). **Alert only by default**; an untrusted DHCPv6 server or router can be
 > blocked temporarily for 10 minutes (WFP transport layer, POC passed), and NDP is never
 > blocked. See [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md).
+>
+> Older versions (3.0 service split, 3.1 protected mode, 3.7 Flow IDS, 4.0 anti-scan,
+> 4.1 precise traffic, 4.2 LAN detection) are listed in [CHANGELOG](CHANGELOG.md).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)

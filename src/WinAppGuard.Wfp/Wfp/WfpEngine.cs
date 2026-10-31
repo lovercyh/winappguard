@@ -310,6 +310,178 @@ internal sealed class WfpEngine : IDisposable
     }
 
     /// <summary>
+    /// 4.4：通用入站过滤（POC 用）。
+    /// 条件：IP 协议 + 远端地址 + 可选远端端口 + 可选本地端口/ICMP 类型。
+    /// </summary>
+    internal ulong AddTransportInboundFilter(
+        Guid filterKey,
+        string displayName,
+        string? description,
+        System.Net.IPAddress remoteAddress,
+        byte protocol,
+        ushort? remotePort,
+        ushort? localPort,
+        uint action,
+        ulong weight,
+        bool persistent)
+    {
+        ThrowIfDisposed();
+
+        var isV4 = remoteAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
+        var layerKey = isV4
+            ? WfpNativeMethods.LayerAleAuthRecvAcceptV4
+            : WfpNativeMethods.LayerAleAuthRecvAcceptV6;
+        var bytes = remoteAddress.GetAddressBytes();
+        var conditions = new List<WfpNativeMethods.FwpmFilterCondition>();
+
+        conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+        {
+            FieldKey = WfpNativeMethods.ConditionIpProtocol,
+            MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+            ConditionValue = new WfpNativeMethods.FwpConditionValue
+            {
+                Type = WfpNativeMethods.FWP_UINT8,
+                Value = (IntPtr)protocol,
+            },
+        });
+
+        IntPtr addressPtr = IntPtr.Zero;
+
+        if (isV4)
+        {
+            var v4Value = (uint)((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
+            conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+            {
+                FieldKey = WfpNativeMethods.ConditionIpRemoteAddress,
+                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                ConditionValue = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT32,
+                    Value = (IntPtr)(long)v4Value,
+                },
+            });
+        }
+        else
+        {
+            addressPtr = Marshal.AllocHGlobal(16);
+            Marshal.Copy(bytes, 0, addressPtr, 16);
+            conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+            {
+                FieldKey = WfpNativeMethods.ConditionIpRemoteAddress,
+                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                ConditionValue = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_BYTE_ARRAY16_TYPE,
+                    Value = addressPtr,
+                },
+            });
+        }
+
+        if (remotePort is { } remotePortValue)
+        {
+            conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+            {
+                FieldKey = WfpNativeMethods.ConditionIpRemotePort,
+                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                ConditionValue = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT16,
+                    Value = (IntPtr)remotePortValue,
+                },
+            });
+        }
+
+        if (localPort is { } localPortValue)
+        {
+            conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+            {
+                FieldKey = WfpNativeMethods.ConditionIpLocalPort,
+                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                ConditionValue = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT16,
+                    Value = (IntPtr)localPortValue,
+                },
+            });
+        }
+
+        var namePtr = Marshal.StringToHGlobalUni(displayName);
+        var descriptionPtr = description is null ? IntPtr.Zero : Marshal.StringToHGlobalUni(description);
+        var weightPtr = Marshal.AllocHGlobal(sizeof(ulong));
+        var conditionSize = Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>();
+        var conditionsPtr = Marshal.AllocHGlobal(conditionSize * conditions.Count);
+
+        try
+        {
+            Marshal.WriteInt64(weightPtr, unchecked((long)weight));
+
+            for (var i = 0; i < conditions.Count; i++)
+            {
+                Marshal.StructureToPtr(
+                    conditions[i], IntPtr.Add(conditionsPtr, conditionSize * i), false);
+            }
+
+            var filter = new WfpNativeMethods.FwpmFilter
+            {
+                FilterKey = filterKey,
+                DisplayData = new WfpNativeMethods.FwpmDisplayData
+                {
+                    Name = namePtr,
+                    Description = descriptionPtr,
+                },
+                Flags = persistent ? WfpNativeMethods.FWPM_FILTER_FLAG_PERSISTENT : 0,
+                LayerKey = layerKey,
+                SubLayerKey = WfpNativeMethods.OurSubLayerKey,
+                Weight = new WfpNativeMethods.FwpValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT64,
+                    Value = weightPtr,
+                },
+                NumFilterConditions = (uint)conditions.Count,
+                FilterCondition = conditionsPtr,
+                Action = new WfpNativeMethods.FwpmAction { Type = action },
+            };
+
+            var descriptor = TryBuildProtectiveSd();
+            var rc = WfpNativeMethods.FwpmFilterAdd0(_handle, ref filter, descriptor, out var id);
+
+            if (descriptor != IntPtr.Zero)
+            {
+                LocalFree(descriptor);
+            }
+
+            if (rc != WfpNativeMethods.ERROR_SUCCESS)
+            {
+                LocalLog.Warning(
+                    $"[WAG-WFP-006] Failed to add the IPv6 block filter (0x{rc:X8}).");
+                throw new WfpException("添加 IPv6 阻断过滤器失败", rc);
+            }
+
+            return id;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(conditionsPtr);
+            Marshal.FreeHGlobal(weightPtr);
+
+            if (addressPtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(addressPtr);
+            }
+
+            if (namePtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(namePtr);
+            }
+
+            if (descriptionPtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(descriptionPtr);
+            }
+        }
+    }
+
+    /// <summary>
     /// 4.2：临时阻断某个 DHCP 服务器（只拦来自该 IP 的 DHCP 应答）。
     ///
     /// 条件：UDP + 远端地址 + 远端端口 67。挂在入站 accept 层，只影响新连接，不碰已有连接。

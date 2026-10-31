@@ -36,6 +36,8 @@
   `ipv6\events-YYYYMMDD.jsonl`；保留期跟随 4.2 的 7/15/30 天。
 - 协议新增：`query.ipv6-security`、`write.ipv6-security.clear`、
   `write.ipv6-security.trust`、`write.ipv6-security.reset-baseline`。
+- 新增 `--ipv6-wfp-poc ra|dhcp|clean`：VM 上验证 WFP 能否拦住 RA / DHCPv6；
+  通过前 UI 不提供阻断按钮。
 
 ### 变更
 

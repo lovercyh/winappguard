@@ -550,6 +550,7 @@ Most project documentation is in Chinese.
 | [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) | 4.3 dnsspoof/ettercap/Scapy, plaintext bypass and 24h acceptance |
 | [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md) | 4.4 RA/DHCPv6/NDP rules, 5-minute baseline, storage and blocking POC |
 | [`docs/4.4-VM验收.md`](docs/4.4-VM验收.md) | 4.4 IPv6 lab, radvd/thc-ipv6/dnsmasq and 24h acceptance |
+| [`docs/4.4-WFP-POC.md`](docs/4.4-WFP-POC.md) | 4.4 RA/DHCPv6 WFP blocking POC (fallback to alert-only) |
 
 ## Contributing
 

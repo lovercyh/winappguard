@@ -151,6 +151,12 @@ internal static class WfpNativeMethods
     internal static readonly Guid ConditionIpRemotePort = new("c35a604d-d22b-4e1a-91b4-68f674ee674b");
 
     /// <summary>
+    /// FWPM_CONDITION_IP_LOCAL_PORT / FWPM_CONDITION_ICMP_TYPE：本地端口或 ICMP 类型。
+    /// GUID 取自 Windows SDK <c>um\fwpmu.h</c>；ICMPv6 type 134 用同一个条件。
+    /// </summary>
+    internal static readonly Guid ConditionIpLocalPort = new("0c1ba1af-5765-453f-af22-a8f791ac775b");
+
+    /// <summary>
     /// FWPM_CONDITION_CURRENT_PROFILE_ID：当前网络类别（域 / 专用 / 公用）。值类型：FWP_UINT32。
     /// 数值与 <c>NLM_NETWORK_CATEGORY</c> 一致：0=公用、1=专用、2=域。
     /// </summary>

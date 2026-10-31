@@ -512,6 +512,7 @@ WinAppGuard.exe --recover
 | [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) | 4.3 dnsspoof/ettercap/Scapy、明文绕过与 24h 验收 |
 | [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md) | 4.4 RA/DHCPv6/NDP 规则、5 分钟基线、存储与阻断 POC |
 | [`docs/4.4-VM验收.md`](docs/4.4-VM验收.md) | 4.4 IPv6 实验网、radvd/thc-ipv6/dnsmasq 与 24h 验收 |
+| [`docs/4.4-WFP-POC.md`](docs/4.4-WFP-POC.md) | 4.4 RA/DHCPv6 的 WFP 阻断 POC（失败则只告警） |
 
 ## 参与贡献
 

@@ -206,7 +206,11 @@ internal static class Program
 
         try
         {
-            if (args.Contains("--status", StringComparer.OrdinalIgnoreCase))
+            if (args.Contains("--ipv6-wfp-poc", StringComparer.OrdinalIgnoreCase))
+            {
+                RunIpv6WfpPoc(args);
+            }
+            else if (args.Contains("--status", StringComparer.OrdinalIgnoreCase))
             {
                 RunStatus();
             }
@@ -976,6 +980,108 @@ internal static class Program
     // ==================================================================
     // 模式 4：只读状态
     // ==================================================================
+
+    /// <summary>
+    /// 4.4 WFP POC：临时加一条 IPv6 阻断过滤器，保持 N 秒，再删除。
+    ///
+    /// 用法：
+    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc ra   fe80::xxxx 120
+    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc dhcp fe80::xxxx 120
+    ///   WinAppGuard.SelfCheck.exe --ipv6-wfp-poc clean
+    /// </summary>
+    private static void RunIpv6WfpPoc(string[] args)
+    {
+        var index = Array.FindIndex(
+            args,
+            item => item.Equals("--ipv6-wfp-poc", StringComparison.OrdinalIgnoreCase));
+
+        var kind = index >= 0 && index + 1 < args.Length
+            ? args[index + 1].Trim().ToLowerInvariant()
+            : "ra";
+        var addressText = index >= 0 && index + 2 < args.Length
+            ? args[index + 2].Trim()
+            : string.Empty;
+        var seconds = 60;
+
+        if (index >= 0 && index + 3 < args.Length)
+        {
+            _ = int.TryParse(args[index + 3], out seconds);
+        }
+
+        seconds = Math.Clamp(seconds, 5, 600);
+
+        W("################################################################");
+        W("#   4.4 WFP IPv6 阻断 POC（RA / DHCPv6）                       #");
+        W("################################################################");
+        W();
+
+        if (kind == "clean")
+        {
+            var cleaned = Ipv6Wfp.RemoveAll();
+            W($"  已清理 {cleaned} 条 IPv6 POC 过滤器。");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(addressText)
+            || !System.Net.IPAddress.TryParse(addressText, out var address)
+            || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            W("  用法：");
+            W("    --ipv6-wfp-poc ra|dhcp <攻击机链路本地 IPv6> [秒]");
+            W("    --ipv6-wfp-poc clean");
+            W("  例：--ipv6-wfp-poc ra fe80::1234 120");
+            return;
+        }
+
+        var removed = Ipv6Wfp.RemoveAll();
+        W($"  先清理旧 POC 过滤器：{removed} 条");
+
+        try
+        {
+            string scope;
+
+            if (kind == "ra")
+            {
+                _ = Ipv6Wfp.AddRouter(address, out scope);
+                W($"  已添加 RA 阻断：{address}（{scope}）");
+                W("  Kali 上执行（把 <iface> 换成实际网卡）：");
+                W($"    sudo fake_router6 <iface> fd00:6:6::/64");
+                W($"  确认 rogue RA 的源地址就是 {address}；");
+                W("  Windows 上应看不到 rogue 前缀/默认路由被安装。");
+            }
+            else if (kind == "dhcp")
+            {
+                _ = Ipv6Wfp.AddDhcp(address, out scope);
+                W($"  已添加 DHCPv6 阻断：{address}（{scope}）");
+                W("  Kali 上执行（把 <iface> 换成实际网卡）：");
+                W("    sudo ip -6 addr add fd00:6:6::1/64 dev <iface>");
+                W("    sudo dnsmasq --no-daemon --port=0 --dhcp-range=fd00:6:6::100,fd00:6:6::200,64");
+                W("  Windows 上应不会新增 fd00:6:6:: 地址。");
+            }
+            else
+            {
+                W($"  未知 kind：{kind}（可用 ra / dhcp / clean）");
+                return;
+            }
+
+            W($"  当前 IPv6 POC 过滤器数：{Ipv6Wfp.Count()}");
+            W($"  过滤器保持 {seconds} 秒，请现在从 Kali 发包…");
+            Thread.Sleep(TimeSpan.FromSeconds(seconds));
+        }
+        catch (Exception ex)
+        {
+            W($"  ！POC 失败：{ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            var finalRemoved = Ipv6Wfp.RemoveAll();
+            W($"  已删除 IPv6 POC 过滤器：{finalRemoved} 条");
+            W();
+            W("  结论记录：");
+            W("    - 加过滤器后 rogue 前缀/地址没有生效 → POC 通过；");
+            W("    - 仍然生效 → 该 WFP 层/条件拦不住，产品保持只告警。");
+        }
+    }
 
     private static void RunStatus()
     {

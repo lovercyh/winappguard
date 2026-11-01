@@ -157,6 +157,9 @@ internal sealed class ControlServer : IDisposable
         // 4.2：ARP / DHCP 检测（独立的第三份 Npcap 会话）。
         LanHost.Start();
 
+        // 4.5：本机配置完整性（只读文件/注册表，不依赖 Npcap）。
+        ConfigHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -194,6 +197,8 @@ internal sealed class ControlServer : IDisposable
         AntiScanHost.Stop();
 
         LanHost.Stop();
+
+        ConfigHost.Stop();
 
         TrafficCaptureHost.Stop();
 
@@ -590,6 +595,13 @@ internal sealed class ControlServer : IDisposable
             ServiceProtocol.Commands.BlockIpv6 => LanHost.BlockIpv6(request),
 
             ServiceProtocol.Commands.ResetIpv6Baseline => LanHost.ResetIpv6Baseline(request),
+
+            // 4.5：本机配置完整性。
+            ServiceProtocol.Commands.QueryConfigIntegrity => ConfigHost.Query(request),
+
+            ServiceProtocol.Commands.ClearConfigIntegrity => ConfigHost.Clear(request),
+
+            ServiceProtocol.Commands.RebaselineConfigIntegrity => ConfigHost.Rebaseline(request),
 
             _ when isRuleCommand => Rules.Handle(request),
 

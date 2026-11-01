@@ -256,6 +256,14 @@ public sealed class ServiceResponse
 
     public List<LanEventDto>? Ipv6SecurityEvents { get; set; }
 
+    // ---- 4.5：本机配置完整性 ----
+
+    public ConfigIntegrityStatusDto? ConfigIntegrityStatus { get; set; }
+
+    public List<ConfigItemDto>? ConfigItems { get; set; }
+
+    public List<LanEventDto>? ConfigIntegrityEvents { get; set; }
+
     public AntiScanSettingsDto? AntiScanSettings { get; set; }
 }
 
@@ -1041,4 +1049,40 @@ public sealed class ServiceStatus
 
     /// <summary>本次服务运行以来签名验证失败的次数。</summary>
     public int AuthRejectedCount { get; set; }
+}
+
+/// <summary>4.5：本机配置监控状态。</summary>
+public sealed class ConfigIntegrityStatusDto
+{
+    public bool BaselineReady { get; set; }
+
+    public DateTime? BaselineUtc { get; set; }
+
+    public int ItemCount { get; set; }
+
+    /// <summary>与基线不一致的项数（持续显示，直到重新采基线）。</summary>
+    public int ChangedCount { get; set; }
+
+    public int EventCount { get; set; }
+
+    public string? LastError { get; set; }
+}
+
+/// <summary>4.5：一个配置监控项。</summary>
+public sealed class ConfigItemDto
+{
+    /// <summary>hosts / proxy / pac / winhttp / policy / dns。</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>空 = 系统级；代理/PAC 为用户 SID。</summary>
+    public string Scope { get; set; } = string.Empty;
+
+    public string Current { get; set; } = string.Empty;
+
+    public string Baseline { get; set; } = string.Empty;
+
+    public bool Changed { get; set; }
+
+    /// <summary>high / medium。</summary>
+    public string Severity { get; set; } = "high";
 }

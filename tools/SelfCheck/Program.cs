@@ -17,6 +17,7 @@ using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.Diagnostics.AntiScan;
+using WinAppGuard.Core.Diagnostics.Config;
 using WinAppGuard.Core.Diagnostics.Ids;
 using WinAppGuard.Core.Diagnostics.Lan;
 using WinAppGuard.Core.Diagnostics.Traffic;
@@ -161,6 +162,7 @@ internal static class Program
                         && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--config-integrity-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase)
@@ -439,6 +441,10 @@ internal static class Program
             else if (args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunAntiScanProtoTest();
+            }
+            else if (args.Contains("--config-integrity-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunConfigIntegrityTest();
             }
             else if (args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1671,10 +1677,13 @@ internal static class Program
                 RenderFormTo(form, Path.Combine(outputDir, "12-ipv6-security.png"));
             }
 
+            TrySelectTab(form, "_tabConfig");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "13-config-integrity.png"));
+
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
-
             TrySelectTab(form, "_tabWhitelist");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "05-whitelist.png"));
@@ -2447,6 +2456,80 @@ internal static class Program
         TrySetField(form, "_ipv6NeighborSignature", null!);
         TrySetField(form, "_ipv6EventSignature", null!);
         InvokePrivate(form, "RebuildIpv6View", null);
+
+        // ---- 4.5：本机配置页 ----
+        TrySetField(form, "_configStatus", new ConfigIntegrityStatusDto
+        {
+            BaselineReady = true,
+            BaselineUtc = now.ToUniversalTime().AddHours(-2),
+            ItemCount = 4,
+            ChangedCount = 2,
+            EventCount = 2,
+        });
+
+        TrySetField(form, "_configItems", new List<ConfigItemDto>
+        {
+            new()
+            {
+                Kind = "hosts",
+                Scope = string.Empty,
+                Current = "10.0.0.66 update.example.com",
+                Baseline = "10.0.0.1 update.example.com",
+                Changed = true,
+                Severity = "high",
+            },
+            new()
+            {
+                Kind = "proxy",
+                Scope = "S-1-5-21-1004",
+                Current = "enable=0; server=-; auto=0",
+                Baseline = "enable=0; server=-; auto=0",
+                Changed = false,
+                Severity = "high",
+            },
+            new()
+            {
+                Kind = "winhttp",
+                Scope = string.Empty,
+                Current = "0A0000000000000000000000",
+                Baseline = "0A0000000000000000000000",
+                Changed = false,
+                Severity = "medium",
+            },
+            new()
+            {
+                Kind = "dns",
+                Scope = string.Empty,
+                Current = "223.5.5.5, 10.0.0.1",
+                Baseline = "223.5.5.5",
+                Changed = true,
+                Severity = "medium",
+            },
+        });
+
+        TrySetField(form, "_configEvents", new List<LanEventDto>
+        {
+            new()
+            {
+                Id = "cfg-1",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-3),
+                Kind = "config_hosts_changed",
+                Severity = "high",
+                Detail = "hosts 文件已变更：新增 1 行，删除 1 行。新增：10.0.0.66 update.example.com。删除：10.0.0.1 update.example.com。",
+            },
+            new()
+            {
+                Id = "cfg-2",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-9),
+                Kind = "config_dns_servers_changed",
+                Severity = "medium",
+                Detail = "DNS 服务器已变更：223.5.5.5 → 223.5.5.5, 10.0.0.1",
+            },
+        });
+
+        TrySetField(form, "_configItemSignature", null!);
+        TrySetField(form, "_configEventSignature", null!);
+        InvokePrivate(form, "RebuildConfigView", null);
 
         // ---- DNS 页 ----
         TrySetField(form, "_dnsCollecting", true);
@@ -5203,19 +5286,53 @@ internal static class Program
                         }
                     }
 
-                    // 4.2 / 4.3：防护页的四子标签 + 局域网 / DNS 安全页。
+                    // 4.2 / 4.3 / 4.5：防护页的五个子标签 + 局域网 / DNS 安全 / 本机配置页。
                     if (TryGetField<TabControl>(form, "_protectionTabs", out var protectionTabs)
                         && TryGetField<TabPage>(form, "_tabScan", out var scanTab)
                         && TryGetField<TabPage>(form, "_tabLan", out var lanTab)
-                        && TryGetField<TabPage>(form, "_tabDnsSecurity", out var dnsSecurityTab))
+                        && TryGetField<TabPage>(form, "_tabDnsSecurity", out var dnsSecurityTab)
+                        && TryGetField<TabPage>(form, "_tabConfig", out var configTab))
                     {
                         var subTabs = protectionTabs.TabPages.Cast<TabPage>()
                             .Select(page => page.Text)
                             .ToList();
 
                         W("    防护子标签 = " + string.Join(" | ", subTabs));
-                        CheckAssertion(results, "英文：防护四子标签无中文",
-                            subTabs.Count == 4 && subTabs.All(text => !HasCjk(text)));
+                        CheckAssertion(results, "英文：防护五子标签无中文",
+                            subTabs.Count == 5 && subTabs.All(text => !HasCjk(text)));
+
+                        var configButtons = new[]
+                        {
+                            "_configRefreshButton", "_configRebaselineButton", "_configClearButton",
+                        }
+                            .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
+                            .Where(button => button is not null)
+                            .Select(button => button!)
+                            .ToList();
+
+                        W("    本机配置页按钮 = " + string.Join(" | ", configButtons.Select(button => button.Text)));
+                        CheckAssertion(results, "英文：本机配置页按钮无中文",
+                            configButtons.Count == 3 && configButtons.All(button => !HasCjk(button.Text)));
+
+                        foreach (var name in new[] { "_configItemGrid", "_configEventGrid" })
+                        {
+                            if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, name, out var grid))
+                            {
+                                var headers = grid.Columns.Cast<DataGridViewColumn>()
+                                    .Select(column => column.HeaderText)
+                                    .ToList();
+
+                                W($"    {name} 列头 = " + string.Join(" | ", headers));
+                                CheckAssertion(results, $"英文：{name} 列头/空状态无中文",
+                                    headers.Count > 0
+                                    && headers.All(text => !HasCjk(text))
+                                    && !HasCjk(grid.EmptyText));
+                            }
+                            else
+                            {
+                                CheckAssertion(results, $"找得到 {name}", false);
+                            }
+                        }
 
                         var lanButtons = new[]
                         {
@@ -15342,6 +15459,133 @@ internal static class Program
         table.Refresh();
         CheckAssertion(results, "UDP 监听端口快照可读取（端口 0 永远不算监听）",
             table.Count >= 0 && !table.IsListening(0));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunConfigIntegrityTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = DateTime.UtcNow;
+
+        W("################################################################");
+        W("#   4.5 本机配置完整性（离线：差异 / 冷却 / 基线 / hosts 归一化） #");
+        W("################################################################");
+        W();
+
+        static ConfigEntry Entry(string kind, string scope, string value) => new()
+        {
+            Kind = kind,
+            Scope = scope,
+            Value = value,
+            Summary = value.Length <= 80 ? value : value[..80],
+        };
+
+        var hosts = Entry(ConfigKinds.Hosts, string.Empty, "10.0.0.1 a.local");
+        var proxy = Entry(ConfigKinds.Proxy, "S-1-5-18", "enable=0;server=;auto=0");
+        var initial = new[] { hosts, proxy };
+
+        var analyzer = new ConfigIntegrityAnalyzer();
+        var first = analyzer.Compare(initial, start);
+        CheckAssertion(results, "首次比较只建基线，不产生事件",
+            first.Count == 0 && analyzer.HasBaseline);
+
+        var unchanged = analyzer.Compare(initial, start.AddSeconds(30));
+        CheckAssertion(results, "配置未变时不产生事件", unchanged.Count == 0);
+
+        var hosts2 = Entry(
+            ConfigKinds.Hosts,
+            string.Empty,
+            "10.0.0.1 a.local\n10.0.0.2 b.local");
+
+        var hostsChanged = analyzer.Compare(new[] { hosts2, proxy }, start.AddSeconds(60));
+        CheckAssertion(results, "hosts 变化 → 一条高危事件",
+            hostsChanged.Count == 1
+            && hostsChanged[0].Kind == ConfigKinds.Hosts
+            && hostsChanged[0].Severity == "high"
+            && hostsChanged[0].Detail.Contains("新增 1 行", StringComparison.Ordinal));
+
+        var hostsRepeat = analyzer.Compare(new[] { hosts2, proxy }, start.AddSeconds(120));
+        CheckAssertion(results, "同一个已变更值不重复告警", hostsRepeat.Count == 0);
+
+        var defaultPac = Entry(ConfigKinds.Pac, "S-1-5-21-999", string.Empty);
+        var addedDefault = analyzer.Compare(
+            new[] { hosts2, proxy, defaultPac },
+            start.AddSeconds(180));
+        CheckAssertion(results, "新增的默认空配置不告警", addedDefault.Count == 0);
+
+        var evilPac = Entry(ConfigKinds.Pac, "S-1-5-21-999", "http://wpad.evil/wpad.dat");
+        var pacAdded = analyzer.Compare(
+            new[] { hosts2, proxy, evilPac },
+            start.AddSeconds(240));
+        CheckAssertion(results, "新增非默认 PAC → PAC 事件",
+            pacAdded.Count == 1 && pacAdded[0].Kind == ConfigKinds.Pac);
+
+        var proxy2 = Entry(ConfigKinds.Proxy, "S-1-5-18", "enable=1;server=1.2.3.4:8080;auto=0");
+        var proxyChanged = analyzer.Compare(
+            new[] { hosts2, proxy2, evilPac },
+            start.AddSeconds(300));
+        CheckAssertion(results, "代理变化 → 高危事件",
+            proxyChanged.Count == 1
+            && proxyChanged[0].Kind == ConfigKinds.Proxy
+            && proxyChanged[0].Severity == "high");
+
+        var proxy3 = Entry(ConfigKinds.Proxy, "S-1-5-18", "enable=1;server=5.6.7.8:8080;auto=0");
+        var suppressed = analyzer.Compare(
+            new[] { hosts2, proxy3, evilPac },
+            start.AddSeconds(360));
+        CheckAssertion(results, "同一项 10 分钟内再次变化被冷却", suppressed.Count == 0);
+
+        analyzer.SetBaseline(new[] { hosts2, proxy3, evilPac }, start.AddSeconds(400));
+        var afterReset = analyzer.Compare(
+            new[] { hosts2, proxy3, evilPac },
+            start.AddSeconds(430));
+        CheckAssertion(results, "重新采基线后不再报旧差异", afterReset.Count == 0);
+
+        var normalized = ConfigCollector.NormalizeHosts(new[]
+        {
+            "# comment",
+            "10.0.0.2 B.local A.local",
+            "not-an-ip name",
+            "10.0.0.1 x.local # inline comment",
+        });
+        CheckAssertion(results, "hosts 归一化：去注释 / 排序 / 小写 / 拒绝坏行",
+            normalized == "10.0.0.1 x.local\n10.0.0.2 a.local,b.local");
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-ConfigTest-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var statePath = Path.Combine(directory, "state.json");
+            var exported = analyzer.ExportState();
+            ConfigStateStore.Save(statePath, exported);
+            var loaded = ConfigStateStore.Load(statePath);
+
+            CheckAssertion(results, "状态文件：基线时间 / 基线项 / 观察值往返",
+                loaded.BaselineUtc == exported.BaselineUtc
+                && loaded.Baseline.Count == exported.Baseline.Count
+                && loaded.Observed.Count == exported.Observed.Count);
+
+            File.WriteAllText(statePath, "{ broken", new UTF8Encoding(false));
+            var broken = ConfigStateStore.Load(statePath);
+            CheckAssertion(results, "状态文件：坏文件回退空状态",
+                broken.Baseline.Count == 0 && broken.BaselineUtc is null);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录清不掉不影响断言。
+            }
+        }
 
         PrintSummary(results, showFirewallResidue: false);
     }

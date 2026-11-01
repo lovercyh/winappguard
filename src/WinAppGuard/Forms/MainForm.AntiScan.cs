@@ -45,6 +45,7 @@ public sealed partial class MainForm
     private TabPage _tabScan = null!;
     private TabPage _tabLan = null!;
     private TabPage _tabDnsSecurity = null!;
+    private TabPage _tabConfig = null!;
 
     /// <summary>当前是否正看着防护页的某个子标签。</summary>
     private bool IsProtectionTab(TabPage page)
@@ -534,18 +535,27 @@ public sealed partial class MainForm
             UseVisualStyleBackColor = true,
         };
 
+        _tabConfig = new TabPage(Localizer.T("本机配置"))
+        {
+            Name = "_tabConfig",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
         _tabScan.Controls.Add(_antiSplit);
         _tabScan.Controls.Add(top);
 
         _protectionTabs.Controls.Add(_tabScan);
         _protectionTabs.Controls.Add(_tabLan);
         _protectionTabs.Controls.Add(_tabDnsSecurity);
+        _protectionTabs.Controls.Add(_tabConfig);
         _protectionTabs.Controls.Add(_tabIds);
         _tabAntiScan.Controls.Add(_protectionTabs);
 
         InitializeLanPage();
         InitializeDnsSecurityPage();
         InitializeIpv6Page();
+        InitializeConfigIntegrityPage();
 
         _protectionTabs.SelectedIndexChanged += (_, _) =>
         {
@@ -575,6 +585,10 @@ public sealed partial class MainForm
                 _dnsSecBalloonPending = false;
                 _ = RefreshDnsSecurityAsync();
             }
+            else if (_protectionTabs.SelectedTab == _tabConfig)
+            {
+                _ = RefreshConfigAsync();
+            }
             else if (_protectionTabs.SelectedTab == _tabIds)
             {
                 _idsBalloonPending = false;
@@ -602,6 +616,10 @@ public sealed partial class MainForm
                 {
                     _dnsSecBalloonPending = false;
                     _ = RefreshDnsSecurityAsync();
+                }
+                else if (_protectionTabs.SelectedTab == _tabConfig)
+                {
+                    _ = RefreshConfigAsync();
                 }
                 else if (_protectionTabs.SelectedTab == _tabIds)
                 {

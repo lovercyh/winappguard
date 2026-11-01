@@ -200,6 +200,17 @@ public static class ServiceProtocol
         /// <summary>4.4：临时阻断 / 解除某个 IPv6 路由器或 DHCPv6 服务器（写，需提权）。</summary>
         public const string BlockIpv6 = "write.ipv6-security.block";
 
+        // ---- 4.5：本机配置完整性 ----
+
+        /// <summary>4.5：读取本机配置监控状态、监控项与事件（只读）。</summary>
+        public const string QueryConfigIntegrity = "query.config-integrity";
+
+        /// <summary>4.5：只清空本机配置事件（写，需提权）。</summary>
+        public const string ClearConfigIntegrity = "write.config-integrity.clear";
+
+        /// <summary>4.5：重新采集配置基线（写，需提权）。</summary>
+        public const string RebaselineConfigIntegrity = "write.config-integrity.rebaseline";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

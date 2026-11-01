@@ -61,6 +61,12 @@ internal static class LanHost
         get { lock (Gate) { return _analyzer?.Blocks.Count ?? 0; } }
     }
 
+    /// <summary>4.5：事件保留天数（配置监控复用 4.2 的设置）。</summary>
+    internal static int RetentionDays
+    {
+        get { lock (Gate) { return _analyzer?.Settings.RetentionDays ?? 7; } }
+    }
+
     internal static void Start()
     {
         LanState state = LanStateStore.Load(ServicePaths.LanStateFile);

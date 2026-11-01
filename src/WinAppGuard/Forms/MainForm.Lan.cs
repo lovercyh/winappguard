@@ -973,6 +973,12 @@ public sealed partial class MainForm
             "ipv6_nd_sender_mismatch" => "NDP 源 MAC 不一致",
             "ipv6_redirect_unexpected" => "非网关 Redirect",
             "ipv6_dad_conflict" => "DAD 冲突",
+            "config_hosts_changed" => "hosts 文件变更",
+            "config_proxy_changed" => "WinINET 代理变更",
+            "config_pac_changed" => "PAC 自动配置变更",
+            "config_winhttp_proxy_changed" => "WinHTTP 代理变更",
+            "config_policy_proxy_changed" => "组策略代理变更",
+            "config_dns_servers_changed" => "DNS 设置变更",
             _ => Kind,
         });
     }

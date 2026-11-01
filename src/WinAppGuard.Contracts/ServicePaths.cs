@@ -65,4 +65,12 @@ public static class ServicePaths
 
     /// <summary>4.4：IPv6 邻接安全状态文件。</summary>
     public static string Ipv6StateFile => Path.Combine(Ipv6Directory, "state.json");
+
+    // ---- 4.5：本机配置完整性 ----
+
+    /// <summary>4.5：hosts / 代理 / DNS 设置的基线与事件。</summary>
+    public static string ConfigDirectory => Path.Combine(DataDirectory, "config");
+
+    /// <summary>4.5：本机配置完整性状态文件。</summary>
+    public static string ConfigStateFile => Path.Combine(ConfigDirectory, "state.json");
 }

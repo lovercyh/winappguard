@@ -138,6 +138,15 @@ public sealed class ServiceRequest
 
     /// <summary>true = 阻断，false = 解除。</summary>
     public bool Ipv6BlockEnabled { get; set; }
+
+    /// <summary>4.5：要临时阻断 / 解除的名称解析来源地址。</summary>
+    public string? NameBlockAddress { get; set; }
+
+    /// <summary>4.5：阻断分钟数，服务端钳到 1–10。</summary>
+    public int NameBlockMinutes { get; set; } = 10;
+
+    /// <summary>4.5：true = 阻断，false = 解除。</summary>
+    public bool NameBlockEnabled { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -263,6 +272,14 @@ public sealed class ServiceResponse
     public List<ConfigItemDto>? ConfigItems { get; set; }
 
     public List<LanEventDto>? ConfigIntegrityEvents { get; set; }
+
+    // ---- 4.5：局域网名称解析 ----
+
+    public NameResolutionStatusDto? NameResolutionStatus { get; set; }
+
+    public List<NameSourceDto>? NameSources { get; set; }
+
+    public List<LanEventDto>? NameResolutionEvents { get; set; }
 
     public AntiScanSettingsDto? AntiScanSettings { get; set; }
 }
@@ -1085,4 +1102,39 @@ public sealed class ConfigItemDto
 
     /// <summary>high / medium。</summary>
     public string Severity { get; set; } = "high";
+}
+
+/// <summary>4.5：名称解析监控状态。</summary>
+public sealed class NameResolutionStatusDto
+{
+    public bool Collecting { get; set; }
+
+    public int SourceCount { get; set; }
+
+    public int EventCount { get; set; }
+
+    public int BlockedCount { get; set; }
+
+    public string? LastError { get; set; }
+}
+
+/// <summary>4.5：一个名称解析来源。</summary>
+public sealed class NameSourceDto
+{
+    public string Address { get; set; } = string.Empty;
+
+    public string Mac { get; set; } = string.Empty;
+
+    /// <summary>LLMNR/NBNS/mDNS（逗号分隔）。</summary>
+    public string Protocols { get; set; } = string.Empty;
+
+    public string AnswerSummary { get; set; } = string.Empty;
+
+    public int ResponseCount { get; set; }
+
+    public DateTime LastSeenUtc { get; set; }
+
+    public bool Blocked { get; set; }
+
+    public DateTime? BlockExpiresUtc { get; set; }
 }

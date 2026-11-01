@@ -28,6 +28,8 @@ internal static class LanHost
     private static LanEventStore? _eventStore;
     private static LanEventStore? _ipv6EventStore;
     private static Ipv6BlockRegistry? _ipv6Blocks;
+    private static NameResolutionAnalyzer? _nameAnalyzer;
+    private static NameBlockRegistry? _nameBlocks;
     private static System.Threading.Timer? _timer;
     private static bool _started;
     private static bool _dirty;
@@ -147,6 +149,9 @@ internal static class LanHost
 
         // 阻断登记册只在内存里：服务重启即解除，和"临时阻断 10 分钟"的语义一致。
         var ipv6Blocks = new Ipv6BlockRegistry();
+        var nameAnalyzer = new NameResolutionAnalyzer();
+        var nameBlocks = new NameBlockRegistry();
+        nameAnalyzer.SetKnownServers(CollectKnownServers(analyzer));
 
         if (!state.Settings.DhcpBlockEnabled && state.Blocks.Count > 0)
         {
@@ -173,6 +178,8 @@ internal static class LanHost
             _eventStore = eventStore;
             _ipv6EventStore = ipv6EventStore;
             _ipv6Blocks = ipv6Blocks;
+            _nameAnalyzer = nameAnalyzer;
+            _nameBlocks = nameBlocks;
             _started = true;
             _dirty = true;
             _eventCount = analyzer.Snapshot().Events.Count;
@@ -229,11 +236,14 @@ internal static class LanHost
         }
 
         Ipv6BlockRegistry? ipv6Blocks;
+        NameBlockRegistry? nameBlocks;
 
         lock (Gate)
         {
             ipv6Blocks = _ipv6Blocks;
             _ipv6Blocks = null;
+            nameBlocks = _nameBlocks;
+            _nameBlocks = null;
         }
 
         try
@@ -245,11 +255,21 @@ internal static class LanHost
             ServiceLog.Warning("WAG-LAN-028", "Failed to release IPv6 block filters on stop.", ex);
         }
 
+        try
+        {
+            nameBlocks?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-034", "Failed to release name-resolution block filters on stop.", ex);
+        }
+
         lock (Gate)
         {
             _analyzer = null;
             _dnsAnalyzer = null;
             _ipv6Analyzer = null;
+            _nameAnalyzer = null;
             _eventStore = null;
             _ipv6EventStore = null;
         }
@@ -262,12 +282,16 @@ internal static class LanHost
         LanAnalyzer? analyzer;
         NpcapLanCapture? capture;
         LanEventStore? eventStore;
+        NameResolutionAnalyzer? nameAnalyzer;
+        NameBlockRegistry? nameBlocks;
 
         lock (Gate)
         {
             analyzer = _analyzer;
             capture = _capture;
             eventStore = _eventStore;
+            nameAnalyzer = _nameAnalyzer;
+            nameBlocks = _nameBlocks;
         }
 
         if (analyzer is null)
@@ -288,6 +312,13 @@ internal static class LanHost
                 LanDhcpServers = new List<LanDhcpServerDto>(),
                 LanBlocks = new List<LanBlockDto>(),
                 LanSettings = new LanSettingsDto(),
+                NameResolutionStatus = new NameResolutionStatusDto
+                {
+                    Collecting = false,
+                    LastError = "局域网检测未启动。",
+                },
+                NameSources = new List<NameSourceDto>(),
+                NameResolutionEvents = new List<LanEventDto>(),
             };
         }
 
@@ -309,6 +340,11 @@ internal static class LanHost
         {
             _eventCount = events.Count;
         }
+
+        var nameSources = nameAnalyzer?.SnapshotSources() ?? new List<NameSource>();
+        var nameEvents = events
+            .Where(item => item.Kind.StartsWith("name_", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
         return new ServiceResponse
         {
@@ -332,6 +368,16 @@ internal static class LanHost
             LanDhcpServers = snapshot.DhcpServers.Select(ToDto).ToList(),
             LanBlocks = snapshot.Blocks.Select(ToDto).ToList(),
             LanSettings = ToDto(analyzer.Settings),
+            NameResolutionStatus = new NameResolutionStatusDto
+            {
+                Collecting = capture?.IsRunning == true,
+                SourceCount = nameSources.Count,
+                EventCount = nameEvents.Count,
+                BlockedCount = nameBlocks?.Count ?? 0,
+                LastError = capture?.LastError,
+            },
+            NameSources = nameSources.Select(item => ToDto(item, nameBlocks)).ToList(),
+            NameResolutionEvents = nameEvents.Select(ToDto).ToList(),
         };
     }
 
@@ -837,8 +883,109 @@ internal static class LanHost
         return QueryIpv6(request);
     }
 
-    internal static ServiceResponse BlockIpv6(ServiceRequest request)
+    internal static ServiceResponse ClearName(ServiceRequest request)
     {
+        LanEventStore? store;
+        NameResolutionAnalyzer? analyzer;
+
+        lock (Gate)
+        {
+            store = _eventStore;
+            analyzer = _nameAnalyzer;
+        }
+
+        if (analyzer is null)
+        {
+            return Error(request, "名称解析检测未启动。");
+        }
+
+        try
+        {
+            store?.ClearKinds("name_");
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-LAN-036", "Failed to clear name-resolution events.", ex);
+        }
+
+        lock (Gate)
+        {
+            _dirty = true;
+        }
+
+        ServiceLog.Operation("WAG-LAN-037", "Name resolution events cleared.");
+        return Query(request);
+    }
+
+    internal static ServiceResponse BlockName(ServiceRequest request)
+    {
+        NameResolutionAnalyzer? analyzer;
+        NameBlockRegistry? blocks;
+        var addressText = request.NameBlockAddress;
+
+        if (string.IsNullOrWhiteSpace(addressText)
+            || !System.Net.IPAddress.TryParse(addressText.Trim(), out var address)
+            || address.AddressFamily is not (
+                System.Net.Sockets.AddressFamily.InterNetwork
+                or System.Net.Sockets.AddressFamily.InterNetworkV6))
+        {
+            return Error(request, "缺少或非法的来源地址。");
+        }
+
+        if (System.Net.IPAddress.IsLoopback(address)
+            || address.Equals(System.Net.IPAddress.Any)
+            || address.Equals(System.Net.IPAddress.IPv6Any)
+            || address.IsIPv6Multicast)
+        {
+            return Error(request, "不能阻断回环 / 组播 / 未指定地址。");
+        }
+
+        lock (Gate)
+        {
+            analyzer = _nameAnalyzer;
+            blocks = _nameBlocks;
+        }
+
+        if (analyzer is null || blocks is null)
+        {
+            return Error(request, "名称解析检测未启动。");
+        }
+
+        var text = address.ToString();
+
+        if (!request.NameBlockEnabled)
+        {
+            if (!blocks.Release(text))
+            {
+                return Error(request, "该地址没有正在生效的临时阻断。");
+            }
+
+            ServiceLog.Operation("WAG-LAN-038", $"Name-resolution block released for {text}.");
+            return Query(request);
+        }
+
+        // 只允许阻断当前确实检测到的来源，避免 IPC 被封任意地址。
+        var source = analyzer.SnapshotSources().FirstOrDefault(item =>
+            string.Equals(item.Address, text, StringComparison.OrdinalIgnoreCase));
+
+        if (source is null)
+        {
+            return Error(request, "该地址不是当前检测到的名称解析来源。");
+        }
+
+        if (!blocks.TryBlock(address, request.NameBlockMinutes, out var blockError))
+        {
+            return Error(request, blockError);
+        }
+
+        var minutes = Math.Clamp(request.NameBlockMinutes, 1, NameBlockRegistry.MaxMinutes);
+        ServiceLog.Operation(
+            "WAG-LAN-039",
+            $"Name-resolution block for {text} (UDP 5355/137/5353), {minutes} min.");
+        return Query(request);
+    }
+
+    internal static ServiceResponse BlockIpv6(ServiceRequest request)    {
         Ipv6Analyzer? ipv6;
         Ipv6BlockRegistry? blocks;
         var addressText = request.Ipv6BlockAddress;
@@ -991,6 +1138,7 @@ internal static class LanHost
             DnsAnalyzer? dns;
             Ipv6Analyzer? ipv6;
             Ipv6BlockRegistry? ipv6Blocks;
+            NameBlockRegistry? nameBlocks;
 
             lock (Gate)
             {
@@ -1004,6 +1152,7 @@ internal static class LanHost
                 dns = _dnsAnalyzer;
                 ipv6 = _ipv6Analyzer;
                 ipv6Blocks = _ipv6Blocks;
+                nameBlocks = _nameBlocks;
             }
 
             if (analyzer is null)
@@ -1028,6 +1177,16 @@ internal static class LanHost
                 analyzer.UpdateGatewayHints(LanEnvironment.GetGatewayHints());
                 dns?.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
                 ipv6?.UpdateLocalAddresses(LanEnvironment.GetLocalIpv6Addresses());
+
+                // 4.5：WPAD 判定要用“当前网关 + DNS”，随提示一起刷新。
+                try
+                {
+                    _nameAnalyzer?.SetKnownServers(CollectKnownServers(analyzer));
+                }
+                catch (Exception)
+                {
+                    // 网关/DNS 枚举失败时沿用上一次的可信来源集合。
+                }
 
                 _nextHintsUtc = now.Add(HintsInterval);
             }
@@ -1072,6 +1231,19 @@ internal static class LanHost
                 }
             }
 
+            // 4.5：到期的名称解析来源阻断。
+            if (nameBlocks is not null)
+            {
+                var expired = nameBlocks.Prune(now);
+
+                if (expired.Count > 0)
+                {
+                    ServiceLog.Operation(
+                        "WAG-LAN-035",
+                        $"Expired name-resolution block(s) released: {string.Join(", ", expired)}.");
+                }
+            }
+
             if (now >= _nextPruneUtc)
             {
                 var settings = analyzer.Settings;
@@ -1099,6 +1271,58 @@ internal static class LanHost
         catch (Exception ex)
         {
             ServiceLog.Warning("WAG-LAN-016", "LAN detection tick failed.", ex);
+        }
+    }
+
+    private static void OnName(NameMessage message)
+    {
+        NameResolutionAnalyzer? analyzer;
+
+        lock (Gate)
+        {
+            analyzer = _nameAnalyzer;
+
+            if (!_started || analyzer is null)
+            {
+                return;
+            }
+        }
+
+        var alerts = analyzer.Observe(message, DateTime.UtcNow);
+
+        foreach (var alert in alerts)
+        {
+            OnEvent(new LanEvent
+            {
+                TimeUtc = alert.TimeUtc,
+                Kind = alert.Kind,
+                Severity = alert.Severity,
+                Adapter = message.Adapter,
+                Detail = alert.Detail,
+                SourceMac = alert.SourceMac,
+                TargetIp = alert.SourceAddress,
+                Blocked = false,
+            });
+        }
+    }
+
+    /// <summary>4.5：网关 + 已配置 DNS，用于判断 WPAD 应答是否来自可信来源。</summary>
+    private static IEnumerable<string> CollectKnownServers(LanAnalyzer analyzer)
+    {
+        foreach (var gateway in analyzer.Gateways)
+        {
+            if (!string.IsNullOrWhiteSpace(gateway.Ip))
+            {
+                yield return gateway.Ip;
+            }
+        }
+
+        foreach (var dns in LanEnvironment.GetDnsHints())
+        {
+            if (!string.IsNullOrWhiteSpace(dns.Address))
+            {
+                yield return dns.Address;
+            }
         }
     }
 
@@ -1172,6 +1396,7 @@ internal static class LanHost
             Ipv6RaObserved = message => ipv6Analyzer?.ObserveRa(message, DateTime.UtcNow),
             Ipv6NdObserved = message => ipv6Analyzer?.ObserveNd(message, DateTime.UtcNow),
             Ipv6DhcpObserved = message => ipv6Analyzer?.ObserveDhcp(message, DateTime.UtcNow),
+            NameObserved = message => OnName(message),
             Log = message => ServiceLog.Info("WAG-LAN-018", message),
         };
 
@@ -1372,6 +1597,29 @@ internal static class LanHost
         FirstSeenUtc = item.FirstSeenUtc,
         LastSeenUtc = item.LastSeenUtc,
     };
+
+    private static NameSourceDto ToDto(NameSource item, NameBlockRegistry? blocks)
+    {
+        var blocked = false;
+        var expiresUtc = default(DateTime);
+
+        if (blocks is not null)
+        {
+            blocked = blocks.TryGet(item.Address, out expiresUtc);
+        }
+
+        return new NameSourceDto
+        {
+            Address = item.Address,
+            Mac = item.Mac,
+            Protocols = item.Protocols,
+            AnswerSummary = item.AnswerSummary,
+            ResponseCount = item.ResponseCount,
+            LastSeenUtc = item.LastSeenUtc,
+            Blocked = blocked,
+            BlockExpiresUtc = blocked ? expiresUtc : null,
+        };
+    }
 
     private static string FormatIpv6Flags(Ipv6Router item)
     {

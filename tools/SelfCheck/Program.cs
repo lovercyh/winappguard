@@ -163,6 +163,7 @@ internal static class Program
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--config-integrity-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--name-resolution-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase)
@@ -445,6 +446,10 @@ internal static class Program
             else if (args.Contains("--config-integrity-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunConfigIntegrityTest();
+            }
+            else if (args.Contains("--name-resolution-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunNameResolutionTest();
             }
             else if (args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1681,6 +1686,15 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "13-config-integrity.png"));
 
+            if (TryGetField<TabControl>(form, "_lanTabs", out var lanTabControl)
+                && TryGetField<TabPage>(form, "_lanNamePage", out var namePage))
+            {
+                TrySelectTab(form, "_tabLan");
+                lanTabControl.SelectedTab = namePage;
+                Application.DoEvents();
+                RenderFormTo(form, Path.Combine(outputDir, "14-name-resolution.png"));
+            }
+
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "02-rules.png"));
@@ -2530,6 +2544,71 @@ internal static class Program
         TrySetField(form, "_configItemSignature", null!);
         TrySetField(form, "_configEventSignature", null!);
         InvokePrivate(form, "RebuildConfigView", null);
+
+        // ---- 4.5：名称解析页 ----
+        TrySetField(form, "_nameStatus", new NameResolutionStatusDto
+        {
+            Collecting = true,
+            SourceCount = 2,
+            EventCount = 3,
+            BlockedCount = 1,
+        });
+
+        TrySetField(form, "_nameSources", new List<NameSourceDto>
+        {
+            new()
+            {
+                Address = "10.0.0.66",
+                Mac = "aa:bb:cc:00:11:66",
+                Protocols = "LLMNR/NBNS",
+                AnswerSummary = "fileserver.lan → 10.0.0.66",
+                ResponseCount = 18,
+                LastSeenUtc = now.ToUniversalTime().AddSeconds(-12),
+            },
+            new()
+            {
+                Address = "10.0.0.99",
+                Mac = "de:ad:be:ef:00:99",
+                Protocols = "LLMNR",
+                AnswerSummary = "wpad → 10.0.0.99",
+                ResponseCount = 7,
+                LastSeenUtc = now.ToUniversalTime().AddSeconds(-20),
+                Blocked = true,
+                BlockExpiresUtc = DateTime.UtcNow.AddMinutes(8),
+            },
+        });
+
+        TrySetField(form, "_nameEvents", new List<LanEventDto>
+        {
+            new()
+            {
+                Id = "name-1",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-2),
+                Kind = "name_conflict",
+                Severity = "high",
+                Detail = "名称 fileserver.lan 在 60 秒内被 10.0.0.66 和 10.0.0.99 解析到不同地址（10.0.0.66 / 10.0.0.99），疑似名称解析投毒。",
+            },
+            new()
+            {
+                Id = "name-2",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-3),
+                Kind = "name_wpad",
+                Severity = "high",
+                Detail = "收到针对 wpad 的 LLMNR 应答（来源 10.0.0.99，地址 10.0.0.99），来源不是网关/DNS，疑似 WPAD 劫持。",
+            },
+            new()
+            {
+                Id = "name-3",
+                TimeUtc = now.ToUniversalTime().AddMinutes(-5),
+                Kind = "name_many_names",
+                Severity = "high",
+                Detail = "来源 10.0.0.99（de:ad:be:ef:00:99）在 60 秒内应答了 6 个不同名称，符合 Responder 一类名称投毒工具的特征。",
+            },
+        });
+
+        TrySetField(form, "_nameSourceSignature", null!);
+        TrySetField(form, "_nameEventSignature", null!);
+        InvokePrivate(form, "RebuildNameView", null);
 
         // ---- DNS 页 ----
         TrySetField(form, "_dnsCollecting", true);
@@ -5450,7 +5529,7 @@ internal static class Program
 
                             W("    局域网二级标签 = " + string.Join(" | ", lanSubTabs));
                             CheckAssertion(results, "英文：局域网二级标签无中文",
-                                lanSubTabs.Count == 2 && lanSubTabs.All(text => !HasCjk(text)));
+                                lanSubTabs.Count == 3 && lanSubTabs.All(text => !HasCjk(text)));
 
                             var ipv6Buttons = new[]
                             {
@@ -5494,6 +5573,50 @@ internal static class Program
                                 W("    IPv6 邻接状态行 = " + ipv6StatusLabel.Text);
                                 CheckAssertion(results, "英文：IPv6 邻接状态行无中文",
                                     !HasCjk(ipv6StatusLabel.Text));
+                            }
+
+                            // 4.5：局域网 → 名称解析。
+                            if (TryGetField<TabPage>(form, "_lanNamePage", out var namePage))
+                            {
+                                lanTabs.SelectedTab = namePage;
+                                Application.DoEvents();
+
+                                var nameButtons = new[]
+                                {
+                                    "_nameRefreshButton", "_nameClearButton", "_nameBlockButton",
+                                }
+                                    .Select(name => TryGetField<Button>(form, name, out var button) ? button : null)
+                                    .Where(button => button is not null)
+                                    .Select(button => button!)
+                                    .ToList();
+
+                                W("    名称解析页按钮 = " + string.Join(" | ", nameButtons.Select(button => button.Text)));
+                                CheckAssertion(results, "英文：名称解析页按钮无中文",
+                                    nameButtons.Count == 3 && nameButtons.All(button => !HasCjk(button.Text)));
+
+                                foreach (var name in new[] { "_nameSourceGrid", "_nameEventGrid" })
+                                {
+                                    if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, name, out var grid))
+                                    {
+                                        var headers = grid.Columns.Cast<DataGridViewColumn>()
+                                            .Select(column => column.HeaderText)
+                                            .ToList();
+
+                                        W($"    {name} 列头 = " + string.Join(" | ", headers));
+                                        CheckAssertion(results, $"英文：{name} 列头/空状态无中文",
+                                            headers.Count > 0
+                                            && headers.All(text => !HasCjk(text))
+                                            && !HasCjk(grid.EmptyText));
+                                    }
+                                    else
+                                    {
+                                        CheckAssertion(results, $"找得到 {name}", false);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                CheckAssertion(results, "找得到局域网 → 名称解析页", false);
                             }
                         }
                         else
@@ -15586,6 +15709,249 @@ internal static class Program
                 // 临时目录清不掉不影响断言。
             }
         }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunNameResolutionTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = DateTime.UtcNow;
+
+        W("################################################################");
+        W("#   4.5 名称解析投毒（离线：解析 / 冲突 / 非请求 / WPAD / mDNS） #");
+        W("################################################################");
+        W();
+
+        static void U16(List<byte> bytes, ushort value)
+        {
+            bytes.Add((byte)(value >> 8));
+            bytes.Add((byte)value);
+        }
+
+        static void WriteName(List<byte> bytes, string name)
+        {
+            foreach (var label in name.Split('.', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var text = Encoding.ASCII.GetBytes(label);
+                bytes.Add((byte)text.Length);
+                bytes.AddRange(text);
+            }
+
+            bytes.Add(0);
+        }
+
+        static byte[] BuildQuery(ushort transactionId, string name)
+        {
+            var bytes = new List<byte>();
+            U16(bytes, transactionId);
+            U16(bytes, 0);
+            U16(bytes, 1);
+            U16(bytes, 0);
+            U16(bytes, 0);
+            U16(bytes, 0);
+            WriteName(bytes, name);
+            U16(bytes, 1);
+            U16(bytes, 1);
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildResponse(ushort transactionId, string name, string address)
+        {
+            var bytes = new List<byte>();
+            U16(bytes, transactionId);
+            U16(bytes, 0x8000);
+            U16(bytes, 1);
+            U16(bytes, 1);
+            U16(bytes, 0);
+            U16(bytes, 0);
+            WriteName(bytes, name);
+            U16(bytes, 1);
+            U16(bytes, 1);
+            bytes.Add(0xC0);
+            bytes.Add(0x0C);
+            U16(bytes, 1);
+            U16(bytes, 1);
+            bytes.Add(0);
+            bytes.Add(0);
+            bytes.Add(0);
+            bytes.Add(30);
+            U16(bytes, 4);
+            bytes.AddRange(IPAddress.Parse(address).GetAddressBytes());
+            return bytes.ToArray();
+        }
+
+        static byte[] BuildNbnsQuery(ushort transactionId, string name)
+        {
+            var bytes = new List<byte>();
+            U16(bytes, transactionId);
+            U16(bytes, 0);
+            U16(bytes, 1);
+            U16(bytes, 0);
+            U16(bytes, 0);
+            U16(bytes, 0);
+
+            bytes.Add(0x20);
+            var padded = name.ToUpperInvariant().PadRight(15)[..15] + '\0';
+
+            foreach (var ch in padded)
+            {
+                bytes.Add((byte)('A' + ((ch >> 4) & 0x0F)));
+                bytes.Add((byte)('A' + (ch & 0x0F)));
+            }
+
+            bytes.Add(0);
+            U16(bytes, 0x0020);
+            U16(bytes, 0x0001);
+            return bytes.ToArray();
+        }
+
+        NameMessage Message(
+            string protocol,
+            string name,
+            ushort transactionId,
+            bool isResponse,
+            string source,
+            string? mac = "aa:00:00:00:00:05",
+            params string[] addresses) => new()
+        {
+            TimeUtc = start,
+            Protocol = protocol,
+            SourceAddress = source,
+            SourceMac = mac,
+            IsResponse = isResponse,
+            TransactionId = transactionId,
+            Name = name,
+            Addresses = addresses.ToList(),
+        };
+
+        var queryBytes = BuildQuery(0x1234, "wpad.lan");
+        CheckAssertion(results, "LLMNR 查询：解析名称/事务 ID",
+            NameResolutionParser.TryParse(
+                queryBytes, NameProtocols.Llmnr, start, "eth0", "10.0.0.5", "224.0.0.252", null, out var parsedQuery)
+            && parsedQuery.Name == "wpad.lan"
+            && parsedQuery.TransactionId == 0x1234
+            && !parsedQuery.IsResponse);
+
+        var responseBytes = BuildResponse(0x1234, "fileserver.lan", "10.0.0.66");
+        CheckAssertion(results, "LLMNR 应答：A 记录与压缩指针",
+            NameResolutionParser.TryParse(
+                responseBytes, NameProtocols.Llmnr, start, "eth0", "10.0.0.66", "10.0.0.5", null, out var parsedResponse)
+            && parsedResponse.IsResponse
+            && parsedResponse.Addresses.Contains("10.0.0.66")
+            && parsedResponse.Ttl == 30);
+
+        var nbnsBytes = BuildNbnsQuery(0x2222, "WPAD");
+        CheckAssertion(results, "NBNS 查询：first-level 名称解码",
+            NameResolutionParser.TryParse(
+                nbnsBytes, NameProtocols.Nbns, start, "eth0", "10.0.0.5", "10.0.0.255", null, out var parsedNbns)
+            && parsedNbns.Name == "wpad");
+
+        var loop = new List<byte>(new byte[12]);
+        loop.Add(0xC0);
+        loop.Add(0x0C);
+        U16(loop, 1);
+        U16(loop, 1);
+
+        CheckAssertion(results, "压缩指针自指：解析失败不崩溃",
+            !NameResolutionParser.TryParse(
+                loop.ToArray(), NameProtocols.Llmnr, start, "eth0", "10.0.0.5", "10.0.0.6", null, out _));
+
+        var conflict = new NameResolutionAnalyzer();
+        conflict.Observe(Message(NameProtocols.Llmnr, "fileserver", 1, false, "10.0.0.5"), start);
+        conflict.Observe(
+            Message(NameProtocols.Llmnr, "fileserver", 1, true, "10.0.0.5", "aa:00:00:00:00:05", "10.0.0.66"),
+            start.AddSeconds(1));
+        conflict.Observe(Message(NameProtocols.Llmnr, "fileserver", 2, false, "10.0.0.6"), start.AddSeconds(2));
+        var conflictAlerts = conflict.Observe(
+            Message(NameProtocols.Llmnr, "fileserver", 2, true, "10.0.0.6", "aa:00:00:00:00:06", "10.0.0.67"),
+            start.AddSeconds(3));
+
+        CheckAssertion(results, "同一名称不同地址 → 高危冲突",
+            conflictAlerts.Any(alert =>
+                alert.Kind == NameEventKinds.Conflict && alert.Severity == LanSeverity.High));
+
+        var unsolicited = new NameResolutionAnalyzer().Observe(
+            Message(NameProtocols.Llmnr, "unknown-host", 9, true, "10.0.0.9", "aa:00:00:00:00:09", "10.0.0.70"),
+            start);
+
+        CheckAssertion(results, "没有查询的应答 → 非请求告警",
+            unsolicited.Any(alert => alert.Kind == NameEventKinds.Unsolicited));
+
+        var many = new NameResolutionAnalyzer();
+        var manyAlerts = new List<NameAlert>();
+
+        for (var i = 0; i < 6; i++)
+        {
+            var name = $"host{i}.lan";
+            many.Observe(Message(NameProtocols.Llmnr, name, (ushort)(100 + i), false, "10.0.0.8"), start.AddSeconds(i * 2));
+            manyAlerts.AddRange(many.Observe(
+                Message(NameProtocols.Llmnr, name, (ushort)(100 + i), true, "10.0.0.8", "aa:00:00:00:00:08", $"10.0.0.{80 + i}"),
+                start.AddSeconds(i * 2 + 1)));
+        }
+
+        CheckAssertion(results, "同一来源应答 ≥5 个名称 → Responder 特征",
+            manyAlerts.Any(alert => alert.Kind == NameEventKinds.ManyNames && alert.Severity == LanSeverity.High));
+
+        var wpad = new NameResolutionAnalyzer();
+        wpad.Observe(Message(NameProtocols.Llmnr, "wpad", 7, false, "10.0.0.5"), start);
+        var wpadAlerts = wpad.Observe(
+            Message(NameProtocols.Llmnr, "wpad", 7, true, "10.0.0.66", "aa:00:00:00:00:66", "10.0.0.66"),
+            start.AddSeconds(1));
+
+        CheckAssertion(results, "非网关应答 WPAD → 高危",
+            wpadAlerts.Any(alert => alert.Kind == NameEventKinds.Wpad && alert.Severity == LanSeverity.High));
+
+        var trustedWpad = new NameResolutionAnalyzer();
+        trustedWpad.SetKnownServers(new[] { "10.0.0.1" });
+        trustedWpad.Observe(Message(NameProtocols.Llmnr, "wpad", 8, false, "10.0.0.5"), start);
+        var trustedAlerts = trustedWpad.Observe(
+            Message(NameProtocols.Llmnr, "wpad", 8, true, "10.0.0.1", "aa:00:00:00:00:01", "10.0.0.1"),
+            start.AddSeconds(1));
+
+        CheckAssertion(results, "网关/DNS 应答 WPAD 不告警",
+            trustedAlerts.All(alert => alert.Kind != NameEventKinds.Wpad));
+
+        var mdns = new NameResolutionAnalyzer();
+        mdns.Observe(
+            Message(NameProtocols.Mdns, "printer.local", 0, true, "10.0.0.20", "aa:00:00:00:00:20", "10.0.0.20"),
+            start);
+        var mdnsAlerts = mdns.Observe(
+            Message(NameProtocols.Mdns, "printer.local", 0, true, "10.0.0.21", "aa:00:00:00:00:21", "10.0.0.21"),
+            start.AddSeconds(1));
+
+        CheckAssertion(results, "mDNS 地址冲突 → 中危",
+            mdnsAlerts.Any(alert => alert.Kind == NameEventKinds.MdnsConflict && alert.Severity == LanSeverity.Medium));
+
+        var mdnsMany = new NameResolutionAnalyzer();
+        var mdnsManyAlerts = new List<NameAlert>();
+
+        for (var i = 0; i < 6; i++)
+        {
+            mdnsManyAlerts.AddRange(mdnsMany.Observe(
+                Message(NameProtocols.Mdns, $"device{i}.local", 0, true, "10.0.0.30", "aa:00:00:00:00:30", $"10.0.0.{30 + i}"),
+                start.AddSeconds(i)));
+        }
+
+        CheckAssertion(results, "mDNS 一来源多名称默认不报",
+            mdnsManyAlerts.All(alert => alert.Kind != NameEventKinds.ManyNames));
+
+        var cooldownAnalyzer = new NameResolutionAnalyzer();
+        cooldownAnalyzer.Observe(Message(NameProtocols.Llmnr, "fileserver", 1, false, "10.0.0.5"), start);
+        cooldownAnalyzer.Observe(
+            Message(NameProtocols.Llmnr, "fileserver", 1, true, "10.0.0.5", "aa:00:00:00:00:05", "10.0.0.66"),
+            start.AddSeconds(1));
+        cooldownAnalyzer.Observe(Message(NameProtocols.Llmnr, "fileserver", 2, false, "10.0.0.6"), start.AddSeconds(2));
+        cooldownAnalyzer.Observe(
+            Message(NameProtocols.Llmnr, "fileserver", 2, true, "10.0.0.6", "aa:00:00:00:00:06", "10.0.0.67"),
+            start.AddSeconds(3));
+        cooldownAnalyzer.Observe(Message(NameProtocols.Llmnr, "fileserver", 3, false, "10.0.0.7"), start.AddSeconds(60));
+        var cooled = cooldownAnalyzer.Observe(
+            Message(NameProtocols.Llmnr, "fileserver", 3, true, "10.0.0.7", "aa:00:00:00:00:07", "10.0.0.68"),
+            start.AddSeconds(61));
+
+        CheckAssertion(results, "同一名称 10 分钟内不重复冲突",
+            cooled.All(alert => alert.Kind != NameEventKinds.Conflict));
 
         PrintSummary(results, showFirewallResidue: false);
     }

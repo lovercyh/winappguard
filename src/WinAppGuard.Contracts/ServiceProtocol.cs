@@ -211,6 +211,17 @@ public static class ServiceProtocol
         /// <summary>4.5：重新采集配置基线（写，需提权）。</summary>
         public const string RebaselineConfigIntegrity = "write.config-integrity.rebaseline";
 
+        // ---- 4.5：局域网名称解析 ----
+
+        /// <summary>4.5：读取 LLMNR/NBNS/mDNS 来源、状态与事件（只读）。</summary>
+        public const string QueryNameResolution = "query.name-resolution";
+
+        /// <summary>4.5：只清空名称解析事件（写，需提权）。</summary>
+        public const string ClearNameResolution = "write.name-resolution.clear";
+
+        /// <summary>4.5：临时阻断 / 解除某个名称解析来源（写，需提权）。</summary>
+        public const string BlockNameSource = "write.name-resolution.block";
+
         /// <summary>清空全部审计记录（服务先停采集，删完再恢复）。</summary>
         public const string AuditClear = "write.audit.clear";
     }

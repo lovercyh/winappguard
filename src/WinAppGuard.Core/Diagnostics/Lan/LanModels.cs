@@ -22,7 +22,8 @@ public readonly record struct DhcpMessage(
     string? Router,
     string? Dns,
     int LeaseSeconds,
-    bool IsOffer);
+    bool IsOffer,
+    string? Wpad = null);
 
 /// <summary>4.2：规则 id。</summary>
 public static class LanEventKinds
@@ -38,6 +39,9 @@ public static class LanEventKinds
     public const string DhcpOptionMismatch = "dhcp_option_mismatch";
     public const string DhcpShortLease = "dhcp_short_lease";
     public const string DhcpServerNotGateway = "dhcp_server_not_gateway";
+
+    /// <summary>4.5：DHCP option 252 下发 WPAD。</summary>
+    public const string DhcpWpadOption = "dhcp_wpad_option";
 
     public const string DnsResponseUnexpectedServer = "dns_response_unexpected_server";
     public const string DnsTransactionMismatch = "dns_transaction_mismatch";

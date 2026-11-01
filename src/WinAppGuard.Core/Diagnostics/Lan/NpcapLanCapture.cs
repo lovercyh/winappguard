@@ -16,7 +16,8 @@ public sealed class NpcapLanCapture : IDisposable
     private const int SnapLength = 600;
     private const int ReadTimeoutMs = 100;
     private const string BpfFilter =
-        "arp or (udp and (port 67 or 68 or 53)) or (ip6 proto 58) or (ip6 and udp and (port 546 or 547))";
+        "arp or (udp and (port 67 or 68 or 53 or 5355 or 137 or 5353)) " +
+        "or (ip6 proto 58) or (ip6 and udp and (port 546 or 547 or 5355 or 5353))";
 
     private readonly object _gate = new();
     private readonly List<CaptureHandle> _captures = new();
@@ -33,6 +34,9 @@ public sealed class NpcapLanCapture : IDisposable
     public Action<DhcpMessage>? DhcpObserved { get; set; }
 
     public Action<DnsMessage>? DnsObserved { get; set; }
+
+    /// <summary>4.5：LLMNR / NBNS / mDNS 报文。</summary>
+    public Action<NameMessage>? NameObserved { get; set; }
 
     // ---- 4.4：IPv6 邻接安全 ----
 
@@ -397,6 +401,26 @@ public sealed class NpcapLanCapture : IDisposable
                 sourcePort,
                 destinationPort,
                 span.Slice(6, 6));
+            return;
+        }
+
+        // 4.5：LLMNR / NBNS / mDNS。
+        if (NameProtocols.IsNamePort(sourcePort) || NameProtocols.IsNamePort(destinationPort))
+        {
+            var namePort = NameProtocols.IsNamePort(sourcePort) ? sourcePort : destinationPort;
+
+            if (NameResolutionParser.TryParse(
+                    span[(udp + 8)..length],
+                    NameProtocols.FromPort(namePort),
+                    now,
+                    adapter,
+                    new IPAddress(span.Slice(offset + 12, 4)).ToString(),
+                    new IPAddress(span.Slice(offset + 16, 4)).ToString(),
+                    LanEnvironment.FormatMac(span.Slice(6, 6)),
+                    out var nameMessage))
+            {
+                NameObserved?.Invoke(nameMessage);
+            }
         }
     }
 
@@ -554,65 +578,7 @@ public sealed class NpcapLanCapture : IDisposable
         out string name,
         out int nextOffset,
         int baseOffset)
-    {
-        name = string.Empty;
-        nextOffset = offset;
-        var labels = new List<string>(4);
-        var cursor = offset;
-        var jumped = false;
-        var guard = 0;
-
-        while (cursor < limit)
-        {
-            var lengthByte = span[cursor];
-
-            if (lengthByte == 0)
-            {
-                cursor++;
-
-                if (!jumped)
-                {
-                    nextOffset = cursor;
-                }
-
-                name = labels.Count == 0 ? "." : string.Join(".", labels);
-                return true;
-            }
-
-            if ((lengthByte & 0xC0) == 0xC0)
-            {
-                if (cursor + 1 >= limit || guard++ > 8)
-                {
-                    return false;
-                }
-
-                if (!jumped)
-                {
-                    nextOffset = cursor + 2;
-                }
-
-                // 指针值相对 DNS 报文头，而不是整帧。
-                cursor = baseOffset + (((lengthByte & 0x3F) << 8) | span[cursor + 1]);
-                jumped = true;
-                continue;
-            }
-
-            if ((lengthByte & 0xC0) != 0 || cursor + 1 + lengthByte > limit)
-            {
-                return false;
-            }
-
-            labels.Add(System.Text.Encoding.ASCII.GetString(span.Slice(cursor + 1, lengthByte)));
-            cursor += lengthByte + 1;
-
-            if (!jumped)
-            {
-                nextOffset = cursor;
-            }
-        }
-
-        return false;
-    }
+        => DnsWire.TryReadName(span, offset, limit, out name, out nextOffset, baseOffset);
 
     private void ParseArp(
         ReadOnlySpan<byte> span,
@@ -675,6 +641,7 @@ public sealed class NpcapLanCapture : IDisposable
         var serverIp = new IPAddress(serverAddress).ToString();
         string? router = null;
         string? dns = null;
+        string? wpad = null;
         var lease = 0;
         var messageType = 0;
 
@@ -725,6 +692,10 @@ public sealed class NpcapLanCapture : IDisposable
                 case 51 when size >= 4:
                     lease = (int)BinaryPrimitives.ReadUInt32BigEndian(value[..4]);
                     break;
+                // 4.5：option 252 = WPAD URL。
+                case 252 when size > 0:
+                    wpad = System.Text.Encoding.ASCII.GetString(value).Trim();
+                    break;
             }
 
             cursor += size;
@@ -744,7 +715,8 @@ public sealed class NpcapLanCapture : IDisposable
             router,
             dns,
             lease,
-            IsOffer: messageType == 2));
+            IsOffer: messageType == 2,
+            Wpad: wpad));
     }
 
     // ==================================================================
@@ -879,6 +851,27 @@ public sealed class NpcapLanCapture : IDisposable
 
         var sourcePort = BinaryPrimitives.ReadUInt16BigEndian(span[offset..]);
         var destinationPort = BinaryPrimitives.ReadUInt16BigEndian(span[(offset + 2)..]);
+
+        // 4.5：LLMNR / mDNS（NBNS 不走 IPv6）。
+        if (NameProtocols.IsNamePort(sourcePort) || NameProtocols.IsNamePort(destinationPort))
+        {
+            var namePort = NameProtocols.IsNamePort(sourcePort) ? sourcePort : destinationPort;
+
+            if (NameResolutionParser.TryParse(
+                    span[(offset + 8)..length],
+                    NameProtocols.FromPort(namePort),
+                    now,
+                    adapter,
+                    sourceAddress,
+                    destinationAddress,
+                    sourceMac,
+                    out var nameMessage))
+            {
+                NameObserved?.Invoke(nameMessage);
+            }
+
+            return;
+        }
 
         if ((sourcePort != 547 && sourcePort != 546)
             || (destinationPort != 547 && destinationPort != 546))

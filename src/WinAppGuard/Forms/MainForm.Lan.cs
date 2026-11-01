@@ -32,6 +32,7 @@ public sealed partial class MainForm
     private TabControl _lanTabs = null!;
     private TabPage _lanIpv4Page = null!;
     private TabPage _lanIpv6Page = null!;
+    private TabPage _lanNamePage = null!;
     private System.Windows.Forms.Timer? _lanTimer;
 
     private List<LanEventDto> _lanEvents = new();
@@ -255,10 +256,18 @@ public sealed partial class MainForm
             UseVisualStyleBackColor = true,
         };
 
+        _lanNamePage = new TabPage(Localizer.T("名称解析"))
+        {
+            Name = "_lanNamePage",
+            Padding = new Padding(3),
+            UseVisualStyleBackColor = true,
+        };
+
         _lanIpv4Page.Controls.Add(mainSplit);
         _lanIpv4Page.Controls.Add(top);
         _lanTabs.Controls.Add(_lanIpv4Page);
         _lanTabs.Controls.Add(_lanIpv6Page);
+        _lanTabs.Controls.Add(_lanNamePage);
         _tabLan.Controls.Add(_lanTabs);
 
         _lanTabs.SelectedIndexChanged += (_, _) =>
@@ -271,6 +280,10 @@ public sealed partial class MainForm
             if (_lanTabs.SelectedTab == _lanIpv6Page)
             {
                 _ = RefreshIpv6Async();
+            }
+            else if (_lanTabs.SelectedTab == _lanNamePage)
+            {
+                _ = RefreshNameAsync();
             }
             else
             {
@@ -300,6 +313,9 @@ public sealed partial class MainForm
 
     private bool IsLanIpv6Tab
         => IsProtectionTab(_tabLan) && _lanTabs.SelectedTab == _lanIpv6Page;
+
+    private bool IsLanNameTab
+        => IsProtectionTab(_tabLan) && _lanTabs.SelectedTab == _lanNamePage;
 
     private static DataGridViewBuffered CreateLanGrid(string emptyText) => new()
     {
@@ -949,6 +965,7 @@ public sealed partial class MainForm
             "dhcp_option_mismatch" => "DHCP 下发参数变化",
             "dhcp_short_lease" => "DHCP 租期异常短",
             "dhcp_server_not_gateway" => "DHCP 服务器非网关",
+            "dhcp_wpad_option" => "DHCP 下发 WPAD",
             "dns_response_unexpected_server" => "应答来源异常",
             "dns_transaction_mismatch" => "事务 ID 不匹配",
             "dns_answer_name_mismatch" => "应答域名不符",
@@ -979,6 +996,11 @@ public sealed partial class MainForm
             "config_winhttp_proxy_changed" => "WinHTTP 代理变更",
             "config_policy_proxy_changed" => "组策略代理变更",
             "config_dns_servers_changed" => "DNS 设置变更",
+            "name_conflict" => "名称解析冲突",
+            "name_unsolicited" => "非请求名称应答",
+            "name_many_names" => "单一来源应答多名称",
+            "name_wpad" => "WPAD 劫持",
+            "name_mdns_conflict" => "mDNS 地址冲突",
             _ => Kind,
         });
     }

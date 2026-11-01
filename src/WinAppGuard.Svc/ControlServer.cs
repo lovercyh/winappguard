@@ -603,6 +603,13 @@ internal sealed class ControlServer : IDisposable
 
             ServiceProtocol.Commands.RebaselineConfigIntegrity => ConfigHost.Rebaseline(request),
 
+            // 4.5：局域网名称解析。
+            ServiceProtocol.Commands.QueryNameResolution => LanHost.Query(request),
+
+            ServiceProtocol.Commands.ClearNameResolution => LanHost.ClearName(request),
+
+            ServiceProtocol.Commands.BlockNameSource => LanHost.BlockName(request),
+
             _ when isRuleCommand => Rules.Handle(request),
 
             _ => new ServiceResponse

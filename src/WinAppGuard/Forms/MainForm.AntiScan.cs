@@ -555,6 +555,7 @@ public sealed partial class MainForm
         InitializeLanPage();
         InitializeDnsSecurityPage();
         InitializeIpv6Page();
+        InitializeNameResolutionPage();
         InitializeConfigIntegrityPage();
 
         _protectionTabs.SelectedIndexChanged += (_, _) =>
@@ -574,6 +575,10 @@ public sealed partial class MainForm
                 {
                     _ipv6BalloonPending = false;
                     _ = RefreshIpv6Async();
+                }
+                else if (_lanTabs.SelectedTab == _lanNamePage)
+                {
+                    _ = RefreshNameAsync();
                 }
                 else
                 {
@@ -606,6 +611,10 @@ public sealed partial class MainForm
                     {
                         _ipv6BalloonPending = false;
                         _ = RefreshIpv6Async();
+                    }
+                    else if (_lanTabs.SelectedTab == _lanNamePage)
+                    {
+                        _ = RefreshNameAsync();
                     }
                     else
                     {

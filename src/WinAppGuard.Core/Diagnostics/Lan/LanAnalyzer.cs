@@ -552,6 +552,25 @@ public sealed class LanAnalyzer
             StateChanged?.Invoke();
         }
 
+        // 4.5：DHCP option 252 = WPAD URL；合法企业网络也可能用，所以是“中危告警”。
+        if (!string.IsNullOrWhiteSpace(message.Wpad))
+        {
+            var wpad = message.Wpad!.Length > 120
+                ? message.Wpad[..120] + "…"
+                : message.Wpad;
+
+            RaiseLocked(
+                LanEventKinds.DhcpWpadOption,
+                LanSeverity.Medium,
+                message.Adapter,
+                $"DHCP 服务器 {message.ServerIp} 下发 WPAD（option 252）：{wpad}",
+                message.ServerIp,
+                message.SourceMac,
+                message.ServerIp,
+                null,
+                now);
+        }
+
         // 同一网段出现多个 DHCP 服务器。
         if (!_serversByAdapter.TryGetValue(message.Adapter, out var servers))
         {

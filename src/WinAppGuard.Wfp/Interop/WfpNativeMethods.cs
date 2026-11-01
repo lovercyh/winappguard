@@ -142,6 +142,12 @@ internal static class WfpNativeMethods
     internal static readonly Guid LayerInboundTransportV6 = new("634a869f-fc23-4b90-b0c1-bf620a36ae6f");
 
     /// <summary>
+    /// 4.5：FWPM_LAYER_INBOUND_TRANSPORT_V4，入站传输层（IPv4）。
+    /// GUID 取自 fwpmu.h（5926dfc8-e3cf-4426-a283-dc393f5d0f9d）。
+    /// </summary>
+    internal static readonly Guid LayerInboundTransportV4 = new("5926dfc8-e3cf-4426-a283-dc393f5d0f9d");
+
+    /// <summary>
     /// 4.4：FWPM_LAYER_DATAGRAM_DATA_V6，入站数据报层（比传输层更靠近套接字）。
     /// GUID 取自 fwpmu.h（fa45fe2f-3cba-4427-87fc-57b9a4b10d00）。
     /// </summary>

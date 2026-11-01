@@ -3,21 +3,54 @@ using System.Net.Sockets;
 
 namespace WinAppGuard.Core.Diagnostics.AntiScan;
 
-/// <summary>4.0：一次入站 TCP SYN 观察（只含头部元数据）。</summary>
-public readonly record struct InboundSyn(
+/// <summary>4.0 / 4.5：一次入站探测（只含头部元数据）。</summary>
+/// <param name="Protocol">6=TCP、17=UDP、1=ICMP、58=ICMPv6。</param>
+public readonly record struct InboundProbe(
     DateTime TimeUtc,
+    byte Protocol,
     IPAddress SourceAddress,
     ushort SourcePort,
     IPAddress LocalAddress,
     ushort LocalPort);
 
-/// <summary>4.0：反扫描设置。</summary>
+/// <summary>4.5：协议号常量（与 IP 头一致）。</summary>
+public static class ProbeProtocol
+{
+    public const byte Icmp = 1;
+    public const byte Tcp = 6;
+    public const byte Udp = 17;
+    public const byte Icmpv6 = 58;
+
+    public static bool IsKnown(byte protocol)
+        => protocol is Tcp or Udp or Icmp or Icmpv6;
+
+    public static string ToText(byte protocol) => protocol switch
+    {
+        Udp => "udp",
+        Icmp or Icmpv6 => "icmp",
+        _ => "tcp",
+    };
+}
+
+/// <summary>4.0 / 4.5：反扫描设置。</summary>
 public sealed class AntiScanSettings
 {
+    /// <summary>
+    /// 配置版本。4.5 之前的文件没有这个字段（反序列化为 0），
+    /// 加载时据此把新协议开关补成默认开启；用户改过之后不会再被覆盖。
+    /// </summary>
+    public int Version { get; set; } = AntiScanSettingsVersion.Current;
+
     public bool Enabled { get; set; } = true;
 
     /// <summary>standard / conservative。</summary>
     public string Sensitivity { get; set; } = "standard";
+
+    /// <summary>4.5：检测 UDP 扫描（目标端口无人监听）。默认开启。</summary>
+    public bool DetectUdp { get; set; } = true;
+
+    /// <summary>4.5：检测 ICMP / ICMPv6 Echo 扫描。默认开启。</summary>
+    public bool DetectIcmp { get; set; } = true;
 
     /// <summary>是否自动临时封禁高危扫描来源；默认关闭。</summary>
     public bool AutoBlock { get; set; }
@@ -29,7 +62,13 @@ public sealed class AntiScanSettings
     public List<string> Allowlist { get; set; } = new();
 }
 
-/// <summary>4.0：一条扫描发现。</summary>
+/// <summary>4.5：设置版本。</summary>
+public static class AntiScanSettingsVersion
+{
+    public const int Current = 1;
+}
+
+/// <summary>4.0 / 4.5：一条扫描发现。</summary>
 public sealed class AntiScanFinding
 {
     public string Id { get; } = Guid.NewGuid().ToString("N");
@@ -38,11 +77,17 @@ public sealed class AntiScanFinding
 
     public string SourceAddress { get; init; } = string.Empty;
 
+    /// <summary>触发本次告警的协议（TCP/UDP/ICMP）。</summary>
+    public byte Protocol { get; init; } = ProbeProtocol.Tcp;
+
+    public string ProtocolText => ProbeProtocol.ToText(Protocol);
+
     public int DistinctPorts { get; init; }
 
     public int DistinctHosts { get; init; }
 
-    public int SynCount { get; init; }
+    /// <summary>窗口内的探测包数（TCP SYN / UDP 包 / ICMP Echo）。</summary>
+    public int ProbeCount { get; init; }
 
     public int WindowSeconds { get; init; }
 
@@ -58,14 +103,14 @@ public static class AntiScanSeverity
 }
 
 /// <summary>
-/// 4.0：入站端口扫描分析器（纯内存、可离线测试）。
+/// 4.0 / 4.5：入站扫描分析器（纯内存、可离线测试）。
 ///
-/// 只看 TCP SYN，按来源 IP 维护 60 秒滑动窗口：
-///   - 垂直扫描：同一来源访问本机多个不同端口；
-///   - 水平扫描：同一来源访问本机多个不同地址（多网卡/多地址）。
+/// 按来源 IP 维护 60 秒滑动窗口：
+///   - TCP SYN：垂直（多端口）/ 水平（多本地地址）扫描；
+///   - UDP：目标端口无人监听的不同端口数（监听端口由宿主过滤）；
+///   - ICMP / ICMPv6 Echo：单位时间请求数（ping 扫描）。
 ///
-/// 这不是内核级检测：它依赖采集层能看到 SYN。Npcap / Pktmon 能看到打关闭端口的 SYN，
-/// ETW accept 只能看到已建立连接。
+/// 这不是内核级检测：它依赖采集层能看到包。Npcap 能看到打到关闭端口的探测。
 /// </summary>
 public sealed class AntiScanAnalyzer
 {
@@ -77,11 +122,21 @@ public sealed class AntiScanAnalyzer
     private const int MaxHitsPerSource = 4096;
 
     private readonly object _gate = new();
+    private readonly Func<ushort, bool>? _isLocalUdpPortListening;
     private readonly Dictionary<string, SourceState> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (DateTime TimeUtc, string Severity)> _lastAlert =
         new(StringComparer.Ordinal);
 
     private long _eventsSeen;
+
+    /// <param name="isLocalUdpPortListening">
+    /// 4.5：判断某个本地 UDP 端口是否有人监听。响应用户自己请求的 UDP 会打到监听端口，
+    /// 只有“没人监听”的目标端口才可能是扫描。null = 不做过滤（离线测试用）。
+    /// </param>
+    public AntiScanAnalyzer(Func<ushort, bool>? isLocalUdpPortListening = null)
+    {
+        _isLocalUdpPortListening = isLocalUdpPortListening;
+    }
 
     public long EventsSeen
     {
@@ -93,19 +148,45 @@ public sealed class AntiScanAnalyzer
         get { lock (_gate) { return _sources.Count; } }
     }
 
-    public AntiScanFinding? Observe(InboundSyn syn, DateTime now, AntiScanSettings settings)
+    public AntiScanFinding? Observe(InboundProbe probe, DateTime now, AntiScanSettings settings)
     {
-        if (!settings.Enabled || syn.SourcePort == 0 || syn.LocalPort == 0)
+        if (!settings.Enabled || !ProbeProtocol.IsKnown(probe.Protocol))
         {
             return null;
         }
 
-        if (!IsUsableSource(syn.SourceAddress))
+        if (probe.Protocol == ProbeProtocol.Tcp
+            && (probe.SourcePort == 0 || probe.LocalPort == 0))
         {
             return null;
         }
 
-        var key = syn.SourceAddress.ToString();
+        if (probe.Protocol == ProbeProtocol.Udp)
+        {
+            if (!settings.DetectUdp || probe.SourcePort == 0 || probe.LocalPort == 0)
+            {
+                return null;
+            }
+
+            // 有人监听的端口收到的是“响应”或正常业务，不是扫描。
+            if (_isLocalUdpPortListening?.Invoke(probe.LocalPort) == true)
+            {
+                return null;
+            }
+        }
+
+        if (probe.Protocol is ProbeProtocol.Icmp or ProbeProtocol.Icmpv6
+            && !settings.DetectIcmp)
+        {
+            return null;
+        }
+
+        if (!IsUsableSource(probe.SourceAddress))
+        {
+            return null;
+        }
+
+        var key = probe.SourceAddress.ToString();
         AntiScanFinding? finding = null;
 
         lock (_gate)
@@ -119,12 +200,12 @@ public sealed class AntiScanAnalyzer
                     RemoveOldestSourceLocked();
                 }
 
-                state = new SourceState { Address = syn.SourceAddress };
+                state = new SourceState { Address = probe.SourceAddress };
                 _sources[key] = state;
             }
 
-            state.LastSeenUtc = syn.TimeUtc;
-            state.Hits.Add(new Hit(syn.TimeUtc, syn.LocalAddress, syn.LocalPort));
+            state.LastSeenUtc = probe.TimeUtc;
+            state.Hits.Add(new Hit(probe.TimeUtc, probe.LocalAddress, probe.LocalPort, probe.Protocol));
 
             if (state.Hits.Count > MaxHitsPerSource)
             {
@@ -137,28 +218,58 @@ public sealed class AntiScanAnalyzer
                 PruneStateLocked(state, now);
             }
 
-            var ports = state.Hits
-                .Where(hit => now - hit.TimeUtc <= Window)
-                .Select(hit => hit.LocalPort)
-                .Distinct()
-                .Count();
-
-            var hosts = state.Hits
-                .Where(hit => now - hit.TimeUtc <= Window)
-                .Select(hit => hit.LocalAddress)
-                .Distinct()
-                .Count();
-
-            var synCount = state.Hits.Count(hit => now - hit.TimeUtc <= Window);
-
-            var fastPorts = state.Hits
-                .Where(hit => now - hit.TimeUtc <= FastWindow)
-                .Select(hit => hit.LocalPort)
-                .Distinct()
-                .Count();
-
             var conservative = string.Equals(
                 settings.Sensitivity, "conservative", StringComparison.OrdinalIgnoreCase);
+
+            var tcpPorts = new HashSet<ushort>();
+            var tcpPortsFast = new HashSet<ushort>();
+            var tcpHosts = new HashSet<string>(StringComparer.Ordinal);
+            var tcpCount = 0;
+            var udpPorts = new HashSet<ushort>();
+            var udpPortsFast = new HashSet<ushort>();
+            var udpCount = 0;
+            var icmpCount = 0;
+
+            // 单次遍历同时算三种协议，避免每个包都做多次 LINQ 扫描。
+            foreach (var hit in state.Hits)
+            {
+                var age = now - hit.TimeUtc;
+
+                if (age > Window)
+                {
+                    continue;
+                }
+
+                switch (hit.Protocol)
+                {
+                    case ProbeProtocol.Tcp:
+                        tcpCount++;
+                        tcpPorts.Add(hit.LocalPort);
+                        tcpHosts.Add(hit.LocalAddress.ToString());
+
+                        if (age <= FastWindow)
+                        {
+                            tcpPortsFast.Add(hit.LocalPort);
+                        }
+
+                        break;
+
+                    case ProbeProtocol.Udp:
+                        udpCount++;
+                        udpPorts.Add(hit.LocalPort);
+
+                        if (age <= FastWindow)
+                        {
+                            udpPortsFast.Add(hit.LocalPort);
+                        }
+
+                        break;
+
+                    default:
+                        icmpCount++;
+                        break;
+                }
+            }
 
             var mediumPorts = conservative ? 40 : 20;
             var highPorts = conservative ? 100 : 50;
@@ -166,15 +277,52 @@ public sealed class AntiScanAnalyzer
             var mediumHosts = conservative ? 20 : 10;
             var highHosts = conservative ? 60 : 30;
 
-            string? severity = null;
+            var mediumUdpPorts = conservative ? 30 : 15;
+            var highUdpPorts = conservative ? 60 : 30;
 
-            if (fastPorts >= highFastPorts || ports >= highPorts || hosts >= highHosts)
+            // 快速阈值必须低于“中危阈值”，否则 1 秒一个端口时会先被快速规则判高危，
+            // 45 个端口的慢速扫描永远走不到中危分支（离线测试会直接暴露这个问题）。
+            var highUdpFastPorts = conservative ? 24 : 12;
+
+            var mediumIcmp = conservative ? 40 : 20;
+            var highIcmp = conservative ? 80 : 40;
+
+            var severity = (string?)null;
+            byte protocol = ProbeProtocol.Tcp;
+
+            if (tcpPortsFast.Count >= highFastPorts
+                || tcpPorts.Count >= highPorts
+                || tcpHosts.Count >= highHosts)
             {
                 severity = AntiScanSeverity.High;
+                protocol = ProbeProtocol.Tcp;
             }
-            else if (ports >= mediumPorts || hosts >= mediumHosts)
+            else if (tcpPorts.Count >= mediumPorts || tcpHosts.Count >= mediumHosts)
             {
                 severity = AntiScanSeverity.Medium;
+                protocol = ProbeProtocol.Tcp;
+            }
+
+            if (udpPortsFast.Count >= highUdpFastPorts || udpPorts.Count >= highUdpPorts)
+            {
+                severity = AntiScanSeverity.High;
+                protocol = ProbeProtocol.Udp;
+            }
+            else if (severity is null && udpPorts.Count >= mediumUdpPorts)
+            {
+                severity = AntiScanSeverity.Medium;
+                protocol = ProbeProtocol.Udp;
+            }
+
+            if (icmpCount >= highIcmp)
+            {
+                severity = AntiScanSeverity.High;
+                protocol = ProbeProtocol.Icmp;
+            }
+            else if (severity is null && icmpCount >= mediumIcmp)
+            {
+                severity = AntiScanSeverity.Medium;
+                protocol = ProbeProtocol.Icmp;
             }
 
             if (severity is null)
@@ -195,9 +343,17 @@ public sealed class AntiScanAnalyzer
             {
                 TimeUtc = now,
                 SourceAddress = key,
-                DistinctPorts = ports,
-                DistinctHosts = hosts,
-                SynCount = synCount,
+                Protocol = protocol,
+                DistinctPorts = protocol == ProbeProtocol.Udp
+                    ? udpPorts.Count
+                    : tcpPorts.Count,
+                DistinctHosts = tcpHosts.Count,
+                ProbeCount = protocol switch
+                {
+                    ProbeProtocol.Udp => udpCount,
+                    ProbeProtocol.Icmp => icmpCount,
+                    _ => tcpCount,
+                },
                 WindowSeconds = (int)Window.TotalSeconds,
                 Severity = severity,
             };
@@ -292,5 +448,9 @@ public sealed class AntiScanAnalyzer
         public List<Hit> Hits = new();
     }
 
-    private readonly record struct Hit(DateTime TimeUtc, IPAddress LocalAddress, ushort LocalPort);
+    private readonly record struct Hit(
+        DateTime TimeUtc,
+        IPAddress LocalAddress,
+        ushort LocalPort,
+        byte Protocol);
 }

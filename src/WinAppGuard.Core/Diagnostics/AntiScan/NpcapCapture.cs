@@ -7,12 +7,12 @@ using System.Runtime.InteropServices;
 namespace WinAppGuard.Core.Diagnostics.AntiScan;
 
 /// <summary>
-/// 4.0：Npcap 入站 SYN 采集。
+/// 4.0 / 4.5：Npcap 入站探测采集。
 ///
 /// 只做三件事：
 ///   - 用 libpcap API 打开活动网卡；
-///   - BPF 只保留 TCP SYN（不含 SYN-ACK）；
-///   - 解析 IPv4/IPv6 + TCP 头，把入站 SYN 交给反扫描分析器。
+///   - BPF 只保留 TCP SYN、ICMP/ICMPv6 Echo、UDP；
+///   - 解析 IPv4/IPv6 头，把入站探测交给反扫描分析器。
 ///
 /// 不读载荷、不做 DPI、不修改/注入数据包。Npcap 驱动由用户安装，本程序不随包复制驱动文件。
 /// </summary>
@@ -21,7 +21,10 @@ public sealed class NpcapCapture : IDisposable
     private const int SnapLength = 128;
     private const int ReadTimeoutMs = 100;
     private const string BpfFilter =
-        "tcp and (tcp[tcpflags] & tcp-syn) != 0 and (tcp[tcpflags] & tcp-ack) == 0";
+        "((tcp and (tcp[tcpflags] & tcp-syn) != 0 and (tcp[tcpflags] & tcp-ack) == 0) " +
+        "or (icmp and icmp[icmptype] == 8) " +
+        "or (ip6 proto 58 and ip6[40] == 128) " +
+        "or udp)";
 
     private readonly object _gate = new();
     private readonly List<CaptureHandle> _captures = new();
@@ -31,10 +34,11 @@ public sealed class NpcapCapture : IDisposable
     private bool _running;
     private DateTime _nextLocalRefreshUtc = DateTime.MinValue;
     private long _eventsSeen;
+    private long _dropped;
     private int _activeThreads;
     private string? _lastError;
 
-    public Action<InboundSyn>? SynObserved { get; set; }
+    public Action<InboundProbe>? ProbeObserved { get; set; }
 
     public Action<string>? Log { get; set; }
 
@@ -50,9 +54,41 @@ public sealed class NpcapCapture : IDisposable
 
     public long EventsSeen => Interlocked.Read(ref _eventsSeen);
 
+    /// <summary>4.5：Npcap 驱动统计到的丢包数（所有网卡合计）。</summary>
+    public long DroppedPackets => Interlocked.Read(ref _dropped);
+
     public string? LastError
     {
         get { lock (_gate) { return _lastError; } }
+    }
+
+    /// <summary>
+    /// 4.5：刷新所有网卡的 pcap 丢包统计。
+    /// 用来判断“全量 UDP 抓包”是否已经跟不上；统计失败时保持上一次的值。
+    /// </summary>
+    public void RefreshStatistics()
+    {
+        long dropped = 0;
+
+        lock (_gate)
+        {
+            foreach (var capture in _captures)
+            {
+                try
+                {
+                    if (capture.Api.TryGetStats(capture.Handle, out var stats))
+                    {
+                        dropped += stats.Dropped + stats.InterfaceDropped;
+                    }
+                }
+                catch (Exception)
+                {
+                    // 统计失败不影响采集。
+                }
+            }
+        }
+
+        Interlocked.Exchange(ref _dropped, dropped);
     }
 
     /// <summary>
@@ -120,7 +156,7 @@ public sealed class NpcapCapture : IDisposable
                         continue;
                     }
 
-                    if (!api.SetSynFilter(handle, out var filterError))
+                    if (!api.SetProbeFilter(handle, out var filterError))
                     {
                         Log?.Invoke($"Npcap 设置 SYN 过滤器失败：{device.Name}（{filterError}）");
                         api.Close(handle);
@@ -257,9 +293,9 @@ public sealed class NpcapCapture : IDisposable
                     Marshal.Copy(data, packet, 0, length);
                     Interlocked.Increment(ref _eventsSeen);
 
-                    if (TryParseInboundSyn(packet, capture.LinkType, out var syn))
+                    if (TryParseInboundProbe(packet, capture.LinkType, out var probe))
                     {
-                        SynObserved?.Invoke(syn);
+                        ProbeObserved?.Invoke(probe);
                     }
                 }
                 catch (Exception ex)
@@ -325,9 +361,9 @@ public sealed class NpcapCapture : IDisposable
         }
     }
 
-    private bool TryParseInboundSyn(byte[] packet, int linkType, out InboundSyn syn)
+    private bool TryParseInboundProbe(byte[] packet, int linkType, out InboundProbe probe)
     {
-        syn = default;
+        probe = default;
 
         var offset = 0;
         var etherType = -1;
@@ -370,7 +406,8 @@ public sealed class NpcapCapture : IDisposable
 
         IPAddress source;
         IPAddress destination;
-        var tcpOffset = 0;
+        var headerOffset = 0;
+        byte protocol;
 
         if (etherType == 0x0800)
         {
@@ -386,7 +423,9 @@ public sealed class NpcapCapture : IDisposable
                 return false;
             }
 
-            if (packet[offset + 9] != 6)
+            protocol = packet[offset + 9];
+
+            if (!ProbeProtocol.IsKnown(protocol))
             {
                 return false;
             }
@@ -400,7 +439,7 @@ public sealed class NpcapCapture : IDisposable
 
             source = new IPAddress(packet.AsSpan(offset + 12, 4));
             destination = new IPAddress(packet.AsSpan(offset + 16, 4));
-            tcpOffset = offset + ihl;
+            headerOffset = offset + ihl;
         }
         else if (etherType == 0x86DD)
         {
@@ -412,46 +451,49 @@ public sealed class NpcapCapture : IDisposable
             var nextHeader = packet[offset + 6];
             source = new IPAddress(packet.AsSpan(offset + 8, 16));
             destination = new IPAddress(packet.AsSpan(offset + 24, 16));
-            tcpOffset = offset + 40;
+            headerOffset = offset + 40;
 
-            // 跳过常见 IPv6 扩展头，直到 TCP。
+            // 跳过常见 IPv6 扩展头，直到 TCP / UDP / ICMPv6。
             var guard = 0;
 
-            while (nextHeader != 6 && guard++ < 8)
+            while (nextHeader != ProbeProtocol.Tcp
+                   && nextHeader != ProbeProtocol.Udp
+                   && nextHeader != ProbeProtocol.Icmpv6
+                   && guard++ < 8)
             {
                 if (nextHeader is 0 or 43 or 60)
                 {
-                    if (packet.Length < tcpOffset + 2)
+                    if (packet.Length < headerOffset + 2)
                     {
                         return false;
                     }
 
-                    var headerLength = (packet[tcpOffset + 1] + 1) * 8;
-                    nextHeader = packet[tcpOffset];
+                    var headerLength = (packet[headerOffset + 1] + 1) * 8;
+                    nextHeader = packet[headerOffset];
 
-                    if (headerLength < 8 || packet.Length < tcpOffset + headerLength)
+                    if (headerLength < 8 || packet.Length < headerOffset + headerLength)
                     {
                         return false;
                     }
 
-                    tcpOffset += headerLength;
+                    headerOffset += headerLength;
                 }
                 else if (nextHeader == 44)
                 {
-                    if (packet.Length < tcpOffset + 8)
+                    if (packet.Length < headerOffset + 8)
                     {
                         return false;
                     }
 
-                    var fragmentOffset = ((packet[tcpOffset + 2] << 8) | packet[tcpOffset + 3]) >> 3;
+                    var fragmentOffset = ((packet[headerOffset + 2] << 8) | packet[headerOffset + 3]) >> 3;
 
                     if (fragmentOffset != 0)
                     {
                         return false;
                     }
 
-                    nextHeader = packet[tcpOffset];
-                    tcpOffset += 8;
+                    nextHeader = packet[headerOffset];
+                    headerOffset += 8;
                 }
                 else
                 {
@@ -459,7 +501,9 @@ public sealed class NpcapCapture : IDisposable
                 }
             }
 
-            if (nextHeader != 6)
+            protocol = nextHeader;
+
+            if (!ProbeProtocol.IsKnown(protocol))
             {
                 return false;
             }
@@ -469,43 +513,97 @@ public sealed class NpcapCapture : IDisposable
             return false;
         }
 
-        if (packet.Length < tcpOffset + 20)
-        {
-            return false;
-        }
-
-        var tcpHeaderLength = (packet[tcpOffset + 12] >> 4) * 4;
-
-        if (tcpHeaderLength < 20 || packet.Length < tcpOffset + tcpHeaderLength)
-        {
-            return false;
-        }
-
-        var flags = packet[tcpOffset + 13];
-
-        if ((flags & 0x02) == 0 || (flags & 0x10) != 0)
-        {
-            return false;
-        }
-
         if (!IsInbound(destination))
         {
             return false;
         }
 
-        var sourcePort = (ushort)((packet[tcpOffset] << 8) | packet[tcpOffset + 1]);
-        var destinationPort = (ushort)((packet[tcpOffset + 2] << 8) | packet[tcpOffset + 3]);
-        var sequence = (uint)((packet[tcpOffset + 4] << 24)
-                              | (packet[tcpOffset + 5] << 16)
-                              | (packet[tcpOffset + 6] << 8)
-                              | packet[tcpOffset + 7]);
+        ushort sourcePort = 0;
+        ushort localPort = 0;
+        string dedupKey;
+        TimeSpan dedupTtl;
 
-        var dedupKey = $"{source}|{sourcePort}|{destination}|{destinationPort}|{sequence}";
+        switch (protocol)
+        {
+            case ProbeProtocol.Tcp:
+            {
+                if (packet.Length < headerOffset + 20)
+                {
+                    return false;
+                }
+
+                var tcpHeaderLength = (packet[headerOffset + 12] >> 4) * 4;
+
+                if (tcpHeaderLength < 20 || packet.Length < headerOffset + tcpHeaderLength)
+                {
+                    return false;
+                }
+
+                var flags = packet[headerOffset + 13];
+
+                if ((flags & 0x02) == 0 || (flags & 0x10) != 0)
+                {
+                    return false;
+                }
+
+                sourcePort = (ushort)((packet[headerOffset] << 8) | packet[headerOffset + 1]);
+                localPort = (ushort)((packet[headerOffset + 2] << 8) | packet[headerOffset + 3]);
+
+                var sequence = (uint)((packet[headerOffset + 4] << 24)
+                                      | (packet[headerOffset + 5] << 16)
+                                      | (packet[headerOffset + 6] << 8)
+                                      | packet[headerOffset + 7]);
+
+                dedupKey = $"tcp|{source}|{sourcePort}|{destination}|{localPort}|{sequence}";
+                dedupTtl = TimeSpan.FromSeconds(2);
+                break;
+            }
+
+            case ProbeProtocol.Udp:
+            {
+                if (packet.Length < headerOffset + 8)
+                {
+                    return false;
+                }
+
+                sourcePort = (ushort)((packet[headerOffset] << 8) | packet[headerOffset + 1]);
+                localPort = (ushort)((packet[headerOffset + 2] << 8) | packet[headerOffset + 3]);
+
+                // 同一份 UDP 包可能被多张网卡各抓一次；窗口取短，避免把正常重传当重复。
+                dedupKey = $"udp|{source}|{sourcePort}|{destination}|{localPort}";
+                dedupTtl = TimeSpan.FromMilliseconds(300);
+                break;
+            }
+
+            default:
+            {
+                // ICMP / ICMPv6：只看 Echo Request（ping 扫描）。
+                if (packet.Length < headerOffset + 8)
+                {
+                    return false;
+                }
+
+                var expectedType = protocol == ProbeProtocol.Icmp ? (byte)8 : (byte)128;
+
+                if (packet[headerOffset] != expectedType)
+                {
+                    return false;
+                }
+
+                var id = (packet[headerOffset + 4] << 8) | packet[headerOffset + 5];
+                var sequence = (packet[headerOffset + 6] << 8) | packet[headerOffset + 7];
+
+                dedupKey = $"icmp|{protocol}|{source}|{destination}|{id}|{sequence}";
+                dedupTtl = TimeSpan.FromSeconds(2);
+                break;
+            }
+        }
+
         var now = DateTime.UtcNow;
 
         lock (_gate)
         {
-            if (_dedup.TryGetValue(dedupKey, out var seen) && now - seen < TimeSpan.FromSeconds(2))
+            if (_dedup.TryGetValue(dedupKey, out var seen) && now - seen < dedupTtl)
             {
                 return false;
             }
@@ -522,7 +620,7 @@ public sealed class NpcapCapture : IDisposable
             }
         }
 
-        syn = new InboundSyn(now, source, sourcePort, destination, destinationPort);
+        probe = new InboundProbe(now, protocol, source, sourcePort, destination, localPort);
         return true;
     }
 
@@ -633,6 +731,15 @@ public sealed class NpcapCapture : IDisposable
         public uint OriginalLength;
     }
 
+    /// <summary><c>struct pcap_stat</c>（Windows：3 个 uint）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PcapStat
+    {
+        public uint Received;
+        public uint Dropped;
+        public uint InterfaceDropped;
+    }
+
     /// <summary>wpcap.dll 导出函数（libpcap ABI，cdecl）。</summary>
     private sealed class NpcapApi
     {
@@ -683,6 +790,9 @@ public sealed class NpcapCapture : IDisposable
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int DataLinkDelegate(IntPtr handle);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StatsDelegate(IntPtr handle, ref PcapStat stats);
+
         private readonly FindAllDevsDelegate _findAllDevs;
         private readonly FreeAllDevsDelegate _freeAllDevs;
         private readonly OpenLiveDelegate _openLive;
@@ -693,6 +803,7 @@ public sealed class NpcapCapture : IDisposable
         private readonly CloseDelegate _close;
         private readonly GetErrorDelegate _getError;
         private readonly DataLinkDelegate _dataLink;
+        private readonly StatsDelegate? _stats;
 
         internal NpcapApi(IntPtr library)
         {
@@ -706,6 +817,16 @@ public sealed class NpcapCapture : IDisposable
             _close = Load<CloseDelegate>(library, "pcap_close");
             _getError = Load<GetErrorDelegate>(library, "pcap_geterr");
             _dataLink = Load<DataLinkDelegate>(library, "pcap_datalink");
+
+            try
+            {
+                _stats = Load<StatsDelegate>(library, "pcap_stats");
+            }
+            catch (Exception)
+            {
+                // 老版本 wpcap 没有 pcap_stats 时只是拿不到丢包统计，不影响检测。
+                _stats = null;
+            }
         }
 
         internal List<PcapDevice> FindDevices(out string? error)
@@ -756,7 +877,7 @@ public sealed class NpcapCapture : IDisposable
             return handle;
         }
 
-        internal bool SetSynFilter(IntPtr handle, out string? error)
+        internal bool SetProbeFilter(IntPtr handle, out string? error)
         {
             error = null;
 
@@ -784,6 +905,12 @@ public sealed class NpcapCapture : IDisposable
 
         internal int NextPacket(IntPtr handle, out IntPtr header, out IntPtr data)
             => _nextEx(handle, out header, out data);
+
+        internal bool TryGetStats(IntPtr handle, out PcapStat stats)
+        {
+            stats = default;
+            return _stats is not null && _stats(handle, ref stats) == 0;
+        }
 
         internal int DataLink(IntPtr handle) => _dataLink(handle);
 

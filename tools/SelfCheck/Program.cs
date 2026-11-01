@@ -160,6 +160,7 @@ internal static class Program
                         && !args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase)
@@ -434,6 +435,10 @@ internal static class Program
             else if (args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunAntiScanTest();
+            }
+            else if (args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunAntiScanProtoTest();
             }
             else if (args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -2571,7 +2576,7 @@ internal static class Program
                 SourceAddress = "203.0.113.42",
                 DistinctPorts = 42,
                 DistinctHosts = 1,
-                SynCount = 42,
+                ProbeCount = 42,
                 WindowSeconds = 60,
                 Severity = "high",
                 Action = "blocked",
@@ -2584,7 +2589,7 @@ internal static class Program
                 SourceAddress = "198.51.100.7",
                 DistinctPorts = 21,
                 DistinctHosts = 1,
-                SynCount = 21,
+                ProbeCount = 21,
                 WindowSeconds = 60,
                 Severity = "medium",
                 Action = "alert",
@@ -11445,6 +11450,8 @@ internal static class Program
     {
         Enabled = settings.Enabled,
         Sensitivity = settings.Sensitivity,
+        DetectUdp = settings.DetectUdp,
+        DetectIcmp = settings.DetectIcmp,
         AutoBlock = settings.AutoBlock,
         BlockMinutes = settings.BlockMinutes,
         Allowlist = settings.Allowlist?.ToList() ?? new List<string>(),
@@ -14923,14 +14930,15 @@ internal static class Program
             {
                 var time = start.AddSeconds(timeOffsetSeconds).AddMilliseconds(i * intervalMs);
                 var local = IPAddress.Parse(localPrefix + (1 + (i % hosts)));
-                var syn = new InboundSyn(
+                var probe = new InboundProbe(
                     time,
+                    ProbeProtocol.Tcp,
                     IPAddress.Parse(source),
                     (ushort)(40000 + i),
                     local,
                     (ushort)(portBase + i));
 
-                var finding = analyzer.Observe(syn, time, settings);
+                var finding = analyzer.Observe(probe, time, settings);
 
                 if (finding is not null)
                 {
@@ -15054,6 +15062,8 @@ internal static class Program
                     AutoBlock = true,
                     Sensitivity = "conservative",
                     BlockMinutes = 30,
+                    DetectUdp = false,
+                    DetectIcmp = true,
                     Allowlist = new List<string> { "192.0.2.10", "not-an-ip" },
                 },
                 Blocks =
@@ -15074,9 +15084,20 @@ internal static class Program
                 loaded.Settings.AutoBlock
                 && loaded.Settings.Sensitivity == "conservative"
                 && loaded.Settings.BlockMinutes == 30
+                && !loaded.Settings.DetectUdp
+                && loaded.Settings.DetectIcmp
                 && loaded.Settings.Allowlist.Count == 1
                 && loaded.Blocks.Count == 1
                 && loaded.Blocks[0].Address == "198.51.100.9");
+
+            // 4.0 的旧状态文件没有 Version / 新协议开关：加载后应默认开启 UDP + ICMP。
+            File.WriteAllText(
+                statePath,
+                "{\"Settings\":{\"Enabled\":true,\"Sensitivity\":\"standard\",\"AutoBlock\":false,\"BlockMinutes\":10,\"Allowlist\":[]},\"Blocks\":[]}",
+                new UTF8Encoding(false));
+            var legacy = AntiScanStateFile.Load(statePath);
+            CheckAssertion(results, "旧状态文件：UDP/ICMP 检测自动补为开启",
+                legacy.Settings.DetectUdp && legacy.Settings.DetectIcmp);
 
             File.WriteAllText(statePath, "{ broken", new UTF8Encoding(false));
             var broken = AntiScanStateFile.Load(statePath);
@@ -15157,6 +15178,174 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
+    private static void RunAntiScanProtoTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var start = DateTime.UtcNow;
+        var standard = new AntiScanSettings();
+        var source = IPAddress.Parse("198.51.100.9");
+        var local = IPAddress.Parse("10.0.0.5");
+        var listening = new HashSet<ushort> { 53, 137 };
+
+        W("################################################################");
+        W("#   4.5 入站扫描检测（UDP / ICMP：阈值 / 端口过滤 / 协议）      #");
+        W("################################################################");
+        W();
+
+        AntiScanAnalyzer NewAnalyzer() => new(port => listening.Contains(port));
+
+        AntiScanFinding? FeedUdp(
+            AntiScanAnalyzer analyzer,
+            AntiScanSettings settings,
+            int ports,
+            int intervalMs = 1000,
+            int timeOffsetSeconds = 0,
+            Func<int, ushort>? portOf = null)
+        {
+            AntiScanFinding? found = null;
+
+            for (var i = 0; i < ports; i++)
+            {
+                var time = start.AddSeconds(timeOffsetSeconds).AddMilliseconds(i * intervalMs);
+                var probe = new InboundProbe(
+                    time,
+                    ProbeProtocol.Udp,
+                    source,
+                    (ushort)(40000 + i),
+                    local,
+                    portOf?.Invoke(i) ?? (ushort)(20000 + i));
+
+                var finding = analyzer.Observe(probe, time, settings);
+
+                if (finding is not null)
+                {
+                    found = finding;
+                }
+            }
+
+            return found;
+        }
+
+        AntiScanFinding? FeedIcmp(
+            AntiScanAnalyzer analyzer,
+            AntiScanSettings settings,
+            int count,
+            int intervalMs = 1000,
+            int timeOffsetSeconds = 0)
+        {
+            AntiScanFinding? found = null;
+
+            for (var i = 0; i < count; i++)
+            {
+                var time = start.AddSeconds(timeOffsetSeconds).AddMilliseconds(i * intervalMs);
+                var probe = new InboundProbe(
+                    time,
+                    ProbeProtocol.Icmp,
+                    source,
+                    0,
+                    local,
+                    0);
+
+                var finding = analyzer.Observe(probe, time, settings);
+
+                if (finding is not null)
+                {
+                    found = finding;
+                }
+            }
+
+            return found;
+        }
+
+        var udpMedium = FeedUdp(NewAnalyzer(), standard, ports: 15);
+        CheckAssertion(results, "UDP：15 个非监听端口 / 60 秒触发中危",
+            udpMedium is { Severity: AntiScanSeverity.Medium, Protocol: ProbeProtocol.Udp, ProbeCount: 15 });
+
+        var udpHigh = FeedUdp(NewAnalyzer(), standard, ports: 30);
+        CheckAssertion(results, "UDP：30 个非监听端口触发高危",
+            udpHigh is { Severity: AntiScanSeverity.High, Protocol: ProbeProtocol.Udp, DistinctPorts: 30 });
+
+        var udpFast = FeedUdp(NewAnalyzer(), standard, ports: 12, intervalMs: 300);
+        CheckAssertion(results, "UDP：10 秒内 12 个端口触发高危",
+            udpFast is { Severity: AntiScanSeverity.High, Protocol: ProbeProtocol.Udp });
+
+        var udpListening = FeedUdp(
+            NewAnalyzer(),
+            standard,
+            ports: 40,
+            portOf: _ => 53);
+        CheckAssertion(results, "UDP：打到已监听端口不计入扫描", udpListening is null);
+
+        var udpDisabled = FeedUdp(
+            NewAnalyzer(),
+            new AntiScanSettings { DetectUdp = false },
+            ports: 40);
+        CheckAssertion(results, "UDP：关闭检测后不告警", udpDisabled is null);
+
+        var udpConservative20 = FeedUdp(
+            NewAnalyzer(),
+            new AntiScanSettings { Sensitivity = "conservative" },
+            ports: 20);
+        CheckAssertion(results, "UDP 保守：20 个端口不触发", udpConservative20 is null);
+
+        var udpConservative30 = FeedUdp(
+            NewAnalyzer(),
+            new AntiScanSettings { Sensitivity = "conservative" },
+            ports: 30);
+        CheckAssertion(results, "UDP 保守：30 个端口触发中危",
+            udpConservative30 is { Severity: AntiScanSeverity.Medium });
+
+        var icmpMedium = FeedIcmp(NewAnalyzer(), standard, count: 20);
+        CheckAssertion(results, "ICMP：20 个 Echo / 60 秒触发中危",
+            icmpMedium is { Severity: AntiScanSeverity.Medium, Protocol: ProbeProtocol.Icmp });
+
+        var icmpHigh = FeedIcmp(NewAnalyzer(), standard, count: 40);
+        CheckAssertion(results, "ICMP：40 个 Echo 触发高危",
+            icmpHigh is { Severity: AntiScanSeverity.High, Protocol: ProbeProtocol.Icmp, ProbeCount: 40 });
+
+        var icmpDisabled = FeedIcmp(
+            NewAnalyzer(),
+            new AntiScanSettings { DetectIcmp = false },
+            count: 40);
+        CheckAssertion(results, "ICMP：关闭检测后不告警", icmpDisabled is null);
+
+        // 混合：TCP 10 个端口（低于阈值）+ UDP 15 个端口 → 由 UDP 触发。
+        var mixedAnalyzer = NewAnalyzer();
+
+        for (var i = 0; i < 10; i++)
+        {
+            var time = start.AddMilliseconds(i * 1000);
+            mixedAnalyzer.Observe(
+                new InboundProbe(
+                    time,
+                    ProbeProtocol.Tcp,
+                    source,
+                    (ushort)(50000 + i),
+                    local,
+                    (ushort)(1000 + i)),
+                time,
+                standard);
+        }
+
+        var mixed = FeedUdp(mixedAnalyzer, standard, ports: 15, timeOffsetSeconds: 12);
+        CheckAssertion(results, "TCP 未达标时由 UDP 单独触发",
+            mixed is { Protocol: ProbeProtocol.Udp, Severity: AntiScanSeverity.Medium });
+
+        // 冷却：同一来源 10 分钟内不重复报。
+        var cooldown = NewAnalyzer();
+        var first = FeedUdp(cooldown, standard, ports: 30);
+        var second = FeedIcmp(cooldown, standard, count: 60, timeOffsetSeconds: 60);
+        CheckAssertion(results, "同一来源 10 分钟内不重复告警",
+            first is { Severity: AntiScanSeverity.High } && second is null);
+
+        var table = new UdpListenerTable();
+        table.Refresh();
+        CheckAssertion(results, "UDP 监听端口快照可读取（端口 0 永远不算监听）",
+            table.Count >= 0 && !table.IsListening(0));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunAntiScanUiChecks(List<(string Title, bool Passed)> results)
     {
         var previous = Localizer.Current;
@@ -15176,7 +15365,7 @@ internal static class Program
                 new()
                 {
                     Id = "s1", TimeUtc = now, SourceAddress = "198.51.100.9",
-                    DistinctPorts = 30, DistinctHosts = 1, SynCount = 30,
+                    DistinctPorts = 30, DistinctHosts = 1, ProbeCount = 30,
                     WindowSeconds = 60, Severity = "high", Action = "blocked",
                     BlockedUntilUtc = now.AddMinutes(10),
                 },

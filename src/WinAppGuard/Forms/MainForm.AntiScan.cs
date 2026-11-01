@@ -450,7 +450,8 @@ public sealed partial class MainForm
             Width = 1000,
             Height = 22,
             ForeColor = SystemColors.GrayText,
-            Text = Localizer.T("Npcap 只用于抓取 TCP SYN；封禁使用 WFP 入站 accept 层，只拦新连接。"),
+            Text = Localizer.T(
+                "Npcap 只读取入站头部（TCP SYN / UDP / ICMP）；封禁使用 WFP 入站 accept 层，只拦新流量。"),
             AutoEllipsis = true,
         };
 
@@ -480,12 +481,13 @@ public sealed partial class MainForm
         };
 
         _antiEventGrid = CreateAntiScanGrid(
-            "还没有扫描事件。\r\n反扫描没有发现符合阈值的入站 TCP 端口扫描。");
+            "还没有扫描事件。\r\n反扫描没有发现符合阈值的入站 TCP / UDP / ICMP 扫描。");
         AddAntiScanColumn(_antiEventGrid, "时间", nameof(AntiScanEventRow.TimeText), 110);
         AddAntiScanColumn(_antiEventGrid, "来源 IP", nameof(AntiScanEventRow.SourceAddress), 150);
+        AddAntiScanColumn(_antiEventGrid, "协议", nameof(AntiScanEventRow.ProtocolText), 55);
         AddAntiScanColumn(_antiEventGrid, "端口数", nameof(AntiScanEventRow.DistinctPorts), 60);
         AddAntiScanColumn(_antiEventGrid, "主机数", nameof(AntiScanEventRow.DistinctHosts), 60);
-        AddAntiScanColumn(_antiEventGrid, "SYN", nameof(AntiScanEventRow.SynCount), 55);
+        AddAntiScanColumn(_antiEventGrid, "包数", nameof(AntiScanEventRow.ProbeCount), 55);
         AddAntiScanColumn(_antiEventGrid, "窗口", nameof(AntiScanEventRow.WindowText), 55);
         AddAntiScanColumn(_antiEventGrid, "级别", nameof(AntiScanEventRow.SeverityText), 55);
         AddAntiScanColumn(_antiEventGrid, "处置", nameof(AntiScanEventRow.ActionText), 70);
@@ -847,6 +849,21 @@ public sealed partial class MainForm
                 status.EventCount,
                 status.BlockedCount);
 
+            text += " · " + Localizer.F(
+                "UDP {0} · ICMP {1}",
+                status.DetectUdp ? Localizer.T("开") : Localizer.T("关"),
+                status.DetectIcmp ? Localizer.T("开") : Localizer.T("关"));
+
+            if (status.UdpPaused)
+            {
+                text += " · " + Localizer.T("UDP 检测因丢包已暂停");
+            }
+
+            if (status.DroppedPackets > 0)
+            {
+                text += " · " + Localizer.F("抓包丢包 {0}", status.DroppedPackets);
+            }
+
             if (!status.NpcapAvailable)
             {
                 text += " · " + Localizer.T("安装 Npcap 后才会采集");
@@ -1091,9 +1108,15 @@ public sealed partial class MainForm
         {
             Id = item.Id;
             SourceAddress = item.SourceAddress;
+            ProtocolText = (item.Protocol ?? "tcp") switch
+            {
+                "udp" => "UDP",
+                "icmp" => "ICMP",
+                _ => "TCP",
+            };
             DistinctPorts = item.DistinctPorts;
             DistinctHosts = item.DistinctHosts;
-            SynCount = item.SynCount;
+            ProbeCount = item.ProbeCount;
             WindowSeconds = item.WindowSeconds;
             TimeUtc = item.TimeUtc;
             Severity = item.Severity;
@@ -1105,11 +1128,13 @@ public sealed partial class MainForm
 
         public string SourceAddress { get; }
 
+        public string ProtocolText { get; }
+
         public int DistinctPorts { get; }
 
         public int DistinctHosts { get; }
 
-        public int SynCount { get; }
+        public int ProbeCount { get; }
 
         public int WindowSeconds { get; }
 

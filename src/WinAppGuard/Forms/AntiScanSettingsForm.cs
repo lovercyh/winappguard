@@ -11,6 +11,8 @@ namespace WinAppGuard.Forms;
 internal sealed class AntiScanSettingsForm : Form
 {
     private readonly CheckBox _enabled;
+    private readonly CheckBox _detectUdp;
+    private readonly CheckBox _detectIcmp;
     private readonly CheckBox _autoBlock;
     private readonly ComboBox _sensitivity;
     private readonly ComboBox _blockMinutes;
@@ -35,12 +37,12 @@ internal sealed class AntiScanSettingsForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             Padding = new Padding(16),
-            RowCount = 11,
+            RowCount = 13,
         };
 
         // 行高：允许名单那一行必须给固定高度，否则 Dock=Fill 的多行文本框
         // 在 AutoSize 行里会被压成 0 高。
-        for (var i = 0; i < 8; i++)
+        for (var i = 0; i < 10; i++)
         {
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
@@ -63,8 +65,22 @@ internal sealed class AntiScanSettingsForm : Form
 
         _enabled = new CheckBox
         {
-            Text = Localizer.T("启用反端口扫描（入站 TCP SYN）"),
+            Text = Localizer.T("启用入站扫描检测"),
             Checked = current.Enabled,
+            AutoSize = true,
+        };
+
+        _detectUdp = new CheckBox
+        {
+            Text = Localizer.T("检测 UDP 扫描（目标端口无人监听）"),
+            Checked = current.DetectUdp,
+            AutoSize = true,
+        };
+
+        _detectIcmp = new CheckBox
+        {
+            Text = Localizer.T("检测 ICMP 扫描（Echo 请求）"),
+            Checked = current.DetectIcmp,
             AutoSize = true,
         };
 
@@ -134,8 +150,8 @@ internal sealed class AntiScanSettingsForm : Form
         var hint = new Label
         {
             Text = Localizer.T(
-                "只检测入站 TCP SYN；不读载荷、不做 DPI。\n" +
-                "封禁只拦新入站连接，不会切断已有连接；解除后立刻恢复。\n" +
+                "检测入站 TCP SYN、UDP（目标端口无人监听）与 ICMP Echo；不读载荷、不做 DPI。\n" +
+                "封禁只拦新入站流量，不会切断已有连接；解除后立刻恢复。\n" +
                 "服务关闭或反扫描关闭时，临时封禁会解除。"),
             AutoSize = true,
             MaximumSize = new Size(460, 0),
@@ -171,15 +187,17 @@ internal sealed class AntiScanSettingsForm : Form
 
         layout.Controls.Add(npcap, 0, 0);
         layout.Controls.Add(_enabled, 0, 1);
-        layout.Controls.Add(_autoBlock, 0, 2);
-        layout.Controls.Add(sensitivityLabel, 0, 3);
-        layout.Controls.Add(_sensitivity, 0, 4);
-        layout.Controls.Add(minutesLabel, 0, 5);
-        layout.Controls.Add(_blockMinutes, 0, 6);
-        layout.Controls.Add(allowLabel, 0, 7);
-        layout.Controls.Add(_allowlist, 0, 8);
-        layout.Controls.Add(hint, 0, 9);
-        layout.Controls.Add(buttons, 0, 10);
+        layout.Controls.Add(_detectUdp, 0, 2);
+        layout.Controls.Add(_detectIcmp, 0, 3);
+        layout.Controls.Add(_autoBlock, 0, 4);
+        layout.Controls.Add(sensitivityLabel, 0, 5);
+        layout.Controls.Add(_sensitivity, 0, 6);
+        layout.Controls.Add(minutesLabel, 0, 7);
+        layout.Controls.Add(_blockMinutes, 0, 8);
+        layout.Controls.Add(allowLabel, 0, 9);
+        layout.Controls.Add(_allowlist, 0, 10);
+        layout.Controls.Add(hint, 0, 11);
+        layout.Controls.Add(buttons, 0, 12);
 
         Controls.Add(layout);
 
@@ -190,8 +208,15 @@ internal sealed class AntiScanSettingsForm : Form
         AcceptButton = ok;
         CancelButton = cancel;
 
-        _autoBlock.Enabled = current.Enabled;
-        _enabled.CheckedChanged += (_, _) => _autoBlock.Enabled = _enabled.Checked;
+        void SyncEnabled()
+        {
+            _detectUdp.Enabled = _enabled.Checked;
+            _detectIcmp.Enabled = _enabled.Checked;
+            _autoBlock.Enabled = _enabled.Checked;
+        }
+
+        SyncEnabled();
+        _enabled.CheckedChanged += (_, _) => SyncEnabled();
     }
 
     /// <summary>取消返回 null；确定返回设置。</summary>
@@ -219,6 +244,8 @@ internal sealed class AntiScanSettingsForm : Form
         return new AntiScanSettingsDto
         {
             Enabled = form._enabled.Checked,
+            DetectUdp = form._detectUdp.Checked,
+            DetectIcmp = form._detectIcmp.Checked,
             AutoBlock = form._autoBlock.Checked,
             Sensitivity = form._sensitivity.SelectedIndex == 1 ? "conservative" : "standard",
             BlockMinutes = minutes[Math.Max(0, form._blockMinutes.SelectedIndex)],

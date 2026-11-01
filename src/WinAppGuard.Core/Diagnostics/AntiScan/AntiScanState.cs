@@ -52,6 +52,15 @@ public static class AntiScanStateFile
             state.Settings ??= new AntiScanSettings();
             state.Settings.BlockMinutes = Math.Clamp(state.Settings.BlockMinutes, 5, 60);
 
+            // 4.5：旧文件没有 Version 字段（反序列化为 0），把新协议开关补成默认开启；
+            // 用户改过之后 SaveState 会写入 Version=Current，之后不再覆盖。
+            if (state.Settings.Version < AntiScanSettingsVersion.Current)
+            {
+                state.Settings.DetectUdp = true;
+                state.Settings.DetectIcmp = true;
+                state.Settings.Version = AntiScanSettingsVersion.Current;
+            }
+
             if (!string.Equals(
                     state.Settings.Sensitivity, "conservative", StringComparison.OrdinalIgnoreCase))
             {

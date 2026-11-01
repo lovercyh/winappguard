@@ -8,13 +8,14 @@ using WinAppGuard.Core.Wfp;
 namespace WinAppGuard.Service;
 
 /// <summary>
-/// 4.0：反端口扫描宿主。
+/// 4.0 / 4.5：反端口扫描宿主。
 ///
-/// 采集：Npcap（用户安装的官方驱动）只抓入站 TCP SYN；
+/// 采集：Npcap（用户安装的官方驱动）抓入站 TCP SYN、UDP、ICMP Echo；
 /// 检测：<see cref="AntiScanAnalyzer"/> 维护来源 IP 的滑动窗口；
 /// 处置：高危扫描可按设置临时封禁来源 IP，封禁走 WFP 的入站 accept 层。
 ///
-/// 边界：只检测 TCP 端口扫描；不读载荷、不做 DPI、不做 inline 阻断。
+/// 边界：只解析入站头部；不读载荷、不做 DPI、不做 inline 阻断。
+/// UDP 目标端口由 <see cref="UdpListenerTable"/> 过滤：只有无人监听的端口才计入扫描。
 /// </summary>
 internal static class AntiScanHost
 {
@@ -24,7 +25,9 @@ internal static class AntiScanHost
     private const int MaxEvents = 1000;
 
     private static AntiScanState _state = new();
-    private static AntiScanAnalyzer _analyzer = new();
+    private static readonly UdpListenerTable _udpListeners = new();
+    private static AntiScanAnalyzer _analyzer =
+        new(port => _udpListeners.IsListening(port));
     private static NpcapCapture? _capture;
     private static System.Threading.Timer? _timer;
     private static List<AntiScanEventDto> _events = new();
@@ -33,6 +36,12 @@ internal static class AntiScanHost
     private static DateTime _nextCaptureRetryUtc = DateTime.MinValue;
     private static DateTime? _lastEventUtc;
     private static string? _lastError;
+
+    // 4.5：UDP 全量抓包的安全阀。
+    private static DateTime _nextStatsUtc = DateTime.MinValue;
+    private static long _lastDropped;
+    private static long _lastEventsSeen;
+    private static DateTime _udpPausedUntilUtc = DateTime.MinValue;
 
     internal static bool Enabled
     {
@@ -60,6 +69,10 @@ internal static class AntiScanHost
             _events = new List<AntiScanEventDto>();
             _lastEventUtc = null;
             _lastError = null;
+            _nextStatsUtc = DateTime.MinValue;
+            _lastDropped = 0;
+            _lastEventsSeen = 0;
+            _udpPausedUntilUtc = DateTime.MinValue;
             RefreshGatewaysLocked();
 
             // 上次运行留下的过滤器可能还在；状态文件才是权威。
@@ -186,6 +199,9 @@ internal static class AntiScanHost
                 ? "conservative"
                 : "standard";
             _state.Settings.AutoBlock = dto.AutoBlock;
+            _state.Settings.DetectUdp = dto.DetectUdp;
+            _state.Settings.DetectIcmp = dto.DetectIcmp;
+            _state.Settings.Version = AntiScanSettingsVersion.Current;
             _state.Settings.BlockMinutes = Math.Clamp(dto.BlockMinutes, 5, 60);
             _state.Settings.Allowlist = (dto.Allowlist ?? new List<string>())
                 .Where(value => IPAddress.TryParse(value?.Trim(), out _))
@@ -335,11 +351,78 @@ internal static class AntiScanHost
             }
 
             EnsureCapture();
+            CheckUdpSafetyValve();
         }
         catch (Exception ex)
         {
             ServiceLog.Warning("WAG-ANTISCAN-011", "Anti-scan timer failed.", ex);
         }
+    }
+
+    /// <summary>
+    /// 4.5：UDP 全量抓包的安全阀。
+    /// 每 30 秒看一次丢包比例；超过 1% 就暂停 UDP 检测 10 分钟（TCP/ICMP 不受影响）。
+    /// </summary>
+    private static void CheckUdpSafetyValve()
+    {
+        NpcapCapture? capture;
+        bool detectUdp;
+
+        lock (Gate)
+        {
+            capture = _capture;
+            detectUdp = _state.Settings.DetectUdp;
+        }
+
+        if (capture is null || !detectUdp)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+
+        if (now < _nextStatsUtc)
+        {
+            return;
+        }
+
+        _nextStatsUtc = now.AddSeconds(30);
+
+        long dropped;
+        long captured;
+
+        try
+        {
+            capture.RefreshStatistics();
+            dropped = capture.DroppedPackets;
+            captured = capture.EventsSeen;
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        var droppedDelta = dropped - _lastDropped;
+        var capturedDelta = captured - _lastEventsSeen;
+        _lastDropped = dropped;
+        _lastEventsSeen = captured;
+
+        if (droppedDelta <= 0 || capturedDelta < 0)
+        {
+            return;
+        }
+
+        var total = droppedDelta + capturedDelta;
+
+        if (total <= 0 || droppedDelta * 100.0 / total <= 1.0)
+        {
+            return;
+        }
+
+        _udpPausedUntilUtc = now.AddMinutes(10);
+        ServiceLog.Operation(
+            "WAG-ANTISCAN-018",
+            $"UDP scan detection paused for 10 minutes: dropped={droppedDelta}, captured={capturedDelta}.");
     }
 
     private static void EnsureCapture()
@@ -375,7 +458,7 @@ internal static class AntiScanHost
 
         var capture = new NpcapCapture
         {
-            SynObserved = OnSyn,
+            ProbeObserved = OnProbe,
             Log = message => ServiceLog.Info("WAG-ANTISCAN-012", message),
         };
 
@@ -422,7 +505,7 @@ internal static class AntiScanHost
         capture?.Dispose();
     }
 
-    private static void OnSyn(InboundSyn syn)
+    private static void OnProbe(InboundProbe probe)
     {
         AntiScanSettings settings;
 
@@ -433,7 +516,12 @@ internal static class AntiScanHost
                 return;
             }
 
-            if (IsAllowlistedLocked(syn.SourceAddress))
+            if (probe.Protocol == ProbeProtocol.Udp && DateTime.UtcNow < _udpPausedUntilUtc)
+            {
+                return;
+            }
+
+            if (IsAllowlistedLocked(probe.SourceAddress))
             {
                 return;
             }
@@ -441,7 +529,7 @@ internal static class AntiScanHost
             settings = CloneSettings(_state.Settings);
         }
 
-        var finding = _analyzer.Observe(syn, DateTime.UtcNow, settings);
+        var finding = _analyzer.Observe(probe, DateTime.UtcNow, settings);
 
         if (finding is null)
         {
@@ -458,9 +546,10 @@ internal static class AntiScanHost
             Id = finding.Id,
             TimeUtc = finding.TimeUtc,
             SourceAddress = finding.SourceAddress,
+            Protocol = finding.ProtocolText,
             DistinctPorts = finding.DistinctPorts,
             DistinctHosts = finding.DistinctHosts,
-            SynCount = finding.SynCount,
+            ProbeCount = finding.ProbeCount,
             WindowSeconds = finding.WindowSeconds,
             Severity = finding.Severity,
             Action = "alert",
@@ -501,9 +590,9 @@ internal static class AntiScanHost
 
         ServiceLog.Operation(
             "WAG-ANTISCAN-015",
-            $"Inbound scan detected: source={finding.SourceAddress}, severity={finding.Severity}, " +
-            $"ports={finding.DistinctPorts}, hosts={finding.DistinctHosts}, syn={finding.SynCount}, " +
-            $"blocked={blocked}.");
+            $"Inbound scan detected: source={finding.SourceAddress}, protocol={finding.ProtocolText}, " +
+            $"severity={finding.Severity}, ports={finding.DistinctPorts}, hosts={finding.DistinctHosts}, " +
+            $"probes={finding.ProbeCount}, blocked={blocked}.");
     }
 
     private static bool TryBlock(string address, int minutes, string eventId, out string? error)
@@ -726,6 +815,10 @@ internal static class AntiScanHost
         AutoBlock = _state.Settings.AutoBlock,
         Sensitivity = _state.Settings.Sensitivity,
         BlockMinutes = _state.Settings.BlockMinutes,
+        DetectUdp = _state.Settings.DetectUdp,
+        DetectIcmp = _state.Settings.DetectIcmp,
+        UdpPaused = DateTime.UtcNow < _udpPausedUntilUtc,
+        DroppedPackets = _capture?.DroppedPackets ?? 0,
         LastEventUtc = _lastEventUtc,
         LastError = _lastError,
     };
@@ -736,6 +829,8 @@ internal static class AntiScanHost
         Sensitivity = settings.Sensitivity,
         AutoBlock = settings.AutoBlock,
         BlockMinutes = settings.BlockMinutes,
+        DetectUdp = settings.DetectUdp,
+        DetectIcmp = settings.DetectIcmp,
         Allowlist = settings.Allowlist.ToList(),
     };
 
@@ -749,10 +844,13 @@ internal static class AntiScanHost
 
     private static AntiScanSettings CloneSettings(AntiScanSettings settings) => new()
     {
+        Version = settings.Version,
         Enabled = settings.Enabled,
         Sensitivity = settings.Sensitivity,
         AutoBlock = settings.AutoBlock,
         BlockMinutes = settings.BlockMinutes,
+        DetectUdp = settings.DetectUdp,
+        DetectIcmp = settings.DetectIcmp,
         Allowlist = settings.Allowlist.ToList(),
     };
 

@@ -396,6 +396,12 @@ public sealed class AntiScanSettingsDto
     /// <summary>standard / conservative。</summary>
     public string Sensitivity { get; set; } = "standard";
 
+    /// <summary>4.5：检测 UDP 扫描（目标端口无人监听）；默认开启。</summary>
+    public bool DetectUdp { get; set; } = true;
+
+    /// <summary>4.5：检测 ICMP / ICMPv6 Echo 扫描；默认开启。</summary>
+    public bool DetectIcmp { get; set; } = true;
+
     /// <summary>检测到高危扫描时是否自动临时封禁来源 IP；默认关闭。</summary>
     public bool AutoBlock { get; set; }
 
@@ -415,11 +421,15 @@ public sealed class AntiScanEventDto
 
     public string SourceAddress { get; set; } = string.Empty;
 
+    /// <summary>4.5：tcp / udp / icmp。</summary>
+    public string Protocol { get; set; } = "tcp";
+
     public int DistinctPorts { get; set; }
 
     public int DistinctHosts { get; set; }
 
-    public int SynCount { get; set; }
+    /// <summary>4.5：窗口内的探测包数（原字段是 SYN 数）。</summary>
+    public int ProbeCount { get; set; }
 
     public int WindowSeconds { get; set; }
 
@@ -468,6 +478,18 @@ public sealed class AntiScanStatusDto
     public string Sensitivity { get; set; } = "standard";
 
     public int BlockMinutes { get; set; }
+
+    /// <summary>4.5：UDP 扫描检测是否开启。</summary>
+    public bool DetectUdp { get; set; } = true;
+
+    /// <summary>4.5：ICMP 扫描检测是否开启。</summary>
+    public bool DetectIcmp { get; set; } = true;
+
+    /// <summary>4.5：UDP 检测是否因丢包过高被自动暂停。</summary>
+    public bool UdpPaused { get; set; }
+
+    /// <summary>4.5：Npcap 丢包数（所有网卡合计）。</summary>
+    public long DroppedPackets { get; set; }
 
     public DateTime? LastEventUtc { get; set; }
 

@@ -18021,6 +18021,8 @@ internal static class Program
         };
 
         // 4.0：只读本机网卡 / 地址 / 网关，**不会发起任何连接**。
+        // 4.5：IPGlobalProperties 只用来读本机 UDP 监听端口表（判断端口是否有人监听），
+        // 同样不发包、不建立连接。
         // 用途：反扫描判断入站包的目的地址是否本机；默认不自动封网关/DNS。
         var localInterfaceTypes = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -18028,6 +18030,7 @@ internal static class Program
             "System.Net.NetworkInformation.NetworkInterfaceType",
             "System.Net.NetworkInformation.OperationalStatus",
             "System.Net.NetworkInformation.IPInterfaceProperties",
+            "System.Net.NetworkInformation.IPGlobalProperties",
             "System.Net.NetworkInformation.IPAddressCollection",
             "System.Net.NetworkInformation.IPAddressInformation",
             "System.Net.NetworkInformation.UnicastIPAddressInformation",
@@ -18095,8 +18098,8 @@ internal static class Program
         W();
         W("    只读本机网络配置（标 ·，不发包、不建立连接）：");
         W("      System.Net.NetworkInformation.NetworkInterface / IPInterfaceProperties /");
-        W("      UnicastIPAddressInformation / GatewayIPAddressInformation 等");
-        W("      用途：反扫描判断入站目的地址是否本机；网关/DNS 不自动封禁。");
+        W("      UnicastIPAddressInformation / GatewayIPAddressInformation / IPGlobalProperties 等");
+        W("      用途：反扫描判断入站目的地址是否本机、UDP 目标端口是否有人监听；网关/DNS 不自动封禁。");
         W();
         W("    已排除的纯数据类型：System.Net.IPAddress / IPEndPoint / AddressFamily /");
         W("      SocketError / SocketException（只格式化地址，不建立任何连接）");

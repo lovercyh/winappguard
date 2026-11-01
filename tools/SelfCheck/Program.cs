@@ -2497,6 +2497,7 @@ internal static class Program
                 Scope = string.Empty,
                 Current = "10.0.0.66 update.example.com",
                 Baseline = "10.0.0.1 update.example.com",
+                BaselineExists = true,
                 Changed = true,
                 Severity = "high",
             },
@@ -2506,6 +2507,7 @@ internal static class Program
                 Scope = "S-1-5-21-1004",
                 Current = "enable=0; server=-; auto=0",
                 Baseline = "enable=0; server=-; auto=0",
+                BaselineExists = true,
                 Changed = false,
                 Severity = "high",
             },
@@ -2515,6 +2517,7 @@ internal static class Program
                 Scope = string.Empty,
                 Current = "0A0000000000000000000000",
                 Baseline = "0A0000000000000000000000",
+                BaselineExists = true,
                 Changed = false,
                 Severity = "medium",
             },
@@ -2524,6 +2527,7 @@ internal static class Program
                 Scope = string.Empty,
                 Current = "223.5.5.5, 10.0.0.1",
                 Baseline = "223.5.5.5",
+                BaselineExists = true,
                 Changed = true,
                 Severity = "medium",
             },
@@ -12595,6 +12599,9 @@ internal static class Program
           $"监控项={snapshot.ConfigIntegrityStatus?.ItemCount} " +
           $"已变更={snapshot.ConfigIntegrityStatus?.ChangedCount} " +
           $"事件={snapshot.ConfigIntegrityStatus?.EventCount}");
+
+        CheckAssertion(results, "每个监控项都带基线存在标志",
+            snapshot.ConfigItems?.All(item => item.BaselineExists) == true);
 
         var rebaseline = ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.RebaselineConfigIntegrity },

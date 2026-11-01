@@ -275,6 +275,7 @@ internal static class ConfigHost
                 Scope = entry.Scope,
                 Current = entry.Summary,
                 Baseline = hasBaseline ? baseline.Summary : string.Empty,
+                BaselineExists = hasBaseline,
                 Changed = hasBaseline
                           && !string.Equals(baseline.Value, entry.Value, StringComparison.Ordinal),
                 Severity = ConfigKinds.SeverityOf(entry.Kind),

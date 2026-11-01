@@ -1098,6 +1098,9 @@ public sealed class ConfigItemDto
 
     public string Baseline { get; set; } = string.Empty;
 
+    /// <summary>基线里是否存在这一项（值为空也算存在）。</summary>
+    public bool BaselineExists { get; set; }
+
     public bool Changed { get; set; }
 
     /// <summary>high / medium。</summary>

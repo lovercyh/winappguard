@@ -453,6 +453,7 @@ public sealed partial class MainForm
             Scope = item.Scope;
             Current = item.Current;
             Baseline = item.Baseline;
+            BaselineExists = item.BaselineExists;
             Changed = item.Changed;
             Severity = item.Severity;
         }
@@ -464,6 +465,8 @@ public sealed partial class MainForm
         public string Current { get; }
 
         public string Baseline { get; }
+
+        public bool BaselineExists { get; }
 
         public bool Changed { get; }
 
@@ -488,7 +491,7 @@ public sealed partial class MainForm
 
         public string BaselineText => string.IsNullOrWhiteSpace(Baseline) ? "—" : Baseline;
 
-        public string StateText => string.IsNullOrWhiteSpace(Baseline)
+        public string StateText => !BaselineExists
             ? Localizer.T("基线未建立")
             : Localizer.T(Changed ? "已变更" : "一致");
 

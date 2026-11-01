@@ -15724,12 +15724,17 @@ internal static class Program
         CheckAssertion(results, "TCP 未达标时由 UDP 单独触发",
             mixed is { Protocol: ProbeProtocol.Udp, Severity: AntiScanSeverity.Medium });
 
-        // 冷却：同一来源 10 分钟内不重复报。
+        // 冷却：同一来源 + 同一协议 10 分钟内不重复报；换协议仍要单独报。
         var cooldown = NewAnalyzer();
         var first = FeedUdp(cooldown, standard, ports: 30);
-        var second = FeedIcmp(cooldown, standard, count: 60, timeOffsetSeconds: 60);
-        CheckAssertion(results, "同一来源 10 分钟内不重复告警",
-            first is { Severity: AntiScanSeverity.High } && second is null);
+        var repeatUdp = FeedUdp(cooldown, standard, ports: 30, timeOffsetSeconds: 40);
+        var otherProtocol = FeedIcmp(cooldown, standard, count: 60, timeOffsetSeconds: 60);
+
+        CheckAssertion(results, "同一来源 + 同一协议的重复告警被冷却",
+            first is { Severity: AntiScanSeverity.High } && repeatUdp is null);
+
+        CheckAssertion(results, "同一来源换协议仍单独告警",
+            otherProtocol is { Severity: AntiScanSeverity.High, Protocol: ProbeProtocol.Icmp });
 
         var table = new UdpListenerTable();
         table.Refresh();

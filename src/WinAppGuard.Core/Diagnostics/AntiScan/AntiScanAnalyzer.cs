@@ -330,14 +330,18 @@ public sealed class AntiScanAnalyzer
                 return null;
             }
 
-            if (_lastAlert.TryGetValue(key, out var last)
+            // 冷却按「来源 + 协议」：同一来源换协议（TCP → UDP → ICMP）仍应单独告警，
+            // 否则先跑一次 UDP 扫描会把随后的 ICMP 扫描静默吞掉。
+            var alertKey = $"{key}|{protocol}";
+
+            if (_lastAlert.TryGetValue(alertKey, out var last)
                 && now - last.TimeUtc < AlertCooldown
                 && SeverityRank(severity) <= SeverityRank(last.Severity))
             {
                 return null;
             }
 
-            _lastAlert[key] = (now, severity);
+            _lastAlert[alertKey] = (now, severity);
 
             finding = new AntiScanFinding
             {
@@ -362,12 +366,17 @@ public sealed class AntiScanAnalyzer
         return finding;
     }
 
-    /// <summary>解除封禁后清掉冷却，让同一来源可以重新触发。</summary>
+    /// <summary>解除封禁后清掉冷却，让同一来源可以重新触发（所有协议）。</summary>
     public void ResetSource(string address)
     {
         lock (_gate)
         {
-            _lastAlert.Remove(address);
+            foreach (var key in _lastAlert.Keys
+                         .Where(key => key.StartsWith(address + "|", StringComparison.Ordinal))
+                         .ToList())
+            {
+                _lastAlert.Remove(key);
+            }
         }
     }
 

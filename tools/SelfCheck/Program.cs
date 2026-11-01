@@ -16081,6 +16081,17 @@ internal static class Program
         CheckAssertion(results, "mDNS 地址冲突 → 中危",
             mdnsAlerts.Any(alert => alert.Kind == NameEventKinds.MdnsConflict && alert.Severity == LanSeverity.Medium));
 
+        var dualStack = new NameResolutionAnalyzer();
+        dualStack.Observe(
+            Message(NameProtocols.Mdns, "desktop.local", 0, true, "192.168.10.32", "aa:00:00:00:00:32", "192.168.10.32"),
+            start);
+        var dualStackAlerts = dualStack.Observe(
+            Message(NameProtocols.Mdns, "desktop.local", 0, true, "fe80::c13e", "aa:00:00:00:00:33", "fe80::c13e"),
+            start.AddSeconds(1));
+
+        CheckAssertion(results, "同主机的 IPv4 / IPv6 应答不算冲突",
+            dualStackAlerts.All(alert => alert.Kind != NameEventKinds.MdnsConflict));
+
         var mdnsMany = new NameResolutionAnalyzer();
         var mdnsManyAlerts = new List<NameAlert>();
 

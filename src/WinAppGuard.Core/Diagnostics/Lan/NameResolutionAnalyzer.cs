@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Sockets;
+
 namespace WinAppGuard.Core.Diagnostics.Lan;
 
 /// <summary>
@@ -120,8 +123,9 @@ public sealed class NameResolutionAnalyzer
                 var conflict = history.FirstOrDefault(item =>
                     now - item.TimeUtc <= AnswerWindow
                     && !string.Equals(item.SourceAddress, message.SourceAddress, StringComparison.OrdinalIgnoreCase)
+                    && !SameMac(item.SourceMac, message.SourceMac)
                     && item.Addresses.Count > 0
-                    && !item.Addresses.SetEquals(message.Addresses));
+                    && AddressesConflict(item.Addresses, message.Addresses));
 
                 if (conflict is not null)
                 {
@@ -178,6 +182,7 @@ public sealed class NameResolutionAnalyzer
                 records.Add(new AnswerRecord(
                     now,
                     message.SourceAddress,
+                    message.SourceMac,
                     message.Addresses.ToHashSet(StringComparer.OrdinalIgnoreCase)));
 
                 if (records.Count > MaxAnswersPerName)
@@ -332,6 +337,38 @@ public sealed class NameResolutionAnalyzer
         => string.Equals(name, "wpad", StringComparison.OrdinalIgnoreCase)
            || name.StartsWith("wpad.", StringComparison.OrdinalIgnoreCase);
 
+    private static bool SameMac(string? left, string? right)
+        => !string.IsNullOrWhiteSpace(left)
+           && !string.IsNullOrWhiteSpace(right)
+           && string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 只比较“两边都有”的地址族：同一个主机用 IPv4 和 IPv6 分别应答是正常现象，
+    /// 不能因此报地址冲突。只有同族地址不一致才算冲突。
+    /// </summary>
+    private static bool AddressesConflict(
+        IReadOnlyCollection<string> left,
+        IReadOnlyCollection<string> right)
+    {
+        var leftV4 = left.Where(IsV4).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rightV4 = right.Where(IsV4).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var leftV6 = left.Where(address => !IsV4(address)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rightV6 = right.Where(address => !IsV4(address)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (leftV4.Count > 0 && rightV4.Count > 0 && !leftV4.SetEquals(rightV4))
+        {
+            return true;
+        }
+
+        return leftV6.Count > 0
+               && rightV6.Count > 0
+               && !leftV6.SetEquals(rightV6);
+    }
+
+    private static bool IsV4(string address)
+        => IPAddress.TryParse(address, out var parsed)
+           && parsed.AddressFamily == AddressFamily.InterNetwork;
+
     private sealed class SourceRecord
     {
         public string Address = string.Empty;
@@ -345,16 +382,23 @@ public sealed class NameResolutionAnalyzer
 
     private sealed class AnswerRecord
     {
-        public AnswerRecord(DateTime timeUtc, string sourceAddress, HashSet<string> addresses)
+        public AnswerRecord(
+            DateTime timeUtc,
+            string sourceAddress,
+            string? sourceMac,
+            HashSet<string> addresses)
         {
             TimeUtc = timeUtc;
             SourceAddress = sourceAddress;
+            SourceMac = sourceMac;
             Addresses = addresses;
         }
 
         public DateTime TimeUtc { get; }
 
         public string SourceAddress { get; }
+
+        public string? SourceMac { get; }
 
         public HashSet<string> Addresses { get; }
     }

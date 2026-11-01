@@ -32,6 +32,12 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > blocked temporarily for 10 minutes (WFP transport layer, POC passed), and NDP is never
 > blocked. See [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md).
 >
+> **4.5 closes three host-side blind spots.** The scan page now detects **UDP / ICMP scans**
+> (on by default, auto-block still off); the LAN page gains a **name resolution** sub-tab for
+> **LLMNR / NBNS / mDNS poisoning and WPAD**, with a narrow 10-minute block per source; and a
+> **local configuration** page watches hosts / proxy / PAC / DNS tampering (alert only, no
+> auto-revert). See [`docs/4.5-三功能设计.md`](docs/4.5-三功能设计.md).
+>
 > Older versions (3.0 service split, 3.1 protected mode, 3.7 Flow IDS, 4.0 anti-scan,
 > 4.1 precise traffic, 4.2 LAN detection) are listed in [CHANGELOG](CHANGELOG.md).
 
@@ -103,6 +109,14 @@ connections** — so you start with *"what is online right now?"* and finish wit
   **alert only**, except that an untrusted DHCPv6 server or router can be blocked for
   10 minutes (WFP transport layer, POC passed); RA blocking also drops that address's NS/NA.
   True RA Guard is a switch feature; this is host-side detection; NDP is never blocked.
+- **UDP / ICMP scan detection (4.5)** — the scan page no longer looks at TCP SYN only;
+  UDP counts only packets to ports nobody listens on, with a packet-loss safety valve.
+  Automatic blocking remains off by default.
+- **Name-resolution poisoning (4.5)** — a new *name resolution* sub-tab detects LLMNR /
+  NBNS / mDNS conflicts, unsolicited replies, one source answering many names, and **WPAD**;
+  a source can be narrowly blocked for 10 minutes.
+- **Local configuration integrity (4.5)** — a new *local configuration* page watches hosts,
+  WinINET proxy / PAC, WinHTTP proxy and DNS settings; alert only, never auto-reverts.
 - **Timed lockdown** — 30 minutes / 2 hours from the strict-mode panel or tray menu. It lifts
   itself when time is up, and is also revoked if the service stops or crashes.
 - **Records page** — who connected to what and whether it was blocked: type (connection /

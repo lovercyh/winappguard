@@ -14,6 +14,48 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
+## [4.5] - 2026-11-01
+
+> 功能版本：补上三类“本机可见、但之前看不到”的攻击面 ——
+> **UDP / ICMP 扫描**、**LLMNR / NBNS / mDNS 投毒 + WPAD**、**hosts / 代理 / DNS 设置篡改**。
+> 所有检测默认只告警；自动阻断仍默认关闭。
+
+### 新增
+
+- **UDP / ICMP 扫描检测**（端口扫描页）：
+  - Npcap 采集扩展到 UDP 与 ICMP/ICMPv6 Echo；
+  - UDP 只统计**目标端口无人监听**的包（每 5 秒快照本机监听端口），DNS/媒体/游戏不再误报；
+  - 阈值：UDP 15/30 个端口（10 秒内 12 个为高危）、ICMP 20/40 个 Echo；保守模式约 2 倍；
+  - 丢包安全阀：Npcap 丢包率 >1% 时自动暂停 UDP 检测 10 分钟并提示；
+  - 事件表新增「协议」列；自动封禁仍默认关闭。
+- **LLMNR / NBNS / mDNS 投毒检测**（局域网 → 名称解析）：
+  - 检测同一名称被不同来源解析到不同地址、非请求应答、单一来源短时间应答多个名称、
+    mDNS 地址冲突；
+  - **WPAD**：`wpad` / `wpad.*` 应答来源不是网关/DNS 时告警；DHCP option 252 下发 WPAD 也会告警；
+  - 对来源提供「临时阻断 10 分钟」：只拦该来源的 UDP 5355/137/5353，不整机封禁；
+  - mDNS 默认只开 WPAD + 地址冲突，「一 MAC 多名称」默认关闭。
+- **本机配置完整性**（防护 → 本机配置）：
+  - 监控 hosts / hosts.ics、每用户 WinINET 代理与 PAC、WinHTTP 代理、组策略代理、物理网卡 DNS；
+  - 与基线比较，变化才告警；同一项 10 分钟冷却；只告警、不自动回滚；
+  - 支持「重新采基线」「清空事件」，事件独立存 `config/`，保留期跟随 4.2。
+- 协议新增：`query.name-resolution`、`write.name-resolution.clear`、
+  `write.name-resolution.block`、`query.config-integrity`、
+  `write.config-integrity.clear`、`write.config-integrity.rebaseline`。
+- 新增自检：`--antiscan-proto-test`、`--name-resolution-test`、`--config-integrity-test`。
+
+### 变更
+
+- 反扫描从“只抓 TCP SYN”改为“入站 TCP/UDP/ICMP”，旧状态文件会自动补开 UDP/ICMP 检测。
+- 局域网二级标签变为：`IPv4（ARP / DHCP） / IPv6 邻接 / 名称解析`；
+  防护页二级标签变为：`端口扫描 / 局域网 / DNS 安全 / 本机配置 / IDS`。
+
+### 边界说明
+
+- UDP 检测依赖本机监听端口快照；仅绑定在回环/双栈地址的端口会保守地按“已监听”处理。
+- 名称解析阻断只针对该来源的 3 个 UDP 端口，不封整机；10 分钟自动解除，服务重启也解除。
+- hosts / 代理可能是用户或企业策略有意配置的，本版本只告警，不自动恢复。
+- 不读取载荷、不保存报文；所有解析器对长度/压缩指针都有上限。
+
 ## [4.4] - 2026-10-30
 
 > 功能版本：新增「IPv6 邻接安全」（RA / DHCPv6 / NDP），放在「防护 → 局域网」的

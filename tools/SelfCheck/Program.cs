@@ -483,6 +483,14 @@ internal static class Program
             {
                 RunServiceIpv6SecurityTest();
             }
+            else if (args.Contains("--service-name-resolution-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceNameResolutionTest();
+            }
+            else if (args.Contains("--service-config-integrity-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunServiceConfigIntegrityTest();
+            }
             else if (args.Contains("--service-traffic-precise-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunServiceTrafficPreciseTest();
@@ -12470,6 +12478,151 @@ internal static class Program
                     TimeSpan.FromSeconds(15),
                     out _);
             }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunServiceNameResolutionTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   4.5 名称解析服务端实测（状态 / 来源 / 窄阻断）               #");
+        W("################################################################");
+        W();
+
+        var snapshot = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryNameResolution },
+            TimeSpan.FromSeconds(5),
+            out var error);
+
+        CheckAssertion(results, "读取名称解析状态与来源",
+            snapshot is { Ok: true } && snapshot.NameResolutionStatus is not null);
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取失败：{snapshot?.Error ?? error}");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    来源={snapshot.NameResolutionStatus?.SourceCount} " +
+          $"事件={snapshot.NameResolutionStatus?.EventCount} " +
+          $"已阻断={snapshot.NameResolutionStatus?.BlockedCount}");
+
+        var sources = snapshot.NameSources ?? new List<NameSourceDto>();
+        var target = sources.FirstOrDefault(item => !item.Blocked) ?? sources.FirstOrDefault();
+
+        if (target is null)
+        {
+            W("    当前没有名称解析来源，跳过窄阻断用例（用 Responder 制造一次应答后再跑）。");
+        }
+        else
+        {
+            var block = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.BlockNameSource,
+                    NameBlockAddress = target.Address,
+                    NameBlockMinutes = 1,
+                    NameBlockEnabled = true,
+                },
+                TimeSpan.FromSeconds(15),
+                out var blockError);
+
+            CheckAssertion(results, "临时阻断名称解析来源",
+                block is { Ok: true }
+                && block.NameSources?.Any(item =>
+                    string.Equals(item.Address, target.Address, StringComparison.OrdinalIgnoreCase)
+                    && item.Blocked) == true);
+
+            if (block is not { Ok: true })
+            {
+                W($"    阻断失败：{block?.Error ?? blockError}");
+            }
+
+            var release = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.BlockNameSource,
+                    NameBlockAddress = target.Address,
+                    NameBlockEnabled = false,
+                },
+                TimeSpan.FromSeconds(15),
+                out var releaseError);
+
+            CheckAssertion(results, "解除名称解析阻断",
+                release is { Ok: true }
+                && release.NameSources?.All(item => !item.Blocked) == true);
+
+            if (release is not { Ok: true })
+            {
+                W($"    解除失败：{release?.Error ?? releaseError}");
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunServiceConfigIntegrityTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   4.5 本机配置完整性服务端实测（快照 / 基线 / 清空）           #");
+        W("################################################################");
+        W();
+
+        var snapshot = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.QueryConfigIntegrity },
+            TimeSpan.FromSeconds(5),
+            out var error);
+
+        CheckAssertion(results, "读取本机配置快照",
+            snapshot is { Ok: true }
+            && snapshot.ConfigIntegrityStatus is not null
+            && snapshot.ConfigItems is { Count: > 0 });
+
+        if (snapshot is not { Ok: true })
+        {
+            W($"    读取失败：{snapshot?.Error ?? error}");
+            PrintSummary(results, showFirewallResidue: false);
+            return;
+        }
+
+        W($"    基线={snapshot.ConfigIntegrityStatus?.BaselineReady} " +
+          $"监控项={snapshot.ConfigIntegrityStatus?.ItemCount} " +
+          $"已变更={snapshot.ConfigIntegrityStatus?.ChangedCount} " +
+          $"事件={snapshot.ConfigIntegrityStatus?.EventCount}");
+
+        var rebaseline = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.RebaselineConfigIntegrity },
+            TimeSpan.FromSeconds(15),
+            out var rebaselineError);
+
+        CheckAssertion(results, "重新采本机配置基线",
+            rebaseline is { Ok: true }
+            && rebaseline.ConfigIntegrityStatus?.BaselineReady == true
+            && rebaseline.ConfigIntegrityStatus?.ChangedCount == 0);
+
+        if (rebaseline is not { Ok: true })
+        {
+            W($"    重采基线失败：{rebaseline?.Error ?? rebaselineError}");
+        }
+
+        var clear = ServiceClient.TryRequest(
+            new ServiceRequest { Command = ServiceProtocol.Commands.ClearConfigIntegrity },
+            TimeSpan.FromSeconds(15),
+            out var clearError);
+
+        CheckAssertion(results, "清空本机配置事件",
+            clear is { Ok: true }
+            && clear.ConfigIntegrityEvents is { Count: 0 });
+
+        if (clear is not { Ok: true })
+        {
+            W($"    清空失败：{clear?.Error ?? clearError}");
         }
 
         PrintSummary(results, showFirewallResidue: false);

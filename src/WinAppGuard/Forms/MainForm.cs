@@ -293,6 +293,9 @@ public partial class MainForm : Form
     /// </summary>
     private bool _isCheckingSignatures;
 
+    /// <summary>4.6：路径回填时如果正好有一轮检查在跑，等它结束后再补一轮。</summary>
+    private bool _signatureRetryPending;
+
     // ---------- IP 归属查询 ----------
 
     /// <summary>
@@ -1501,6 +1504,10 @@ public partial class MainForm : Form
             {
                 item.ApplyResolvedPath(path);
                 ApplyTrafficTo(item);
+
+                // 4.6：路径是扫描后才回填的，必须补做签名占位/缓存，
+                // 否则这些系统进程会一直停在空白。
+                ApplyCachedSignatures(new[] { item });
                 changed = true;
             }
         }
@@ -1513,6 +1520,16 @@ public partial class MainForm : Form
         var selectedKey = CaptureSelection();
         RebuildView();
         RebindGrid(selectedKey);
+
+        // 4.6：回填路径后立即补签名检查；如果上一轮还在跑，等它结束再补。
+        if (_isCheckingSignatures)
+        {
+            _signatureRetryPending = true;
+        }
+        else
+        {
+            _ = CheckSignaturesAsync();
+        }
     }
     private void RebuildView()
     {
@@ -3121,6 +3138,12 @@ public partial class MainForm : Form
         finally
         {
             _isCheckingSignatures = false;
+
+            if (_signatureRetryPending)
+            {
+                _signatureRetryPending = false;
+                _ = CheckSignaturesAsync();
+            }
         }
     }
 

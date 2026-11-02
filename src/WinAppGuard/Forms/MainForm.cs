@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.NetworkInformation;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
@@ -367,6 +368,11 @@ public partial class MainForm : Form
         _loadingSettings = true;
         _checkIpOwnershipCheckBox.Checked = _settings.IpOwnershipEnabled;
         _loadingSettings = false;
+
+        // 4.6：断网/联网时立即失效签名缓存并重查，
+        // 否则断网后旧的“已验证”结果会一直显示。
+        NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
     }
 
     /// <summary>
@@ -3081,7 +3087,7 @@ public partial class MainForm : Form
 
             foreach (var item in items)
             {
-                if (DigitalSignature.TryGetCached(item.ProcessPath, out var cached))
+                if (DigitalSignature.TryGetCached(item.ProcessPath, mode, out var cached))
                 {
                     item.Signature = cached;
                     item.IsSignatureChecking = false;
@@ -3197,7 +3203,7 @@ public partial class MainForm : Form
     /// 4.6：扫描出新列表时，先把缓存结论贴上，并把没缓存的标成“检查中…”。
     /// 这样即使上一轮检查还没跑完，用户也能立刻看到已知结论。
     /// </summary>
-    private static void ApplyCachedSignatures(IEnumerable<TcpConnectionItem> connections)
+    private void ApplyCachedSignatures(IEnumerable<TcpConnectionItem> connections)
     {
         foreach (var item in connections)
         {
@@ -3207,7 +3213,7 @@ public partial class MainForm : Form
                 continue;
             }
 
-            if (DigitalSignature.TryGetCached(item.ProcessPath, out var cached))
+            if (DigitalSignature.TryGetCached(item.ProcessPath, _revocationMode, out var cached))
             {
                 item.Signature = cached;
                 item.IsSignatureChecking = false;
@@ -3232,6 +3238,7 @@ public partial class MainForm : Form
             : RevocationMode.CacheOnly;
 
         DigitalSignature.ClearCache();
+        RequestSignatureRecheck();
 
         LocalLog.Info(_revocationMode == RevocationMode.Online
             ? LocalLog.Pick(
@@ -3240,6 +3247,48 @@ public partial class MainForm : Form
             : LocalLog.Pick(
                 "已关闭证书吊销检查：只读本地缓存，本程序完全不留网络流量。",
                 "Certificate revocation checking disabled: local cache only; this app generates no network traffic."));
+    }
+
+    /// <summary>4.6：网络状态变化（断网/联网）时重查签名，旧缓存立即失效。</summary>
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+        => OnNetworkChanged();
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
+        => OnNetworkChanged();
+
+    private void OnNetworkChanged()
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke(new Action(OnNetworkChanged));
+            }
+            catch (InvalidOperationException)
+            {
+                // 窗口正在关闭。
+            }
+
+            return;
+        }
+
+        DigitalSignature.NotifyNetworkChanged();
+        RequestSignatureRecheck();
+    }
+
+    /// <summary>4.6：已有检查在跑时排队补一轮，避免两轮并发。</summary>
+    private void RequestSignatureRecheck()
+    {
+        if (_isCheckingSignatures)
+        {
+            _signatureRetryPending = true;
+            return;
+        }
 
         _ = CheckSignaturesAsync();
     }

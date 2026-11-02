@@ -15778,13 +15778,16 @@ internal static class Program
                 info.State == SignatureState.Unsigned);
             CheckAssertion(results, "未签名结果带说明文字", !string.IsNullOrWhiteSpace(info.Detail));
 
-            var cached = DigitalSignature.TryGetCached(file, out var cachedInfo);
+            var cached = DigitalSignature.TryGetCached(file, RevocationMode.CacheOnly, out var cachedInfo);
             CheckAssertion(results, "检查结果可直接从缓存读取",
                 cached && cachedInfo.State == info.State);
 
+            var onlineCache = DigitalSignature.TryGetCached(file, RevocationMode.Online, out _);
+            CheckAssertion(results, "离线缓存不会冒充联网结果", !onlineCache);
+
             Thread.Sleep(1100);
             File.AppendAllText(file, "changed");
-            var afterChange = DigitalSignature.TryGetCached(file, out _);
+            var afterChange = DigitalSignature.TryGetCached(file, RevocationMode.CacheOnly, out _);
             CheckAssertion(results, "文件变化后缓存失效", !afterChange);
 
             var missing = DigitalSignature.Check(

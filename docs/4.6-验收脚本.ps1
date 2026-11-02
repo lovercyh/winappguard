@@ -55,8 +55,9 @@ Assert-True '依赖审计（--audit）' ((Invoke-SelfCheck '--audit') -eq 0)
 Write-Host ''
 Write-Host '===== 4. 手工验证（联网连接页） =====' -ForegroundColor Cyan
 Write-Host '  A) 保持「设置 → 数据与隐私 → 检查证书吊销状态」勾选，断开外网：'
-Write-Host '     签名列显示「无网络，无法联网查询」，底部汇总行提示「证书吊销未核对 N 项」。'
-Write-Host '     不会把“没核对”当成“已验证”，也不会整批卡住。'
+Write-Host '     不需要手动刷新，签名列会在几秒内变为「无网络，无法联网查询」，'
+Write-Host '     底部汇总行提示「证书吊销未核对 N 项」。'
+Write-Host '     重新联网后应自动恢复为正常签名结论。'
 Write-Host '  B) 取消勾选后刷新：'
 Write-Host '     已签名程序立即显示签名者（如 Microsoft / VMware）；'
 Write-Host '     未签名程序显示「未签名」并整行标浅黄；'

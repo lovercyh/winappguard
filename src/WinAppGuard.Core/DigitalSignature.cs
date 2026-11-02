@@ -57,8 +57,19 @@ public static class DigitalSignature
     /// 而连接列表每 3 秒刷新一次、同一个程序反复出现 —— 不缓存界面会卡死。
     /// 键用路径而不是 PID：签名是**文件**的属性，不是进程的属性。
     /// </summary>
-    private static readonly Dictionary<string, (SignatureInfo Info, DateTime FileWriteTimeUtc)> Cache =
+    private static readonly Dictionary<string, CacheEntry> Cache =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>4.6：缓存项同时记下“是不是联网查的、当时有没有网关、什么时候查的”。</summary>
+    private readonly record struct CacheEntry(
+        SignatureInfo Info,
+        DateTime FileWriteTimeUtc,
+        bool Online,
+        bool NetworkAvailable,
+        DateTime CheckedUtc);
+
+    /// <summary>4.6：联网结果最多信 5 分钟，避免“链路还在但外网断了”一直显示正常。</summary>
+    private static readonly TimeSpan OnlineCacheTtl = TimeSpan.FromMinutes(5);
 
     /// <summary>缓存会被多个后台线程访问，需要加锁。</summary>
     private static readonly object CacheGate = new();
@@ -112,11 +123,24 @@ public static class DigitalSignature
             writeTime = DateTime.MinValue;
         }
 
+        var online = mode == RevocationMode.Online;
+        var gatewayAvailable = online ? HasDefaultGateway() : false;
+        var now = DateTime.UtcNow;
+
         lock (CacheGate)
         {
             // 命中缓存，而且文件没有被改动过。
             // 比对写入时间是为了处理「程序更新了，同一个路径内容变了」的情况。
-            if (Cache.TryGetValue(filePath, out var cached) && cached.FileWriteTimeUtc == writeTime)
+            //
+            // 4.6：联网吊销结果还要和“当前是否有网关”一致、且不超过 5 分钟。
+            // 断网后旧的“已验证”缓存必须失效，否则界面会继续显示正常签名，
+            // 用户看不出吊销其实没核对。
+            if (Cache.TryGetValue(filePath, out var cached)
+                && cached.FileWriteTimeUtc == writeTime
+                && (!online
+                    || (cached.Online
+                        && cached.NetworkAvailable == gatewayAvailable
+                        && now - cached.CheckedUtc < OnlineCacheTtl)))
             {
                 return cached.Info;
             }
@@ -129,7 +153,8 @@ public static class DigitalSignature
         {
             lock (CacheGate)
             {
-                Cache[filePath] = (info, writeTime);
+                Cache[filePath] = new CacheEntry(
+                    info, writeTime, online, gatewayAvailable, now);
             }
         }
 
@@ -140,7 +165,7 @@ public static class DigitalSignature
     /// 4.6：只读缓存。扫描时先把已有结论立刻显示出来，
     /// 不用等后台再查一轮（尤其是离线环境下证书吊销检查很慢）。
     /// </summary>
-    public static bool TryGetCached(string filePath, out SignatureInfo info)
+    public static bool TryGetCached(string filePath, RevocationMode mode, out SignatureInfo info)
     {
         info = SignatureInfo.None;
 
@@ -160,9 +185,18 @@ public static class DigitalSignature
             return false;
         }
 
+        var online = mode == RevocationMode.Online;
+        var gatewayAvailable = online ? HasDefaultGateway() : false;
+        var now = DateTime.UtcNow;
+
         lock (CacheGate)
         {
-            if (Cache.TryGetValue(filePath, out var cached) && cached.FileWriteTimeUtc == writeTime)
+            if (Cache.TryGetValue(filePath, out var cached)
+                && cached.FileWriteTimeUtc == writeTime
+                && (!online
+                    || (cached.Online
+                        && cached.NetworkAvailable == gatewayAvailable
+                        && now - cached.CheckedUtc < OnlineCacheTtl)))
             {
                 info = cached.Info;
                 return true;
@@ -200,6 +234,20 @@ public static class DigitalSignature
         {
             Cache.Clear();
         }
+    }
+
+    /// <summary>
+    /// 4.6：网络状态变化（断网/联网）时调用：强制重新判断网关并清空缓存。
+    /// 否则断网后旧的“已验证”结果会继续显示。
+    /// </summary>
+    public static void NotifyNetworkChanged()
+    {
+        lock (NetworkGate)
+        {
+            _nextGatewayCheckUtc = DateTime.MinValue;
+        }
+
+        ClearCache();
     }
 
     // ==================================================================

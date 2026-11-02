@@ -164,6 +164,7 @@ internal static class Program
                         && !args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--config-integrity-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--name-resolution-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--signature-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-capture-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--lan-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--dns-security-test", StringComparer.OrdinalIgnoreCase)
@@ -450,6 +451,10 @@ internal static class Program
             else if (args.Contains("--name-resolution-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunNameResolutionTest();
+            }
+            else if (args.Contains("--signature-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunSignatureTest();
             }
             else if (args.Contains("--traffic-live-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -15747,6 +15752,61 @@ internal static class Program
         table.Refresh();
         CheckAssertion(results, "UDP 监听端口快照可读取（端口 0 永远不算监听）",
             table.Count >= 0 && !table.IsListening(0));
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static void RunSignatureTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var directory = Path.Combine(
+            Path.GetTempPath(), "WinAppGuard-SignatureTest-" + Guid.NewGuid().ToString("N"));
+
+        W("################################################################");
+        W("#   4.6 数字签名（离线：未签名 / 缓存 / 文件变化后失效）          #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var file = Path.Combine(directory, "unsigned-test.bin");
+            File.WriteAllBytes(file, new byte[] { 1, 2, 3, 4 });
+
+            var info = DigitalSignature.Check(file, RevocationMode.CacheOnly);
+            CheckAssertion(results, "临时文件判定为未签名",
+                info.State == SignatureState.Unsigned);
+            CheckAssertion(results, "未签名结果带说明文字", !string.IsNullOrWhiteSpace(info.Detail));
+
+            var cached = DigitalSignature.TryGetCached(file, out var cachedInfo);
+            CheckAssertion(results, "检查结果可直接从缓存读取",
+                cached && cachedInfo.State == info.State);
+
+            Thread.Sleep(1100);
+            File.AppendAllText(file, "changed");
+            var afterChange = DigitalSignature.TryGetCached(file, out _);
+            CheckAssertion(results, "文件变化后缓存失效", !afterChange);
+
+            var missing = DigitalSignature.Check(
+                Path.Combine(directory, "does-not-exist.exe"),
+                RevocationMode.CacheOnly);
+            CheckAssertion(results, "不存在的文件返回 Unknown",
+                missing.State == SignatureState.Unknown);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录清不掉不影响断言。
+            }
+        }
 
         PrintSummary(results, showFirewallResidue: false);
     }

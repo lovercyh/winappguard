@@ -115,7 +115,7 @@ public static class DigitalSignature
             }
         }
 
-        var info = CheckCore(filePath, mode);
+        var info = CheckCoreSafe(filePath, mode);
 
         lock (CacheGate)
         {
@@ -123,6 +123,42 @@ public static class DigitalSignature
         }
 
         return info;
+    }
+
+    /// <summary>
+    /// 4.6：只读缓存。扫描时先把已有结论立刻显示出来，
+    /// 不用等后台再查一轮（尤其是离线环境下证书吊销检查很慢）。
+    /// </summary>
+    public static bool TryGetCached(string filePath, out SignatureInfo info)
+    {
+        info = SignatureInfo.None;
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return false;
+        }
+
+        DateTime writeTime;
+
+        try
+        {
+            writeTime = File.GetLastWriteTimeUtc(filePath);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        lock (CacheGate)
+        {
+            if (Cache.TryGetValue(filePath, out var cached) && cached.FileWriteTimeUtc == writeTime)
+            {
+                info = cached.Info;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -176,10 +212,25 @@ public static class DigitalSignature
     /// 这时候假如它还恰好被某个目录收录过，去查目录就会把这个严重信号洗白，
     /// 让用户以为一切正常。所以必须在这里停下。
     /// </summary>
+    /// <summary>4.6：单个文件检查失败只影响它自己，不中断整批。</summary>
+    private static SignatureInfo CheckCoreSafe(string filePath, RevocationMode mode)
+    {
+        try
+        {
+            return CheckCore(filePath, mode);
+        }
+        catch (Exception ex)
+        {
+            return new SignatureInfo(
+                SignatureState.Error,
+                string.Empty,
+                $"检查签名时出错：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     private static SignatureInfo CheckCore(string filePath, RevocationMode mode)
     {
         var allowNetwork = mode == RevocationMode.Online;
-
         var embedded = CertificateTrust.VerifyEmbedded(filePath, allowNetwork);
 
         if (embedded.IsTrusted)

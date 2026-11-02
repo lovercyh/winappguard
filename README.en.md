@@ -38,6 +38,11 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > **local configuration** page watches hosts / proxy / PAC / DNS tampering (alert only, no
 > auto-revert). See [`docs/4.5-三功能设计.md`](docs/4.5-三功能设计.md).
 >
+> **4.6 fixes digital-signature checking.** Offline networks no longer stall the whole batch:
+> each file gets its own 5-second timeout, results appear as they finish, pending rows show
+> *Checking…*, and unsigned files still turn yellow. Revocation checking stays on by default;
+> it can be turned off under Settings → Data & privacy.
+>
 > Older versions (3.0 service split, 3.1 protected mode, 3.7 Flow IDS, 4.0 anti-scan,
 > 4.1 precise traffic, 4.2 LAN detection) are listed in [CHANGELOG](CHANGELOG.md).
 

@@ -316,6 +316,7 @@
     "不受信任": "Untrusted",
     "证书异常": "Certificate problem",
     "检查失败": "Check failed",
+    "检查中…": "Checking…",
     "未知": "Unknown",
     "（未知程序）": "(unknown program)",
     "连接": "Connection",

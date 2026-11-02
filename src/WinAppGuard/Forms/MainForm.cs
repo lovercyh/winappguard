@@ -2835,6 +2835,7 @@ public partial class MainForm : Form
             });
 
             ApplyTrafficSnapshot(connections, traffic.Traffic, traffic.Supported);
+            ApplyCachedSignatures(connections);
 
             // 关键顺序：先在旧数据还在的时候抓取选中项，再替换列表。
             // 反过来的话，列表一旦变短就会越界崩溃。
@@ -3037,9 +3038,6 @@ public partial class MainForm : Form
             // 在界面线程上先做快照。
             // 不能在后台线程里直接遍历 _connections —— 界面线程每 3 秒就会
             // Clear + AddRange 一次，两个线程同时动同一个 List 会出问题。
-            //
-            // 这里用**扫描结果全集**而不是显示列表：这样搜索条件变化后新露出来的行
-            // 也已经带着签名结论，不会出现「刚显示出来还是空的、过几秒才补上」。
             var items = _scannedConnections
                 .Where(item => !string.IsNullOrEmpty(item.ProcessPath))
                 .ToArray();
@@ -3049,21 +3047,72 @@ public partial class MainForm : Form
                 return;
             }
 
-            await Task.Run(() =>
-            {
-                foreach (var item in items)
-                {
-                    // Check 内部有缓存，所以只有「第一次见到的程序」才会真的去验证。
-                    item.Signature = DigitalSignature.Check(item.ProcessPath, mode);
-                }
-            });
+            // 4.6：先把缓存里的结论直接贴上；其余标成“检查中…”。
+            var pending = new Dictionary<string, List<TcpConnectionItem>>(StringComparer.OrdinalIgnoreCase);
 
-            if (IsDisposed || Disposing)
+            foreach (var item in items)
             {
+                if (DigitalSignature.TryGetCached(item.ProcessPath, out var cached))
+                {
+                    item.Signature = cached;
+                    item.IsSignatureChecking = false;
+                    continue;
+                }
+
+                item.IsSignatureChecking = true;
+
+                if (!pending.TryGetValue(item.ProcessPath, out var list))
+                {
+                    list = new List<TcpConnectionItem>();
+                    pending[item.ProcessPath] = list;
+                }
+
+                list.Add(item);
+            }
+
+            if (pending.Count == 0)
+            {
+                RebindGrid(selectedKey);
                 return;
             }
 
-            RebindGrid(selectedKey);
+            // 4.6：每个文件单独检查、单独超时；一个文件卡住不影响其它行。
+            var tasks = pending.Keys
+                .Select(path => CheckSignatureAsync(path, mode))
+                .ToList();
+
+            var lastRebindUtc = DateTime.MinValue;
+
+            while (tasks.Count > 0)
+            {
+                var done = await Task.WhenAny(tasks);
+                tasks.Remove(done);
+
+                var (path, info) = await done;
+
+                if (pending.TryGetValue(path, out var list))
+                {
+                    foreach (var item in list)
+                    {
+                        item.Signature = info;
+                        item.IsSignatureChecking = false;
+                    }
+                }
+
+                if (IsDisposed || Disposing)
+                {
+                    return;
+                }
+
+                var now = DateTime.UtcNow;
+
+                // 每 250ms 或最后一批刷一次，避免几十个文件时表格疯狂重绑。
+                if (tasks.Count == 0 || (now - lastRebindUtc).TotalMilliseconds >= 250)
+                {
+                    lastRebindUtc = now;
+                    RebindGrid(CaptureSelection());
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -3072,6 +3121,63 @@ public partial class MainForm : Form
         finally
         {
             _isCheckingSignatures = false;
+        }
+    }
+
+    /// <summary>
+    /// 4.6：检查一个文件。超时或异常都只影响这一个文件，
+    /// 不会让整批签名停在“未检查”状态。
+    /// </summary>
+    private static async Task<(string Path, SignatureInfo Info)> CheckSignatureAsync(
+        string path,
+        RevocationMode mode)
+    {
+        var work = Task.Run(() => DigitalSignature.Check(path, mode));
+
+        try
+        {
+            var info = await work.WaitAsync(TimeSpan.FromSeconds(5));
+            return (path, info);
+        }
+        catch (TimeoutException)
+        {
+            return (path, new SignatureInfo(
+                SignatureState.Error,
+                string.Empty,
+                "检查超时（5 秒）。离线环境请在「设置 → 数据与隐私」关闭“检查证书吊销状态”后点刷新重试。"));
+        }
+        catch (Exception ex)
+        {
+            return (path, new SignatureInfo(
+                SignatureState.Error,
+                string.Empty,
+                $"检查签名失败：{ex.GetType().Name}: {ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// 4.6：扫描出新列表时，先把缓存结论贴上，并把没缓存的标成“检查中…”。
+    /// 这样即使上一轮检查还没跑完，用户也能立刻看到已知结论。
+    /// </summary>
+    private static void ApplyCachedSignatures(IEnumerable<TcpConnectionItem> connections)
+    {
+        foreach (var item in connections)
+        {
+            if (string.IsNullOrEmpty(item.ProcessPath))
+            {
+                item.IsSignatureChecking = false;
+                continue;
+            }
+
+            if (DigitalSignature.TryGetCached(item.ProcessPath, out var cached))
+            {
+                item.Signature = cached;
+                item.IsSignatureChecking = false;
+            }
+            else
+            {
+                item.IsSignatureChecking = true;
+            }
         }
     }
 

@@ -56,6 +56,12 @@ public sealed class TcpConnectionItem
     public SignatureInfo Signature { get; set; } = SignatureInfo.None;
 
     /// <summary>
+    /// 4.6：签名正在后台检查中。界面据此显示“检查中…”，
+    /// 而不是留一片空白让人以为功能坏了。
+    /// </summary>
+    public bool IsSignatureChecking { get; set; }
+
+    /// <summary>
     /// 该连接远程地址的归属信息（国家/地区、运营商 AS）。
     /// 由界面在后台查好后填充，扫描器本身不设置这个值。
     /// 功能关闭时保持 <see cref="IpOwnershipInfo.None"/>，界面据此完全不显示归属。
@@ -179,7 +185,9 @@ public sealed class TcpConnectionItem
         SignatureState.Error => Localizer.T("检查失败"),
 
         // 还没检查：有路径说明马上会有结果，留空；没路径就永远不会有结果。
-        _ => string.IsNullOrEmpty(ProcessPath) ? "—" : string.Empty,
+        _ => string.IsNullOrEmpty(ProcessPath)
+            ? "—"
+            : IsSignatureChecking ? Localizer.T("检查中…") : string.Empty,
     };
 
     /// <summary>数字签名列的悬停提示，显示完整结论。</summary>

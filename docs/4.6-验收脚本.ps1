@@ -59,7 +59,8 @@ Write-Host '     签名列显示「无网络，无法联网查询」，底部汇
 Write-Host '     不会把“没核对”当成“已验证”，也不会整批卡住。'
 Write-Host '  B) 取消勾选后刷新：'
 Write-Host '     已签名程序立即显示签名者（如 Microsoft / VMware）；'
-Write-Host '     未签名程序显示「未签名」并整行标浅黄。'
+Write-Host '     未签名程序显示「未签名」并整行标浅黄；'
+Write-Host '     反复勾选/取消勾选不应闪退。'
 Write-Host '  C) 随便找一个无签名 exe（自编译的即可）加入连接：'
 Write-Host '     应显示「未签名」+ 浅黄；签名被改过的显示「签名无效」+ 粉红。'
 

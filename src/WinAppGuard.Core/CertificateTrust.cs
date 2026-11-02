@@ -299,11 +299,23 @@ internal static class CertificateTrust
     private const int CertTrustIsOfflineRevocation = 0x01000000;
 
     /// <summary>4.6：CRYPT_PROVIDER_SGNR 里只用到 pChain（证书链上下文）。</summary>
+    /// <remarks>
+    /// 注意 FILETIME 必须拆成两个 DWORD：它在原生结构里是 4 字节对齐，
+    /// 用 C# 的 long（8 字节对齐）会把后面所有字段整体推后 4 字节，
+    /// pChain 变成野指针 → 读取时直接访问违规、进程闪退。
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileTime32
+    {
+        public uint Low;
+        public uint High;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct CryptProviderSgnr
     {
         public uint CbStruct;
-        public long SftVerifyAsOf;
+        public FileTime32 SftVerifyAsOf;
         public uint CsCertChain;
         public IntPtr PasCertChain;
         public uint DwSignerType;
@@ -312,6 +324,21 @@ internal static class CertificateTrust
         public uint CsCounterSigners;
         public IntPtr PasCounterSigners;
         public IntPtr PChain;
+    }
+
+    /// <summary>
+    /// 布局自检：pChain 偏移写错就会读到野指针并让进程崩溃，
+    /// 这里宁可直接抛异常（由 CheckCoreSafe 转成“检查失败”），也不能放它去读内存。
+    /// </summary>
+    static CertificateTrust()
+    {
+        var expected = IntPtr.Size == 8 ? 56 : 40;
+
+        if (Marshal.OffsetOf<CryptProviderSgnr>(nameof(CryptProviderSgnr.PChain)).ToInt32() != expected)
+        {
+            throw new InvalidOperationException(
+                "CRYPT_PROVIDER_SGNR 布局与系统不一致，已停止读取证书链状态。");
+        }
     }
 
     /// <summary>
@@ -346,7 +373,8 @@ internal static class CertificateTrust
 
             var signer = Marshal.PtrToStructure<CryptProviderSgnr>(signerPointer);
 
-            if (signer.PChain == IntPtr.Zero)
+            if (signer.PChain == IntPtr.Zero
+                || (signer.PChain.ToInt64() & 0x3) != 0)
             {
                 return false;
             }

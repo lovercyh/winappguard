@@ -15792,6 +15792,17 @@ internal static class Program
                 RevocationMode.CacheOnly);
             CheckAssertion(results, "不存在的文件返回 Unknown",
                 missing.State == SignatureState.Unknown);
+
+            // 4.6：真正走一次证书链（含 pChain 读取），确保布局修正后不会崩溃。
+            var systemFile = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+
+            if (File.Exists(systemFile))
+            {
+                var signed = DigitalSignature.Check(systemFile, RevocationMode.Online);
+                W($"    系统文件签名状态 = {signed.State}（{signed.SignerName}）");
+                CheckAssertion(results, "系统文件签名检查不崩溃且结论有效",
+                    signed.State is SignatureState.Valid or SignatureState.RevocationUnknown);
+            }
         }
         finally
         {

@@ -82,6 +82,23 @@ public sealed partial class MainForm
             return;
         }
 
+        // 4.7：版本过旧按“不可用”处理，但文案和按钮要明确是升级，不是重装。
+        var state = NpcapLocator.GetState(out var installedVersion);
+
+        if (state == NpcapState.TooOld)
+        {
+            _npcapStatusLabel.Text = Localizer.F(
+                "Npcap：版本过旧（{0}，最低 {1}，点击升级）",
+                installedVersion ?? "?",
+                NpcapLocator.MinimumVersionText);
+            _npcapStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
+            _npcapStatusLabel.IsLink = true;
+            _npcapStatusLabel.ToolTipText = Localizer.F(
+                "当前 Npcap 版本过旧，抓包功能已停用。点击用随包官方安装程序覆盖升级到 {0}（会弹一次 UAC）。",
+                NpcapLocator.MinimumVersionText);
+            return;
+        }
+
         if (collecting)
         {
             var version = NpcapLocator.GetVersion();
@@ -137,7 +154,7 @@ public sealed partial class MainForm
 
         var installed = NpcapLocator.IsAvailable || _antiStatus?.NpcapAvailable == true;
 
-        if (!installed)
+        if (!installed || NpcapLocator.IsTooOld)
         {
             _ = InstallNpcapFromBundleAsync();
             return;
@@ -220,6 +237,7 @@ public sealed partial class MainForm
     /// <summary>未安装：调用随包官方安装程序（和安装 WinAppGuard 时同一份文件、同一组锁定参数）。</summary>
     private async Task InstallNpcapFromBundleAsync()
     {
+        var upgrading = NpcapLocator.IsTooOld;
         var directory = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
         var installer = Path.Combine(directory, NpcapInstaller.FileName);
 
@@ -281,12 +299,12 @@ public sealed partial class MainForm
         {
             case 0:
                 ShowTrayBalloon(
-                    Localizer.T("Npcap 安装完成"),
+                    Localizer.T(upgrading ? "Npcap 升级完成" : "Npcap 安装完成"),
                     Localizer.T("反扫描会在几秒内自动连接。"));
                 break;
             case 3010:
                 ShowTrayBalloon(
-                    Localizer.T("Npcap 已安装，需要重启"),
+                    Localizer.T(upgrading ? "Npcap 已升级，需要重启" : "Npcap 已安装，需要重启"),
                     Localizer.T("重启后反端口扫描才会生效。"));
                 break;
             case 1:

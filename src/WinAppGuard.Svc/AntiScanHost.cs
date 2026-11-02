@@ -449,7 +449,7 @@ internal static class AntiScanHost
         {
             lock (Gate)
             {
-                _lastError = "Npcap 未安装。";
+                _lastError = NpcapLocator.GetUnavailableReason();
                 _nextCaptureRetryUtc = DateTime.UtcNow.AddSeconds(30);
             }
 

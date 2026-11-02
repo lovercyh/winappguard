@@ -1379,7 +1379,7 @@ internal static class LanHost
         {
             lock (Gate)
             {
-                _lastError = "Npcap 未安装。";
+                _lastError = NpcapLocator.GetUnavailableReason();
             }
 
             return;

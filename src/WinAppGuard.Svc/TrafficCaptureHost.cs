@@ -366,7 +366,7 @@ internal static class TrafficCaptureHost
         {
             lock (Gate)
             {
-                _lastError = "Npcap 未安装。";
+                _lastError = NpcapLocator.GetUnavailableReason();
                 _nextRetryUtc = DateTime.UtcNow.AddSeconds(30);
             }
 

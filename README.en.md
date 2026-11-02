@@ -43,6 +43,11 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > *Checking…*, and unsigned files still turn yellow. Revocation checking stays on by default;
 > it can be turned off under Settings → Data & privacy.
 >
+> **4.7 requires Npcap 1.80 or newer.** Older versions are treated as unavailable (capture
+> features stop), the status bar offers an upgrade, and the bundled official 1.90 installer
+> performs an in-place upgrade. If the version cannot be read (portable/enterprise images),
+> capture is allowed with an upgrade recommendation.
+>
 > Older versions (3.0 service split, 3.1 protected mode, 3.7 Flow IDS, 4.0 anti-scan,
 > 4.1 precise traffic, 4.2 LAN detection) are listed in [CHANGELOG](CHANGELOG.md).
 
@@ -301,9 +306,12 @@ Download from [Releases](https://github.com/lovercyh/winappguard/releases):
 Double-clicking the installer asks for administrator rights once, then copies the files,
 registers the service (SYSTEM, automatic start), and creates a desktop shortcut.
 
-- **Since 4.1 Npcap is required**: traffic statistics and anti-port-scan both depend on it.
-  The installer explains why and then opens the official GUI; declining aborts the installation
-  without changing the system.
+- **Since 4.1 Npcap is required**: traffic statistics, anti-port-scan, LAN and IPv6 neighbour
+  detection all depend on it. The installer explains why and then opens the official GUI;
+  declining aborts the installation without changing the system.
+- **Since 4.7 Npcap 1.80 or newer is required**: older versions disable capture features and
+  the status bar offers an in-place upgrade using the bundled official 1.90 installer. If the
+  version cannot be read, capture is allowed with an upgrade recommendation.
 - Npcap is installed through its official GUI, never silently; `Npcap-LICENSE.txt` and
   `npcap-1.90.exe` (used by the status-bar install shortcut) are kept in the install directory.
 - Neither the installer nor the uninstaller is code-signed; SmartScreen will say "unknown

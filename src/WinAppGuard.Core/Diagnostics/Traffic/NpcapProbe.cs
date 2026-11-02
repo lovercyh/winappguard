@@ -15,6 +15,12 @@ public static class NpcapProbe
     {
         error = null;
 
+        if (!NpcapLocator.IsAvailable)
+        {
+            error = NpcapLocator.GetUnavailableReason();
+            return false;
+        }
+
         var path = NpcapLocator.FindWpcapPath();
 
         if (path is null)

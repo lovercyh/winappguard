@@ -15423,9 +15423,11 @@ internal static class Program
             NpcapCapture.PacketHeaderSize == 16);
 
         var npcapPath = NpcapLocator.FindWpcapPath();
-        W($"    Npcap = {npcapPath ?? "未安装"} / 版本 {NpcapLocator.GetVersion() ?? "?"}");
-        CheckAssertion(results, "Npcap 版本可读（未安装时跳过）",
-            npcapPath is null || !string.IsNullOrWhiteSpace(NpcapLocator.GetVersion()));
+        var npcapState = NpcapLocator.GetState(out var npcapVersion);
+        W($"    Npcap = {npcapPath ?? "未安装"} / 版本 {npcapVersion ?? "?"} / " +
+          $"状态 {npcapState}（最低 {NpcapLocator.MinimumVersionText}）");
+        CheckAssertion(results, "Npcap 版本可读（未安装/未知时跳过）",
+            npcapPath is null || npcapState == NpcapState.Unknown || npcapVersion is not null);
 
         // 随包安装包的校验常量如果写错，安装器/界面都会拒绝安装，而这一步能在开发机上提前发现。
         var bundledCandidates = new[]

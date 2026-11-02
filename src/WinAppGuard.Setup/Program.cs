@@ -294,6 +294,16 @@ internal static class Program
             return 0;
         }
 
+        // 4.7：旧版本和“没装”都会走到安装流程，但必须把原因说清楚，
+        // 否则用户会以为安装器没识别到已安装的 Npcap。
+        if (NpcapLocator.GetState(out var installedNpcapVersion) == NpcapState.TooOld)
+        {
+            Bilingual.Say(
+                $"检测到 Npcap {installedNpcapVersion}，低于最低要求 {NpcapLocator.MinimumVersionText}，需要覆盖升级。",
+                $"Detected Npcap {installedNpcapVersion}, below the minimum {NpcapLocator.MinimumVersionText}; an in-place upgrade is required.");
+            Console.WriteLine();
+        }
+
         if (!File.Exists(payload.NpcapSetup))
         {
             Bilingual.Fail(
@@ -421,8 +431,8 @@ internal static class Program
         if (!NpcapLocator.IsAvailable)
         {
             Bilingual.Fail(
-                "Npcap 安装器已结束，但仍检测不到 wpcap.dll，安装中止。",
-                "The Npcap installer finished, but wpcap.dll is still missing; installation aborted.");
+                $"{NpcapLocator.GetUnavailableReason()}安装中止。",
+                "Npcap is still unavailable after the installer finished; installation aborted.");
             return 9;
         }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace WinAppGuard.Core.Diagnostics.AntiScan;
@@ -45,7 +46,7 @@ public static class NpcapLocator
     /// <summary>当前安装状态；version 是读到的 Npcap 版本（可能为空）。</summary>
     public static NpcapState GetState(out string? version)
     {
-        version = ReadPackageVersion();
+        version = ReadInstalledVersion();
 
         if (FindWpcapPath() is null)
         {
@@ -91,8 +92,7 @@ public static class NpcapLocator
     public static string? GetVersion(string? wpcapPath = null)
     {
         _ = wpcapPath;
-        var packageVersion = ReadPackageVersion();
-        return string.IsNullOrWhiteSpace(packageVersion) ? null : packageVersion;
+        return ReadInstalledVersion();
     }
 
     private static string? ReadPackageVersion()
@@ -118,6 +118,38 @@ public static class NpcapLocator
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 4.7：优先用安装包版本；注册表缺失时读 <c>drivers\npcap.sys</c> 的文件版本。
+    /// 旧版 Npcap（1.7x）有时没有 Uninstall\NpcapInst 的 DisplayVersion，
+    /// 但驱动文件版本仍然是 Npcap 自己的版本（不是 libpcap 版本）。
+    /// </summary>
+    private static string? ReadInstalledVersion()
+    {
+        var packageVersion = ReadPackageVersion();
+
+        if (!string.IsNullOrWhiteSpace(packageVersion))
+        {
+            return packageVersion;
+        }
+
+        try
+        {
+            var driver = Path.Combine(Environment.SystemDirectory, "drivers", "npcap.sys");
+
+            if (!File.Exists(driver))
+            {
+                return null;
+            }
+
+            var fileVersion = FileVersionInfo.GetVersionInfo(driver).FileVersion;
+            return string.IsNullOrWhiteSpace(fileVersion) ? null : fileVersion.Trim();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>

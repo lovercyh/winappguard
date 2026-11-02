@@ -182,6 +182,7 @@ public sealed class TcpConnectionItem
         SignatureState.Tampered => Localizer.T("签名无效"),
         SignatureState.Untrusted => Localizer.T("不受信任"),
         SignatureState.CertificateProblem => Localizer.T("证书异常"),
+        SignatureState.RevocationUnknown => Localizer.T("无网络，无法联网查询"),
         SignatureState.Error => Localizer.T("检查失败"),
 
         // 还没检查：有路径说明马上会有结果，留空；没路径就永远不会有结果。

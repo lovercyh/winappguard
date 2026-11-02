@@ -21,6 +21,9 @@ public enum SignatureState
     /// <summary>证书本身有问题：过期、被吊销等。</summary>
     CertificateProblem,
 
+    /// <summary>4.6：签名本身有效，但当前无网络，证书吊销状态没能联网核对。</summary>
+    RevocationUnknown,
+
     /// <summary>检查过程出错（文件读不到、API 失败等）。</summary>
     Error,
 }

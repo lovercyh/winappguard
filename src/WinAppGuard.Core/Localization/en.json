@@ -317,6 +317,8 @@
     "证书异常": "Certificate problem",
     "检查失败": "Check failed",
     "检查中…": "Checking…",
+    "无网络，无法联网查询": "No network; online check unavailable",
+    "证书吊销未核对 {0} 项（当前无网络）": "{0} revocation status(es) not checked (no network)",
     "未知": "Unknown",
     "（未知程序）": "(unknown program)",
     "连接": "Connection",

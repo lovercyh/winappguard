@@ -1551,9 +1551,21 @@ public partial class MainForm : Form
         var total = _scannedConnections.Count;
         var time = _lastScanTime == DateTime.MinValue ? "--:--:--" : _lastScanTime.ToString("HH:mm:ss");
 
-        _summaryLabel.Text = shown == total
+        var text = shown == total
             ? Localizer.F("最后刷新：{0}    共 {1} 条", time, total)
             : Localizer.F("最后刷新：{0}    显示 {1} / 共 {2} 条", time, shown, total);
+
+        // 4.6：吊销检查开着但当前无网络时，明确告诉用户“没核对”，
+        // 不能把“没查成”当成“已经查过且有效”。
+        var revocationUnknown = _scannedConnections.Count(
+            item => item.Signature.State == SignatureState.RevocationUnknown);
+
+        if (revocationUnknown > 0)
+        {
+            text += " · " + Localizer.F("证书吊销未核对 {0} 项（当前无网络）", revocationUnknown);
+        }
+
+        _summaryLabel.Text = text;
     }
 
     /// <summary>
@@ -3090,6 +3102,7 @@ public partial class MainForm : Form
             if (pending.Count == 0)
             {
                 RebindGrid(selectedKey);
+                UpdateSummary();
                 return;
             }
 
@@ -3130,6 +3143,8 @@ public partial class MainForm : Form
                     RebindGrid(CaptureSelection());
                 }
             }
+
+            UpdateSummary();
         }
         catch (Exception ex)
         {

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.NetworkInformation;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
@@ -61,6 +63,11 @@ public static class DigitalSignature
     /// <summary>缓存会被多个后台线程访问，需要加锁。</summary>
     private static readonly object CacheGate = new();
 
+    // 4.6：有没有默认网关（每 30 秒最多枚举一次网卡）。
+    private static readonly object NetworkGate = new();
+    private static DateTime _nextGatewayCheckUtc = DateTime.MinValue;
+    private static bool _hasDefaultGateway = true;
+
     /// <summary>已经检查过的不同文件数量。</summary>
     public static int CachedFileCount
     {
@@ -117,9 +124,13 @@ public static class DigitalSignature
 
         var info = CheckCoreSafe(filePath, mode);
 
-        lock (CacheGate)
+        // 4.6：「无网络」不是文件的稳定属性。不要缓存，否则联网后刷新仍然显示“没核对”。
+        if (info.State != SignatureState.RevocationUnknown)
         {
-            Cache[filePath] = (info, writeTime);
+            lock (CacheGate)
+            {
+                Cache[filePath] = (info, writeTime);
+            }
         }
 
         return info;
@@ -235,20 +246,20 @@ public static class DigitalSignature
 
         if (embedded.IsTrusted)
         {
-            return Valid(embedded, "内嵌签名");
+            return Valid(embedded, "内嵌签名", mode);
         }
 
         if (!embedded.IsNoSignature)
         {
             // 有内嵌签名但验证失败 —— 这本身就是结论。见上面第 3 条。
-            return Interpret(embedded);
+            return Interpret(embedded, mode);
         }
 
         var catalog = CertificateTrust.VerifyCatalog(filePath, allowNetwork);
 
         if (catalog.IsTrusted)
         {
-            return Valid(catalog, "系统目录签名");
+            return Valid(catalog, "系统目录签名", mode);
         }
 
         if (catalog.IsNoSignature)
@@ -259,12 +270,26 @@ public static class DigitalSignature
                 "该文件没有数字签名（内嵌签名和系统目录签名都没有）");
         }
 
-        return Interpret(catalog);
+        return Interpret(catalog, mode);
     }
 
     /// <summary>构造「签名有效」的结果。</summary>
-    private static SignatureInfo Valid(TrustResult result, string source)
+    private static SignatureInfo Valid(TrustResult result, string source, RevocationMode mode)
     {
+        if (mode == RevocationMode.Online
+            && (result.RevocationUnknown || !HasDefaultGateway()))
+        {
+            var signer = string.IsNullOrEmpty(result.SignerName)
+                ? string.Empty
+                : $"（签名者：{result.SignerName}）";
+
+            return new SignatureInfo(
+                SignatureState.RevocationUnknown,
+                result.SignerName,
+                $"签名本身有效（{source}）{signer}，但当前无网络，无法联网查询证书吊销状态。\n" +
+                "联网后刷新可重新核对；也可以在「设置 → 数据与隐私」关闭“检查证书吊销状态”。");
+        }
+
         var detail = string.IsNullOrEmpty(result.SignerName)
             ? $"签名有效且受信任（{source}）"
             : $"签名有效且受信任（{source}）：{result.SignerName}";
@@ -272,8 +297,44 @@ public static class DigitalSignature
         return new SignatureInfo(SignatureState.Valid, result.SignerName, detail);
     }
 
+    /// <summary>
+    /// 4.6：本机是否存在默认网关。没有网关基本等于没有可用的外网，
+    /// 此时吊销检查不可能成功；每 30 秒最多枚举一次网卡。
+    /// </summary>
+    private static bool HasDefaultGateway()
+    {
+        lock (NetworkGate)
+        {
+            var now = DateTime.UtcNow;
+
+            if (now < _nextGatewayCheckUtc)
+            {
+                return _hasDefaultGateway;
+            }
+
+            try
+            {
+                _hasDefaultGateway = NetworkInterface.GetAllNetworkInterfaces()
+                    .Where(nic => nic.OperationalStatus == OperationalStatus.Up
+                                  && nic.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                    .SelectMany(nic => nic.GetIPProperties().GatewayAddresses)
+                    .Any(gateway => gateway.Address is not null
+                                    && !gateway.Address.Equals(IPAddress.Any)
+                                    && !gateway.Address.Equals(IPAddress.IPv6Any));
+            }
+            catch (Exception)
+            {
+                // 枚举失败时按“有网关”处理，交给证书链标志判断。
+                _hasDefaultGateway = true;
+            }
+
+            _nextGatewayCheckUtc = now.AddSeconds(30);
+            return _hasDefaultGateway;
+        }
+    }
+
     /// <summary>把验证失败的 HRESULT 翻译成给用户看的结果。</summary>
-    private static SignatureInfo Interpret(TrustResult result)
+    private static SignatureInfo Interpret(TrustResult result, RevocationMode mode)
     {
         var hex = $"0x{result.HResult:X8}";
         var source = result.FromCatalog ? "目录签名" : "内嵌签名";
@@ -298,6 +359,18 @@ public static class DigitalSignature
 
             _ => SignatureState.Error,
         };
+
+        // 4.6：离线导致吊销查不到时，不把“没查成”说成“证书异常/检查失败”。
+        if (mode == RevocationMode.Online
+            && result.RevocationUnknown
+            && state is SignatureState.CertificateProblem or SignatureState.Error)
+        {
+            return new SignatureInfo(
+                SignatureState.RevocationUnknown,
+                result.SignerName,
+                $"当前无网络，无法联网查询证书吊销状态（{source}，{hex}）。\n" +
+                "联网后刷新重试，或在「设置 → 数据与隐私」关闭“检查证书吊销状态”。");
+        }
 
         var text = state switch
         {

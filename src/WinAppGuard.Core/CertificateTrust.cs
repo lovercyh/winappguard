@@ -16,6 +16,13 @@ internal readonly record struct TrustResult(int HResult, string SignerName, bool
     public bool IsTrusted => HResult == ErrorSuccess;
 
     /// <summary>
+    /// 4.6：证书链的吊销状态没能核对（典型原因：当前无网络，CRL/OCSP 取不到）。
+    /// WinVerifyTrust 对“软失败”的吊销检查仍可能返回成功，所以必须单独读这个标志，
+    /// 否则界面会把“没查”显示成“有效”。
+    /// </summary>
+    public bool RevocationUnknown { get; init; }
+
+    /// <summary>
     /// 是否是「这个文件压根没有签名」这一类的返回码。
     ///
     /// 这个判断很关键：只有属于这一类，才应该再去查目录签名；
@@ -287,6 +294,74 @@ internal static class CertificateTrust
     // 内部实现
     // ==================================================================
 
+    // 4.6：CERT_TRUST_STATUS.dwErrorStatus 里表示“吊销没查成”的两个标志。
+    private const int CertTrustRevocationStatusUnknown = 0x00000040;
+    private const int CertTrustIsOfflineRevocation = 0x01000000;
+
+    /// <summary>4.6：CRYPT_PROVIDER_SGNR 里只用到 pChain（证书链上下文）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CryptProviderSgnr
+    {
+        public uint CbStruct;
+        public long SftVerifyAsOf;
+        public uint CsCertChain;
+        public IntPtr PasCertChain;
+        public uint DwSignerType;
+        public IntPtr PsSigner;
+        public uint DwError;
+        public uint CsCounterSigners;
+        public IntPtr PasCounterSigners;
+        public IntPtr PChain;
+    }
+
+    /// <summary>
+    /// 4.6：读证书链的 CERT_TRUST_STATUS.dwErrorStatus，判断吊销状态是否没核对。
+    ///
+    /// 为什么必须读它：WinVerifyTrust 对“离线导致吊销查不到”是软失败，
+    /// 仍可能返回 0（成功）。如果只看返回值，就会把“没查”显示成“有效”。
+    /// </summary>
+    private static bool ReadRevocationUnknown(IntPtr stateData)
+    {
+        if (stateData == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var providerData = NativeMethods.WTHelperProvDataFromStateData(stateData);
+
+            if (providerData == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var signerPointer = NativeMethods.WTHelperGetProvSignerFromChain(
+                providerData, dwIdx: 0, fCounterSigner: false, dwIdx2: 0);
+
+            if (signerPointer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var signer = Marshal.PtrToStructure<CryptProviderSgnr>(signerPointer);
+
+            if (signer.PChain == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            // CERT_CHAIN_CONTEXT：DWORD cbSize; 然后是 CERT_TRUST_STATUS（两个 DWORD）。
+            var errorStatus = Marshal.ReadInt32(signer.PChain, 4);
+
+            return (errorStatus & (CertTrustIsOfflineRevocation | CertTrustRevocationStatusUnknown)) != 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// 真正调用 WinVerifyTrust 并取回签名者，收尾时释放状态。
     /// 内嵌签名和目录签名共用这段。
@@ -310,11 +385,17 @@ internal static class CertificateTrust
             ? TryReadSignerName(data.hWVTStateData)
             : string.Empty;
 
+        // 4.6：吊销状态是否“没查成”（离线 / 取不到 CRL）。同样必须在 CLOSE 之前读。
+        var revocationUnknown = ReadRevocationUnknown(data.hWVTStateData);
+
         // 无论成功失败都要 CLOSE，否则 WinVerifyTrust 的内部状态会一直累积。
         data.dwStateAction = WtdStateActionClose;
         NativeMethods.WinVerifyTrust(IntPtr.Zero, ref actionId, ref data);
 
-        return new TrustResult(result, signerName, fromCatalog);
+        return new TrustResult(result, signerName, fromCatalog)
+        {
+            RevocationUnknown = revocationUnknown,
+        };
     }
 
     /// <summary>

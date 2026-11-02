@@ -14,6 +14,9 @@ namespace WinAppGuard.Core.Diagnostics.AntiScan;
 /// </summary>
 public static class NpcapInstaller
 {
+    /// <summary>4.7：随包的 Npcap 版本（界面/安装器提示“升级到 1.90”用）。</summary>
+    public const string Version = "1.90";
+
     /// <summary>随包文件名。</summary>
     public const string FileName = "npcap-1.90.exe";
 

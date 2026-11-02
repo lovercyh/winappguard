@@ -299,8 +299,8 @@ internal static class Program
         if (NpcapLocator.GetState(out var installedNpcapVersion) == NpcapState.TooOld)
         {
             Bilingual.Say(
-                $"检测到 Npcap {installedNpcapVersion}，低于最低要求 {NpcapLocator.MinimumVersionText}，需要覆盖升级。",
-                $"Detected Npcap {installedNpcapVersion}, below the minimum {NpcapLocator.MinimumVersionText}; an in-place upgrade is required.");
+                $"检测到 Npcap {installedNpcapVersion}，低于最低要求 {NpcapLocator.MinimumVersionText}；将覆盖升级到随包的 Npcap {NpcapInstaller.Version}。",
+                $"Detected Npcap {installedNpcapVersion}, below the minimum {NpcapLocator.MinimumVersionText}; it will be upgraded to the bundled Npcap {NpcapInstaller.Version}.");
             Console.WriteLine();
         }
 
@@ -326,6 +326,7 @@ internal static class Program
 
             Console.WriteLine();
             Console.WriteLine("WinAppGuard 4.1 起把 Npcap 作为必需组件：");
+            Console.WriteLine($"  · 本次安装/升级使用随包的官方 Npcap {NpcapInstaller.Version}；");
             Console.WriteLine("  · 流量统计（按包精确计数）和反端口扫描都依赖它；");
             Console.WriteLine("  · Npcap 是官方数据包捕获驱动，本安装包不解包、不改动它；");
             Console.WriteLine("  · 程序只用它读取包头（长度 / 端口 / 标志），不读内容、不保存数据包；");
@@ -337,8 +338,8 @@ internal static class Program
             Console.WriteLine("  [ ] Support raw 802.11 traffic");
             Console.WriteLine("  [x] Restrict Npcap driver's access to Administrators only");
             Console.WriteLine();
-            Console.WriteLine("是否继续安装 Npcap？[Y/n]");
-            Console.WriteLine("Continue with the Npcap installation? [Y/n]");
+            Console.WriteLine($"是否继续安装/升级到 Npcap {NpcapInstaller.Version}？[Y/n]");
+            Console.WriteLine($"Continue with the Npcap {NpcapInstaller.Version} installation/upgrade? [Y/n]");
             Console.Write("> ");
 
             var answer = Console.ReadLine()?.Trim();

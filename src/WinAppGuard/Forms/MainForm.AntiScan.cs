@@ -88,14 +88,14 @@ public sealed partial class MainForm
         if (state == NpcapState.TooOld)
         {
             _npcapStatusLabel.Text = Localizer.F(
-                "Npcap：版本过旧（{0}，最低 {1}，点击升级）",
+                "Npcap：版本过旧（{0}，点击升级到 {1}）",
                 installedVersion ?? "?",
-                NpcapLocator.MinimumVersionText);
+                NpcapInstaller.Version);
             _npcapStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
             _npcapStatusLabel.IsLink = true;
             _npcapStatusLabel.ToolTipText = Localizer.F(
                 "当前 Npcap 版本过旧，抓包功能已停用。点击用随包官方安装程序覆盖升级到 {0}（会弹一次 UAC）。",
-                NpcapLocator.MinimumVersionText);
+                NpcapInstaller.Version);
             return;
         }
 

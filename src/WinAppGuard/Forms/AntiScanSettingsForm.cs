@@ -58,9 +58,9 @@ internal sealed class AntiScanSettingsForm : Form
                 ? Localizer.F("Npcap：已安装（{0}）", npcapVersion ?? "?")
                 : !string.IsNullOrWhiteSpace(npcapVersion)
                     ? Localizer.F(
-                        "Npcap：版本过旧（{0}，最低 {1}），抓包功能已停用，请升级。",
+                        "Npcap：版本过旧（{0}），抓包功能已停用；请升级到 {1}。",
                         npcapVersion,
-                        NpcapLocator.MinimumVersionText)
+                        NpcapInstaller.Version)
                     : Localizer.T("Npcap：未安装，反扫描不可用。安装 WinAppGuard 时可选安装 Npcap。"),
             AutoSize = true,
             // 限制最大宽度，长句按窗口宽度换行；不限制的话表格会按单行宽度撑大，

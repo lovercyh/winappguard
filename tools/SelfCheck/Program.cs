@@ -18128,6 +18128,10 @@ internal static class Program
             "System.Net.NetworkInformation.OperationalStatus",
             "System.Net.NetworkInformation.IPInterfaceProperties",
             "System.Net.NetworkInformation.IPGlobalProperties",
+            "System.Net.NetworkInformation.NetworkChange",
+            "System.Net.NetworkInformation.NetworkAddressChangedEventHandler",
+            "System.Net.NetworkInformation.NetworkAvailabilityChangedEventHandler",
+            "System.Net.NetworkInformation.NetworkAvailabilityEventArgs",
             "System.Net.NetworkInformation.IPAddressCollection",
             "System.Net.NetworkInformation.IPAddressInformation",
             "System.Net.NetworkInformation.UnicastIPAddressInformation",
@@ -18195,8 +18199,10 @@ internal static class Program
         W();
         W("    只读本机网络配置（标 ·，不发包、不建立连接）：");
         W("      System.Net.NetworkInformation.NetworkInterface / IPInterfaceProperties /");
-        W("      UnicastIPAddressInformation / GatewayIPAddressInformation / IPGlobalProperties 等");
-        W("      用途：反扫描判断入站目的地址是否本机、UDP 目标端口是否有人监听；网关/DNS 不自动封禁。");
+        W("      UnicastIPAddressInformation / GatewayIPAddressInformation / IPGlobalProperties /");
+        W("      NetworkChange（只订阅系统网络状态通知）等");
+        W("      用途：反扫描判断入站目的地址是否本机、UDP 目标端口是否有人监听、断网后重查签名；");
+        W("      网关/DNS 不自动封禁。");
         W();
         W("    已排除的纯数据类型：System.Net.IPAddress / IPEndPoint / AddressFamily /");
         W("      SocketError / SocketException（只格式化地址，不建立任何连接）");

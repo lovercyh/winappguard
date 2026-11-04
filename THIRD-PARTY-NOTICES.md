@@ -30,6 +30,6 @@ WinAppGuard 5.0 整体按 **GNU General Public License v2.0** 发布，见根目
 
 - WinAppGuard 与 OISF、Proofpoint、Emerging Threats、Npcap 的开发方没有隶属或背书关系。
 - 规则包和 Suricata 均为本地数据/程序，不会自动联网更新。
-- 卸载 WinAppGuard 默认不会卸载 Suricata（它可能被其他工具共享使用）；
-  如需移除，请在“应用和功能”中单独卸载 Suricata。
+- Suricata 解包到 `WinAppGuard\suricata`，不注册独立服务，也不创建桌面快捷方式；
+  卸载 WinAppGuard 时会随安装目录一起删除。
 - 如需再分发本安装包，请保留本文件及上述许可证文本。

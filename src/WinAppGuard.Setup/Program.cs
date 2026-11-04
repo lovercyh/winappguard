@@ -1734,82 +1734,143 @@ internal static class Program
 
     private static void EnsureSuricataInstalled(Payload payload)
     {
-        foreach (var candidate in new[]
+        var localDirectory = Path.Combine(InstallDirectory, "suricata");
+        var localExecutable = Path.Combine(localDirectory, "suricata.exe");
+
+        if (File.Exists(localExecutable))
         {
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                "Suricata", "suricata.exe"),
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                "Suricata", "suricata.exe"),
-            Path.Combine(InstallDirectory, "suricata", "suricata.exe"),
-        })
-        {
-            if (File.Exists(candidate))
-            {
-                Bilingual.Say(
-                    $"已检测到 Suricata：{candidate}",
-                    $"Suricata already installed: {candidate}");
-                return;
-            }
+            Bilingual.Say(
+                $"已检测到随 WinAppGuard 安装的 Suricata：{localExecutable}",
+                $"Bundled Suricata already present: {localExecutable}");
+            StopSuricataServiceIfPresent();
+            DisableSuricataServiceAutoStart();
+            return;
         }
 
         if (!File.Exists(payload.SuricataMsi))
         {
             Bilingual.Say(
-                "安装包未包含 Suricata；被动网络检测将不可用。",
-                "The package does not contain Suricata; passive network detection will be unavailable.");
+                "安装包未包含 Suricata；反网络攻击将不可用。",
+                "The package does not contain Suricata; anti-network attack detection will be unavailable.");
             return;
         }
 
-        Bilingual.Say(
-            "正在静默安装 Suricata（被动网络检测引擎）…",
-            "Installing Suricata (passive network detection engine) silently…");
+        var temporaryDirectory = Path.Combine(
+            Path.GetTempPath(), $"wag-suricata-{Guid.NewGuid():N}");
 
-        var startInfo = new ProcessStartInfo
+        try
         {
-            FileName = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "msiexec.exe"),
-            Arguments = $"/i \"{payload.SuricataMsi}\" /qn /norestart",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+            Directory.CreateDirectory(temporaryDirectory);
 
-        using var process = Process.Start(startInfo);
+            Bilingual.Say(
+                "正在解包 Suricata（安装到 WinAppGuard 目录，卸载时一起删除）…",
+                "Extracting Suricata into the WinAppGuard folder (removed with WinAppGuard on uninstall)…");
 
-        if (process is null || !process.WaitForExit(180_000))
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "msiexec.exe"),
+                Arguments =
+                    $"/a \"{payload.SuricataMsi}\" /qn TARGETDIR=\"{temporaryDirectory}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(startInfo);
+
+            if (process is null || !process.WaitForExit(180_000))
+            {
+                try
+                {
+                    process?.Kill(entireProcessTree: true);
+                }
+                catch (Exception)
+                {
+                    // 安装器可能已经退出。
+                }
+
+                Bilingual.Say(
+                    "Suricata 解包超时；反网络攻击暂不可用。",
+                    "Suricata extraction timed out; anti-network attack detection is unavailable.");
+                return;
+            }
+
+            if (process.ExitCode is not (0 or 3010))
+            {
+                Bilingual.Say(
+                    $"Suricata 解包返回代码 {process.ExitCode}；反网络攻击暂不可用。",
+                    $"Suricata extraction returned {process.ExitCode}; anti-network attack detection is unavailable.");
+                return;
+            }
+
+            var extracted = Directory
+                .EnumerateFiles(temporaryDirectory, "suricata.exe", SearchOption.AllDirectories)
+                .FirstOrDefault();
+
+            if (extracted is null)
+            {
+                Bilingual.Say(
+                    "Suricata 解包后未找到 suricata.exe；反网络攻击暂不可用。",
+                    "suricata.exe was not found after extraction; anti-network attack detection is unavailable.");
+                return;
+            }
+
+            var sourceDirectory = Path.GetDirectoryName(extracted)!;
+            CopyDirectory(sourceDirectory, localDirectory);
+
+            if (!File.Exists(localExecutable))
+            {
+                Bilingual.Say(
+                    "Suricata 复制到 WinAppGuard 目录失败；反网络攻击暂不可用。",
+                    "Failed to copy Suricata into the WinAppGuard folder; anti-network attack detection is unavailable.");
+                return;
+            }
+
+            StopSuricataServiceIfPresent();
+            DisableSuricataServiceAutoStart();
+
+            Bilingual.Say(
+                "Suricata 已安装到 WinAppGuard 目录。",
+                "Suricata was installed into the WinAppGuard folder.");
+        }
+        catch (Exception ex)
+        {
+            Bilingual.Say(
+                $"Suricata 解包失败（反网络攻击暂不可用）：{ex.Message}",
+                $"Suricata extraction failed (anti-network attack detection is unavailable): {ex.Message}");
+        }
+        finally
         {
             try
             {
-                process?.Kill(entireProcessTree: true);
+                if (Directory.Exists(temporaryDirectory))
+                {
+                    Directory.Delete(temporaryDirectory, recursive: true);
+                }
             }
             catch (Exception)
             {
-                // 安装器可能已经退出。
+                // 临时目录删除失败不影响安装。
             }
-
-            Bilingual.Say(
-                "Suricata 安装超时；被动网络检测暂不可用。",
-                "Suricata installation timed out; passive network detection is unavailable.");
-            return;
         }
+    }
 
-        if (process.ExitCode is not (0 or 3010))
+    private static void CopyDirectory(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
         {
-            Bilingual.Say(
-                $"Suricata 安装返回代码 {process.ExitCode}；被动网络检测暂不可用。",
-                $"Suricata installer returned {process.ExitCode}; passive network detection is unavailable.");
-            return;
+            var relative = Path.GetRelativePath(source, directory);
+            Directory.CreateDirectory(Path.Combine(target, relative));
         }
 
-        StopSuricataServiceIfPresent();
-        DisableSuricataServiceAutoStart();
-        RemoveSuricataDesktopShortcuts();
-
-        Bilingual.Say(
-            "Suricata 安装完成。",
-            "Suricata installation completed.");
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, file);
+            File.Copy(file, Path.Combine(target, relative), overwrite: true);
+        }
     }
 
     private static void RemoveSuricataDesktopShortcuts()

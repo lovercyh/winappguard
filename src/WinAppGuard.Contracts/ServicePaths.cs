@@ -73,4 +73,26 @@ public static class ServicePaths
 
     /// <summary>4.5：本机配置完整性状态文件。</summary>
     public static string ConfigStateFile => Path.Combine(ConfigDirectory, "state.json");
+
+    // ---- 5.0 网络被动检测 ----
+
+    /// <summary>%ProgramData%\WinAppGuard\network-detection</summary>
+    public static string NetworkDetectionDirectory => Path.Combine(DataDirectory, "network-detection");
+
+    public static string NetworkDetectionStateFile => Path.Combine(NetworkDetectionDirectory, "state.json");
+
+    /// <summary>Suricata 配置、规则、eve.json 的落盘目录。</summary>
+    public static string SuricataDirectory => Path.Combine(NetworkDetectionDirectory, "suricata");
+
+    public static string SuricataConfigFile => Path.Combine(SuricataDirectory, "suricata.yaml");
+
+    public static string SuricataRulesDirectory => Path.Combine(SuricataDirectory, "rules");
+
+    public static string SuricataEveFile => Path.Combine(SuricataDirectory, "eve.json");
+
+    public static string SuricataLogFile => Path.Combine(SuricataDirectory, "suricata.log");
+
+    public static string SuricataStdRulesFile => Path.Combine(SuricataRulesDirectory, "standard.rules");
+
+    public static string SuricataFullRulesFile => Path.Combine(SuricataRulesDirectory, "all.rules");
 }

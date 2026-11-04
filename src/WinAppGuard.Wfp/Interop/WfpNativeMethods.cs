@@ -148,6 +148,15 @@ internal static class WfpNativeMethods
     internal static readonly Guid LayerInboundTransportV4 = new("5926dfc8-e3cf-4426-a283-dc393f5d0f9d");
 
     /// <summary>
+    /// 5.0：FWPM_LAYER_OUTBOUND_TRANSPORT_V4，出站传输层。
+    /// 用户手动拦截时在这里丢弃后续包，能切断已建立连接。
+    /// </summary>
+    internal static readonly Guid LayerOutboundTransportV4 = new("09e61aea-d214-46e2-9b21-b26b0b2f28c8");
+
+    /// <summary>5.0：FWPM_LAYER_OUTBOUND_TRANSPORT_V6。</summary>
+    internal static readonly Guid LayerOutboundTransportV6 = new("e1735bde-013f-4655-b351-a49e15762df0");
+
+    /// <summary>
     /// 4.4：FWPM_LAYER_DATAGRAM_DATA_V6，入站数据报层（比传输层更靠近套接字）。
     /// GUID 取自 fwpmu.h（fa45fe2f-3cba-4427-87fc-57b9a4b10d00）。
     /// </summary>
@@ -164,6 +173,9 @@ internal static class WfpNativeMethods
     /// 值类型：IPv4 用 FWP_UINT32（**主机序**），IPv6 用 FWP_BYTE_ARRAY16。
     /// </summary>
     internal static readonly Guid ConditionIpRemoteAddress = new("b235ae9a-1d64-49b8-a44c-5ff3d9095045");
+
+    /// <summary>5.0：FWPM_CONDITION_IP_LOCAL_ADDRESS，用于精确到本机端点的五元组拦截。</summary>
+    internal static readonly Guid ConditionIpLocalAddress = new("d9ee00de-c1ef-4617-bfe3-ffd8f5a08957");
 
     /// <summary>FWPM_CONDITION_IP_PROTOCOL：IP 协议号（TCP=6 / UDP=17）。值类型：FWP_UINT8。</summary>
     internal static readonly Guid ConditionIpProtocol = new("3971ef2b-623e-4f9a-8cb1-6e79b806b9a7");

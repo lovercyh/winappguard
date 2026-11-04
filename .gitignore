@@ -32,3 +32,6 @@ release-notes.md
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# 本机下载的原始规则库（Sigma 等），不随仓库提交
+rules/

@@ -30,8 +30,11 @@ public static class NpcapInstaller
     /// <summary>
     /// 锁定安装选项：不做 WinPcap 兼容模式、不装 loopback / 802.11 支持、驱动只允许管理员访问。
     /// </summary>
+    // 5.0：Suricata 直接加载 wpcap.dll，必须启用 WinPcap API-compatible Mode。
+    // enforced = 选中且锁定；require_features 保证已装 Npcap 缺少该模式时也会重装。
     public const string Arguments =
-        "/winpcap_mode=disabled /loopback_support=disabled /dot11_support=disabled /admin_only=enforced";
+        "/winpcap_mode=enforced /loopback_support=disabled /dot11_support=disabled " +
+        "/admin_only=enforced /require_features=yes";
 
     /// <summary>
     /// 校验安装包：先比对固定 SHA-256，再确认 Authenticode 签名者是 Nmap Software LLC。

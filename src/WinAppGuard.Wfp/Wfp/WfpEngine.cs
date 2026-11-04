@@ -1,3 +1,4 @@
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -492,6 +493,224 @@ internal sealed class WfpEngine : IDisposable
     ///
     /// 条件：UDP + 远端地址 + 远端端口 67。挂在入站 accept 层，只影响新连接，不碰已有连接。
     /// </summary>
+    /// <summary>
+    /// 5.0：出站传输层阻断。用于用户手动拦截，不用于规则库批量预编译。
+    ///
+    /// 与 ALE_AUTH_CONNECT 不同，这一层能看到已建立连接的后续包；
+    /// 丢包后 TCP 会重传失败，达到“事后切断”的效果。
+    /// </summary>
+    internal ulong AddTransportOutboundFilter(
+        Guid filterKey,
+        string displayName,
+        string? description,
+        IPAddress remoteAddress,
+        ushort? remotePort,
+        IPAddress? localAddress,
+        ushort? localPort,
+        byte? protocol,
+        uint action,
+        ulong weight,
+        bool persistent)
+    {
+        ThrowIfDisposed();
+
+        var isV4 = remoteAddress.AddressFamily
+            == System.Net.Sockets.AddressFamily.InterNetwork;
+
+        if (localAddress is not null
+            && (localAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                != isV4)
+        {
+            throw new ArgumentException("本地地址与远端地址的 IP 版本不一致。", nameof(localAddress));
+        }
+
+        var layer = isV4
+            ? WfpNativeMethods.LayerOutboundTransportV4
+            : WfpNativeMethods.LayerOutboundTransportV6;
+
+        var conditions = new List<WfpNativeMethods.FwpmFilterCondition>();
+        var allocations = new List<IntPtr>();
+
+        try
+        {
+            if (protocol is { } protocolValue)
+            {
+                conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                {
+                    FieldKey = WfpNativeMethods.ConditionIpProtocol,
+                    MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                    ConditionValue = new WfpNativeMethods.FwpConditionValue
+                    {
+                        Type = WfpNativeMethods.FWP_UINT8,
+                        Value = (IntPtr)protocolValue,
+                    },
+                });
+            }
+
+            conditions.Add(BuildAddressCondition(
+                WfpNativeMethods.ConditionIpRemoteAddress,
+                remoteAddress,
+                allocations));
+
+            if (localAddress is not null)
+            {
+                conditions.Add(BuildAddressCondition(
+                    WfpNativeMethods.ConditionIpLocalAddress,
+                    localAddress,
+                    allocations));
+            }
+
+            if (remotePort is { } remotePortValue)
+            {
+                conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                {
+                    FieldKey = WfpNativeMethods.ConditionIpRemotePort,
+                    MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                    ConditionValue = new WfpNativeMethods.FwpConditionValue
+                    {
+                        Type = WfpNativeMethods.FWP_UINT16,
+                        Value = (IntPtr)remotePortValue,
+                    },
+                });
+            }
+
+            if (localPort is { } localPortValue)
+            {
+                conditions.Add(new WfpNativeMethods.FwpmFilterCondition
+                {
+                    FieldKey = WfpNativeMethods.ConditionIpLocalPort,
+                    MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                    ConditionValue = new WfpNativeMethods.FwpConditionValue
+                    {
+                        Type = WfpNativeMethods.FWP_UINT16,
+                        Value = (IntPtr)localPortValue,
+                    },
+                });
+            }
+
+            var namePtr = Marshal.StringToHGlobalUni(displayName);
+            var descriptionPtr = description is null
+                ? IntPtr.Zero
+                : Marshal.StringToHGlobalUni(description);
+            var weightPtr = Marshal.AllocHGlobal(sizeof(ulong));
+            var conditionSize = Marshal.SizeOf<WfpNativeMethods.FwpmFilterCondition>();
+            var conditionsPtr = Marshal.AllocHGlobal(conditionSize * conditions.Count);
+
+            try
+            {
+                Marshal.WriteInt64(weightPtr, unchecked((long)weight));
+
+                for (var i = 0; i < conditions.Count; i++)
+                {
+                    Marshal.StructureToPtr(
+                        conditions[i],
+                        IntPtr.Add(conditionsPtr, conditionSize * i),
+                        false);
+                }
+
+                var filter = new WfpNativeMethods.FwpmFilter
+                {
+                    FilterKey = filterKey,
+                    DisplayData = new WfpNativeMethods.FwpmDisplayData
+                    {
+                        Name = namePtr,
+                        Description = descriptionPtr,
+                    },
+                    Flags = persistent ? WfpNativeMethods.FWPM_FILTER_FLAG_PERSISTENT : 0,
+                    LayerKey = layer,
+                    SubLayerKey = WfpNativeMethods.OurSubLayerKey,
+                    Weight = new WfpNativeMethods.FwpValue
+                    {
+                        Type = WfpNativeMethods.FWP_UINT64,
+                        Value = weightPtr,
+                    },
+                    NumFilterConditions = (uint)conditions.Count,
+                    FilterCondition = conditionsPtr,
+                    Action = new WfpNativeMethods.FwpmAction { Type = action },
+                };
+
+                var descriptor = TryBuildProtectiveSd();
+                var rc = WfpNativeMethods.FwpmFilterAdd0(
+                    _handle, ref filter, descriptor, out var id);
+
+                if (descriptor != IntPtr.Zero)
+                {
+                    LocalFree(descriptor);
+                }
+
+                if (rc != WfpNativeMethods.ERROR_SUCCESS)
+                {
+                    LocalLog.Warning(
+                        $"[WAG-WFP-007] Failed to add the outbound transport block filter (0x{rc:X8}).");
+                    throw new WfpException("添加出站阻断过滤器失败", rc);
+                }
+
+                return id;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(conditionsPtr);
+                Marshal.FreeHGlobal(weightPtr);
+
+                if (namePtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(namePtr);
+                }
+
+                if (descriptionPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(descriptionPtr);
+                }
+            }
+        }
+        finally
+        {
+            foreach (var pointer in allocations)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+    }
+
+    private static WfpNativeMethods.FwpmFilterCondition BuildAddressCondition(
+        Guid fieldKey,
+        IPAddress address,
+        List<IntPtr> allocations)
+    {
+        var bytes = address.GetAddressBytes();
+
+        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            var value = (uint)((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
+
+            return new WfpNativeMethods.FwpmFilterCondition
+            {
+                FieldKey = fieldKey,
+                MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+                ConditionValue = new WfpNativeMethods.FwpConditionValue
+                {
+                    Type = WfpNativeMethods.FWP_UINT32,
+                    Value = (IntPtr)(long)value,
+                },
+            };
+        }
+
+        var pointer = Marshal.AllocHGlobal(16);
+        Marshal.Copy(bytes, 0, pointer, 16);
+        allocations.Add(pointer);
+
+        return new WfpNativeMethods.FwpmFilterCondition
+        {
+            FieldKey = fieldKey,
+            MatchType = WfpNativeMethods.FWP_MATCH_EQUAL,
+            ConditionValue = new WfpNativeMethods.FwpConditionValue
+            {
+                Type = WfpNativeMethods.FWP_BYTE_ARRAY16_TYPE,
+                Value = pointer,
+            },
+        };
+    }
+
     internal ulong AddDhcpInboundFilter(
         Guid filterKey,
         string displayName,

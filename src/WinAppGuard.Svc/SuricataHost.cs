@@ -1,0 +1,598 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Text;
+using WinAppGuard.Contracts;
+using WinAppGuard.Core.Diagnostics.AntiScan;
+using WinAppGuard.Core.Diagnostics.NetworkDetection;
+
+namespace WinAppGuard.Service;
+
+/// <summary>
+/// 5.0：Suricata 子进程宿主。
+///
+/// 只做三件事：
+///   1. 找到官方 Suricata；
+///   2. 生成最小可用配置并启动/停止子进程；
+///   3. 暴露版本、规则数、最后错误，供界面显示。
+///
+/// 不修改 Suricata 二进制，不注册独立服务，不碰防火墙规则。
+/// </summary>
+internal static class SuricataHost
+{
+    private static readonly object Gate = new();
+
+    private static Process? _process;
+    private static System.Threading.Timer? _monitor;
+    private static bool _enabled;
+    private static bool _stopping;
+    private static DateTime _nextRestartUtc = DateTime.MinValue;
+    private static int _restartDelaySeconds = 5;
+    private static string? _executable;
+    private static string? _installDirectory;
+    private static string? _configPath;
+    private static string? _rulesFile;
+    private static string? _lastError;
+    private static string? _version;
+    private static string _profile = "standard";
+    private static int _ruleCount;
+    private static string _validatedSignature = string.Empty;
+    private static int _generation;
+
+    internal static bool IsRunning
+    {
+        get
+        {
+            lock (Gate)
+            {
+                return _process is { HasExited: false };
+            }
+        }
+    }
+
+    internal static string? LastError
+    {
+        get { lock (Gate) { return _lastError; } }
+    }
+
+    internal static string? Version
+    {
+        get { lock (Gate) { return _version; } }
+    }
+
+    internal static int RuleCount
+    {
+        get { lock (Gate) { return _ruleCount; } }
+    }
+
+    internal static void Start(bool enabled, string ruleProfile)
+    {
+        lock (Gate)
+        {
+            _enabled = enabled;
+            _stopping = false;
+            _profile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
+                ? "full"
+                : "standard";
+            _generation++;
+
+            if (!enabled)
+            {
+                StopProcessLocked();
+                _monitor?.Dispose();
+                _monitor = null;
+                return;
+            }
+
+            if (_monitor is null)
+            {
+                _monitor = new System.Threading.Timer(
+                    _ => MonitorTick(),
+                    null,
+                    TimeSpan.FromSeconds(1),
+                    TimeSpan.FromSeconds(10));
+            }
+        }
+
+        EnsureRunning(ruleProfile);
+    }
+
+    internal static void Stop()
+    {
+        lock (Gate)
+        {
+            _enabled = false;
+            _stopping = true;
+            _generation++;
+            _monitor?.Dispose();
+            _monitor = null;
+            StopProcessLocked();
+        }
+    }
+
+    /// <summary>配置档切换后调用：重启子进程，让 Suricata 重新加载规则。</summary>
+    internal static void Reload(string ruleProfile)
+    {
+        lock (Gate)
+        {
+            _profile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
+                ? "full"
+                : "standard";
+            StopProcessLocked();
+            _nextRestartUtc = DateTime.MinValue;
+        }
+
+        if (_enabled)
+        {
+            EnsureRunning(ruleProfile);
+        }
+    }
+
+    private static void MonitorTick()
+    {
+        string profile;
+
+        lock (Gate)
+        {
+            if (!_enabled || _stopping)
+            {
+                return;
+            }
+
+            if (_process is { HasExited: false })
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow < _nextRestartUtc)
+            {
+                return;
+            }
+
+            profile = _profile;
+            _lastError = _process is null
+                ? _lastError
+                : $"Suricata 已退出（代码 {SafeExitCode(_process)}）。";
+        }
+
+        EnsureRunning(profile);
+    }
+
+    private static void EnsureRunning(string ruleProfile)
+    {
+        lock (Gate)
+        {
+            if (!_enabled || _stopping || _process is { HasExited: false })
+            {
+                return;
+            }
+
+            var generation = _generation;
+
+            try
+            {
+                if (!EnsurePreparedLocked(ruleProfile))
+                {
+                    ScheduleRestartLocked();
+                    return;
+                }
+
+                if (!ValidateConfigLocked())
+                {
+                    ScheduleRestartLocked();
+                    return;
+                }
+
+                var device = FindCaptureDevice();
+
+                if (device is null)
+                {
+                    _lastError = "找不到可用的物理网卡；请检查 Npcap 和网络连接。";
+                    ScheduleRestartLocked();
+                    return;
+                }
+
+                var classification = Path.Combine(_installDirectory!, "classification.config");
+                var reference = Path.Combine(_installDirectory!, "reference.config");
+
+                var arguments =
+                    $"-c \"{_configPath}\" " +
+                    $"-i \"{device}\" " +
+                    $"-l \"{ServicePaths.SuricataDirectory}\" " +
+                    $"-S \"{_rulesFile}\" " +
+                    $"--set \"classification-file={classification}\" " +
+                    $"--set \"reference-config-file={reference}\"";
+
+                var info = new ProcessStartInfo
+                {
+                    FileName = _executable!,
+                    Arguments = arguments,
+                    WorkingDirectory = _installDirectory!,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+
+                ApplyNpcapPath(info);
+
+                var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+                process.OutputDataReceived += (_, e) => AppendLog(e.Data);
+                process.ErrorDataReceived += (_, e) => AppendLog(e.Data);
+
+                if (!process.Start())
+                {
+                    _lastError = "无法启动 Suricata 进程。";
+                    process.Dispose();
+                    ScheduleRestartLocked();
+                    return;
+                }
+
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                _process = process;
+                _restartDelaySeconds = 5;
+                _nextRestartUtc = DateTime.MinValue;
+                _lastError = null;
+
+                ServiceLog.Info(
+                    "WAG-ND-001",
+                    $"Suricata started (pid={process.Id}, profile={ruleProfile}, rules={_ruleCount}, device={device}).");
+            }
+            catch (Exception ex)
+            {
+                _lastError = $"启动 Suricata 失败：{ex.Message}";
+                ServiceLog.Warning("WAG-ND-002", "Failed to start Suricata.", ex);
+                ScheduleRestartLocked();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 启动前先用 Suricata 自己的 -T 校验配置和规则。
+    /// 规则/配置没变时复用上次结果，避免每次重启都扫描 1 万多条规则。
+    /// </summary>
+    private static bool ValidateConfigLocked()
+    {
+        try
+        {
+            var configTime = File.GetLastWriteTimeUtc(_configPath!).Ticks;
+            var rulesTime = File.GetLastWriteTimeUtc(_rulesFile!).Ticks;
+            var signature = $"{_configPath}|{configTime}|{_rulesFile}|{rulesTime}|{_profile}";
+
+            if (string.Equals(signature, _validatedSignature, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var classification = Path.Combine(_installDirectory!, "classification.config");
+            var reference = Path.Combine(_installDirectory!, "reference.config");
+
+            var info = new ProcessStartInfo
+            {
+                FileName = _executable!,
+                Arguments =
+                    $"-T -c \"{_configPath}\" -S \"{_rulesFile}\" " +
+                    $"-l \"{ServicePaths.SuricataDirectory}\" " +
+                    $"--set \"classification-file={classification}\" " +
+                    $"--set \"reference-config-file={reference}\"",
+                WorkingDirectory = _installDirectory!,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            ApplyNpcapPath(info);
+
+            using var process = Process.Start(info);
+
+            if (process is null)
+            {
+                _lastError = "无法执行 Suricata 配置校验。";
+                return false;
+            }
+
+            var output = process.StandardOutput.ReadToEnd()
+                + process.StandardError.ReadToEnd();
+
+            if (!process.WaitForExit(60_000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (Exception)
+                {
+                    // 进程可能已经退出。
+                }
+
+                _lastError = "Suricata 配置校验超时。";
+                return false;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                var lastLine = output
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .LastOrDefault()?
+                    .Trim();
+
+                _lastError = "Suricata 配置校验失败"
+                    + (string.IsNullOrEmpty(lastLine) ? "。" : $"：{lastLine}");
+                return false;
+            }
+
+            _validatedSignature = signature;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _lastError = $"Suricata 配置校验失败：{ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool EnsurePreparedLocked(string ruleProfile)
+    {
+        if (_executable is null || !File.Exists(_executable))
+        {
+            var found = FindExecutable();
+
+            if (found is null)
+            {
+                _lastError = "未找到 suricata.exe；请安装 Suricata 或重新安装 WinAppGuard。";
+                return false;
+            }
+
+            _executable = found.Value.Executable;
+            _installDirectory = found.Value.Directory;
+            _version = found.Value.Version;
+        }
+
+        Directory.CreateDirectory(ServicePaths.SuricataDirectory);
+        Directory.CreateDirectory(ServicePaths.SuricataRulesDirectory);
+
+        var rulesFile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
+            ? ServicePaths.SuricataFullRulesFile
+            : ServicePaths.SuricataStdRulesFile;
+
+        if (!File.Exists(rulesFile))
+        {
+            // 兼容安装包没有生成标准档的情况：退到 any *.rules。
+            rulesFile = Directory
+                .EnumerateFiles(ServicePaths.SuricataRulesDirectory, "*.rules")
+                .OrderByDescending(path => new FileInfo(path).Length)
+                .FirstOrDefault() ?? string.Empty;
+        }
+
+        if (string.IsNullOrEmpty(rulesFile) || !File.Exists(rulesFile))
+        {
+            _lastError = "没有可加载的规则文件；请重新安装或导入 ET Open。";
+            return false;
+        }
+
+        _configPath = Path.Combine(_installDirectory!, "suricata.yaml");
+
+        if (!File.Exists(_configPath))
+        {
+            _lastError = $"找不到 Suricata 配置：{_configPath}；请重新安装 Suricata。";
+            return false;
+        }
+
+        _rulesFile = rulesFile;
+        _ruleCount = CountRules(rulesFile);
+
+        return true;
+    }
+
+    private static string? FindCaptureDevice()
+    {
+        string? first = null;
+
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up
+                || nic.NetworkInterfaceType is NetworkInterfaceType.Loopback
+                    or NetworkInterfaceType.Tunnel)
+            {
+                continue;
+            }
+
+            if (nic.NetworkInterfaceType is not (NetworkInterfaceType.Ethernet
+                or NetworkInterfaceType.Wireless80211
+                or NetworkInterfaceType.GigabitEthernet))
+            {
+                continue;
+            }
+
+            // Npcap 在 Windows 上使用 \Device\NPF_{GUID}。
+            var device = $@"\Device\NPF_{nic.Id}";
+            first ??= device;
+
+            var hasGateway = nic.GetIPProperties().GatewayAddresses
+                .Any(gateway => gateway.Address is not null
+                    && !gateway.Address.Equals(IPAddress.Any)
+                    && !gateway.Address.Equals(IPAddress.IPv6Any));
+
+            if (hasGateway)
+            {
+                return device;
+            }
+        }
+
+        return first;
+    }
+
+    /// <summary>
+    /// 5.0：部分 Npcap 安装把 wpcap.dll 放在 System32\Npcap 而不是 System32。
+    /// 给子进程补 PATH，避免 Suricata 因找不到 wpcap.dll 退出。
+    /// 安装器仍会优先启用 WinPcap 兼容模式，这里是兜底。
+    /// </summary>
+    private static void ApplyNpcapPath(ProcessStartInfo info)
+    {
+        var npcapDirectory = Path.Combine(Environment.SystemDirectory, "Npcap");
+
+        if (!Directory.Exists(npcapDirectory))
+        {
+            return;
+        }
+
+        var current = info.Environment.TryGetValue("PATH", out var path)
+            ? path
+            : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+        info.Environment["PATH"] = npcapDirectory + ";" + current;
+    }
+
+    private static (string Executable, string Directory, string? Version)? FindExecutable()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "suricata", "suricata.exe"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "Suricata", "suricata.exe"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "Suricata", "suricata.exe"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                var directory = Path.GetDirectoryName(candidate) ?? AppContext.BaseDirectory;
+                return (candidate, directory, ReadVersion(candidate));
+            }
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+        foreach (var part in path.Split(Path.PathSeparator))
+        {
+            try
+            {
+                var candidate = Path.Combine(part.Trim(), "suricata.exe");
+
+                if (File.Exists(candidate))
+                {
+                    var directory = Path.GetDirectoryName(candidate) ?? part;
+                    return (candidate, directory, ReadVersion(candidate));
+                }
+            }
+            catch (Exception)
+            {
+                // PATH 里的坏路径跳过。
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadVersion(string executable)
+    {
+        try
+        {
+            return FileVersionInfo.GetVersionInfo(executable).ProductVersion;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static int CountRules(string path)
+    {
+        try
+        {
+            var count = 0;
+
+            foreach (var line in File.ReadLines(path, Encoding.UTF8))
+            {
+                var trimmed = line.TrimStart();
+
+                if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                {
+                    continue;
+                }
+
+                count++;
+            }
+
+            return count;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    private static void ScheduleRestartLocked()
+    {
+        _nextRestartUtc = DateTime.UtcNow.AddSeconds(_restartDelaySeconds);
+        _restartDelaySeconds = Math.Min(_restartDelaySeconds * 2, 60);
+    }
+
+    private static void StopProcessLocked()
+    {
+        var process = _process;
+        _process = null;
+
+        if (process is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
+            }
+        }
+        catch (Exception)
+        {
+            // 进程可能已经退出。
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static int SafeExitCode(Process process)
+    {
+        try
+        {
+            return process.ExitCode;
+        }
+        catch (Exception)
+        {
+            return -1;
+        }
+    }
+
+    private static void AppendLog(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        try
+        {
+            File.AppendAllText(
+                ServicePaths.SuricataLogFile,
+                $"{DateTime.Now:O} {line}{Environment.NewLine}",
+                new UTF8Encoding(false));
+        }
+        catch (Exception)
+        {
+            // 日志写失败不影响检测进程。
+        }
+    }
+}

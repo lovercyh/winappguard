@@ -6,7 +6,7 @@
 
 简体中文 · [English](README.en.md)
 
-> 源码与许可证：[github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard)（MIT）
+> 源码与许可证：[github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard)（GPL-2.0）
 
 WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网的简易防火墙，但它和多数同类工具的入手方向相反：
 它不让你去翻程序列表，而是直接展示**当前正在联网的 TCP 连接** ——
@@ -43,11 +43,15 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
 > **4.7 要求 Npcap 1.80 或更新**：版本过旧时和“未安装”一样停用抓包功能，
 > 状态栏提示「版本过旧，点击升级」，用随包官方 1.90 安装器覆盖升级；
 > 版本读不到（便携/企业镜像）时允许使用但提示建议升级。
+> **5.0 增加被动网络检测（可选手动阻断）**：随包 Suricata + ET Open，
+> 只读 eve.json 产生告警，命中后由用户手动选择 WFP 临时阻断；
+> 不自动拦截、不新增内核驱动、HTTPS 正文不可见；安装 Npcap 时启用 WinPcap 兼容模式（Suricata 需要 wpcap.dll）。
+>
 >
 > 更早的版本（3.0 服务拆分、3.1 受保护模式、3.7 Flow IDS、4.0 反扫描、
 > 4.1 精确流量、4.2 局域网检测）见 [CHANGELOG](CHANGELOG.md)。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL-2.0](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#环境要求)
 [![Release](https://img.shields.io/github/v/release/lovercyh/winappguard)](https://github.com/lovercyh/winappguard/releases/latest)
 
@@ -525,4 +529,8 @@ WinAppGuard.exe --recover
 
 ## 许可证
 
-[MIT](LICENSE)。
+[GPL-2.0](LICENSE)。
+
+
+
+

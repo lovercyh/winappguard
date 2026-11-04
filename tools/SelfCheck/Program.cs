@@ -20,6 +20,7 @@ using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Diagnostics.Config;
 using WinAppGuard.Core.Diagnostics.Ids;
 using WinAppGuard.Core.Diagnostics.Lan;
+using WinAppGuard.Core.Diagnostics.NetworkDetection;
 using WinAppGuard.Core.Diagnostics.Traffic;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
@@ -160,6 +161,7 @@ internal static class Program
                         && !args.Contains("--traffic-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--traffic-records-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--ids-test", StringComparer.OrdinalIgnoreCase)
+                        && !args.Contains("--network-detect-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--antiscan-proto-test", StringComparer.OrdinalIgnoreCase)
                         && !args.Contains("--config-integrity-test", StringComparer.OrdinalIgnoreCase)
@@ -436,6 +438,10 @@ internal static class Program
             {
                 RunIdsTest();
             }
+            else if (args.Contains("--network-detect-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunNetworkDetectTest();
+            }
             else if (args.Contains("--antiscan-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunAntiScanTest();
@@ -559,6 +565,10 @@ internal static class Program
             else if (args.Contains("--wfp-dacl-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunWfpDaclTest();
+            }
+            else if (args.Contains("--network-block-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunNetworkBlockTest();
             }
             else if (args.Contains("--wfp-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -9018,6 +9028,60 @@ internal static class Program
     /// 为什么过滤器的目标选成本程序自己：即使某一步清理失败，
     /// 被拦的也只是这个自检工具（它本来也不联网），不会影响用户的其他程序。
     /// </summary>
+    /// <summary>
+    /// 5.0：出站传输层动态阻断的 WFP 实机测试。
+    /// 使用 TEST-NET-1（192.0.2.1），不会影响真实网络；需要管理员权限。
+    /// </summary>
+    private static void RunNetworkBlockTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var address = IPAddress.Parse("192.0.2.1");
+        var key = WfpEngine.BuildFilterKey("selftest|network-block");
+
+        W("################################################################");
+        W("#   5.0 网络手动阻断：出站传输层动态过滤器                     #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            using var engine = WfpEngine.Open(dynamicSession: true);
+            engine.EnsureSublayer(persistent: false);
+
+            engine.TryDeleteFilter(key);
+            engine.AddTransportOutboundFilter(
+                key,
+                "WinAppGuard SelfCheck network block",
+                "AppGuard|1|SelfCheckNetworkBlock|192.0.2.1",
+                address,
+                remotePort: 443,
+                localAddress: null,
+                localPort: null,
+                protocol: 6,
+                WfpNativeMethods.FWP_ACTION_BLOCK,
+                WfpRuleStore.WeightBlock,
+                persistent: false);
+
+            var created = engine.ListOurFilters()
+                .Any(filter => filter.Key == key);
+
+            CheckAssertion(results, "出站传输层过滤器已创建", created);
+
+            var removed = engine.TryDeleteFilter(key);
+
+            CheckAssertion(results, "出站传输层过滤器已删除", removed);
+            CheckAssertion(results, "过滤器列表不再包含自检过滤器",
+                !engine.ListOurFilters().Any(filter => filter.Key == key));
+        }
+        catch (Exception ex)
+        {
+            W($"    WFP 自检失败：{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "出站传输层过滤器测试未抛异常", false);
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunWfpTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -15303,6 +15367,153 @@ internal static class Program
             && back.Ipv6DhcpServers is { Count: 1 }
             && back.Ipv6Neighbors is { Count: 1 }
             && back.Ipv6SecurityEvents is { Count: 1 });
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 5.0：网络被动检测的 eve.json 解析、告警模型和状态文件测试。
+    /// 不启动 Suricata、不创建 WFP 过滤器，适合 CI/普通权限。
+    /// </summary>
+    private static void RunNetworkDetectTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+
+        W("################################################################");
+        W("#   5.0 网络被动检测：eve.json 解析 / 告警模型 / 状态文件         #");
+        W("################################################################");
+        W();
+
+        CheckAssertion(results, "网络检测查询命令正确",
+            ServiceProtocol.Commands.QueryNetworkDetection == "query.network-detection");
+        CheckAssertion(results, "网络检测写命令使用 write 前缀",
+            ServiceProtocol.Commands.NetworkDetectionConfigure.StartsWith("write.", StringComparison.Ordinal)
+            && ServiceProtocol.Commands.NetworkDetectionBlock.StartsWith("write.", StringComparison.Ordinal)
+            && ServiceProtocol.Commands.NetworkDetectionReleaseAll.StartsWith("write.", StringComparison.Ordinal));
+
+        const string httpLine =
+            "{\"timestamp\":\"2026-11-04T12:00:00.000000+0000\",\"flow_id\":123," +
+            "\"event_type\":\"alert\",\"src_ip\":\"192.168.1.10\",\"src_port\":50000," +
+            "\"dest_ip\":\"203.0.113.10\",\"dest_port\":80,\"proto\":\"TCP\",\"app_proto\":\"http\"," +
+            "\"alert\":{\"signature_id\":2024001,\"signature\":\"ET TEST HTTP\",\"category\":" +
+            "\"trojan-activity\",\"severity\":1},\"http\":{\"hostname\":\"evil.example\"," +
+            "\"url\":\"/gate.php\",\"http_method\":\"GET\",\"http_user_agent\":\"selftest\"}}";
+
+        var http = EveAlertReader.Parse(httpLine);
+
+        CheckAssertion(results, "HTTP alert 能解析",
+            http is not null);
+        CheckAssertion(results, "HTTP alert 字段正确",
+            http is { SignatureId: 2024001, Signature: "ET TEST HTTP", Severity: "high" }
+            && http.LocalAddress == "192.168.1.10"
+            && http.LocalPort == 50000
+            && http.RemoteAddress == "203.0.113.10"
+            && http.RemotePort == 80
+            && http.AppProto == "http");
+        CheckAssertion(results, "HTTP 证据包含 Host/URI/UA",
+            http is not null
+            && http.Evidence.Contains("evil.example/gate.php", StringComparison.Ordinal)
+            && http.Evidence.Contains("selftest", StringComparison.Ordinal));
+
+        const string dnsLine =
+            "{\"timestamp\":\"2026-11-04T12:01:00.000000+0000\",\"flow_id\":124," +
+            "\"event_type\":\"alert\",\"src_ip\":\"192.168.1.10\",\"src_port\":5353," +
+            "\"dest_ip\":\"192.168.1.1\",\"dest_port\":53,\"proto\":\"UDP\",\"app_proto\":\"dns\"," +
+            "\"alert\":{\"signature_id\":2024002,\"signature\":\"ET TEST DNS\",\"category\":" +
+            "\"domain-c2\",\"severity\":2},\"dns\":{\"query\":[\"evil.example\"]}}";
+
+        var dns = EveAlertReader.Parse(dnsLine);
+
+        CheckAssertion(results, "DNS alert 能解析并生成证据",
+            dns is { SignatureId: 2024002, Severity: "medium" }
+            && dns.Evidence.Contains("evil.example", StringComparison.Ordinal));
+
+        const string dns8Line =
+            "{\"timestamp\":\"2026-11-04T12:01:30.000000+0000\",\"flow_id\":126," +
+            "\"event_type\":\"alert\",\"src_ip\":\"192.168.1.10\",\"src_port\":5354," +
+            "\"dest_ip\":\"192.168.1.1\",\"dest_port\":53,\"proto\":\"UDP\",\"app_proto\":\"dns\"," +
+            "\"alert\":{\"signature_id\":2024004,\"signature\":\"ET TEST DNS8\",\"category\":" +
+            "\"domain-c2\",\"severity\":1},\"dns\":{\"queries\":[{\"rrname\":\"c2.example\"}]}}";
+
+        var dns8 = EveAlertReader.Parse(dns8Line);
+
+        CheckAssertion(results, "Suricata 8 DNS queries[].rrname 能生成证据",
+            dns8 is not null
+            && dns8.Evidence.Contains("c2.example", StringComparison.Ordinal));
+
+        const string tlsLine =
+            "{\"timestamp\":\"2026-11-04T12:02:00.000000+0000\",\"flow_id\":125," +
+            "\"event_type\":\"alert\",\"src_ip\":\"192.168.1.10\",\"src_port\":50001," +
+            "\"dest_ip\":\"203.0.113.11\",\"dest_port\":443,\"proto\":\"TCP\",\"app_proto\":\"tls\"," +
+            "\"alert\":{\"signature_id\":2024003,\"signature\":\"ET TEST TLS\",\"category\":" +
+            "\"command-and-control\",\"severity\":1},\"tls\":{\"sni\":\"c2.example\"}}";
+
+        var tls = EveAlertReader.Parse(tlsLine);
+
+        CheckAssertion(results, "TLS alert 能解析 SNI",
+            tls is { SignatureId: 2024003 }
+            && tls.Evidence.Contains("c2.example", StringComparison.Ordinal));
+
+        var nonAlert = EveAlertReader.Parse(
+            "{\"timestamp\":\"2026-11-04T12:03:00.000000+0000\",\"event_type\":\"stats\"}");
+
+        CheckAssertion(results, "非 alert 事件被忽略", nonAlert is null);
+
+        var unresolved = FlowProcessResolver.Resolve("TCP", "127.0.0.1", 0, "127.0.0.1", 0);
+        CheckAssertion(results, "五元组反查在无匹配时安全返回未知进程",
+            unresolved.Pid == 0 && string.IsNullOrEmpty(unresolved.Name));
+
+        var malformedRejected = false;
+
+        try
+        {
+            _ = EveAlertReader.Parse("{not-json");
+        }
+        catch (JsonException)
+        {
+            malformedRejected = true;
+        }
+
+        CheckAssertion(results, "损坏 JSON 抛出 JsonException", malformedRejected);
+
+        var statePath = Path.Combine(
+            Path.GetTempPath(),
+            $"wag-nd-selftest-{Guid.NewGuid():N}.json");
+        var state = new NetworkDetectionState
+        {
+            Settings = new NetworkDetectionSettings
+            {
+                Enabled = false,
+                RuleProfile = "full",
+                Notify = false,
+                RetentionDays = 7,
+            },
+        };
+        state.AlertStatuses["alert-1"] = "ack";
+
+        try
+        {
+            NetworkDetectionStateFile.Save(statePath, state);
+            var loaded = NetworkDetectionStateFile.Load(statePath);
+
+            CheckAssertion(results, "网络检测状态文件往返正确",
+                !loaded.Settings.Enabled
+                && loaded.Settings.RuleProfile == "full"
+                && loaded.Settings.RetentionDays == 7
+                && loaded.AlertStatuses.TryGetValue("alert-1", out var status)
+                && status == "ack");
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(statePath);
+            }
+            catch (Exception)
+            {
+                // 临时文件清理失败不影响结果。
+            }
+        }
 
         PrintSummary(results, showFirewallResidue: false);
     }

@@ -195,6 +195,7 @@ internal static class Program
         Directory.CreateDirectory(InstallDirectory);
 
         CopyPayload(payload);
+        InstallSuricataAssets(payload);
         Bilingual.Say($"已复制到：{InstallDirectory}", $"Copied to: {InstallDirectory}");
 
         // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
@@ -286,17 +287,29 @@ internal static class Program
             return 0;
         }
 
-        if (NpcapLocator.IsAvailable)
+        var npcapState = NpcapLocator.GetState(out var installedNpcapVersion);
+
+        if (npcapState is NpcapState.Ok or NpcapState.Unknown
+            && NpcapLocator.HasWinPcapCompatibility)
         {
             Bilingual.Say(
-                $"检测到 Npcap {NpcapLocator.GetVersion()}，跳过安装。",
-                $"Npcap {NpcapLocator.GetVersion()} is already installed; skipping.");
+                $"检测到 Npcap {NpcapLocator.GetVersion()}（已启用 WinPcap 兼容模式），跳过安装。",
+                $"Npcap {NpcapLocator.GetVersion()} is already installed with WinPcap compatibility; skipping.");
             return 0;
+        }
+
+        if (npcapState is NpcapState.Ok or NpcapState.Unknown
+            && !NpcapLocator.HasWinPcapCompatibility)
+        {
+            Bilingual.Say(
+                $"检测到 Npcap {installedNpcapVersion}，但未启用 WinPcap 兼容模式；Suricata 需要 System32\\wpcap.dll，将重新运行安装器启用该模式。",
+                $"Npcap {installedNpcapVersion} is installed without WinPcap compatibility; Suricata needs System32\\wpcap.dll, so the installer will be run again.");
+            Console.WriteLine();
         }
 
         // 4.7：旧版本和“没装”都会走到安装流程，但必须把原因说清楚，
         // 否则用户会以为安装器没识别到已安装的 Npcap。
-        if (NpcapLocator.GetState(out var installedNpcapVersion) == NpcapState.TooOld)
+        if (npcapState == NpcapState.TooOld)
         {
             Bilingual.Say(
                 $"检测到 Npcap {installedNpcapVersion}，低于最低要求 {NpcapLocator.MinimumVersionText}；将覆盖升级到随包的 Npcap {NpcapInstaller.Version}。",
@@ -333,7 +346,9 @@ internal static class Program
             Console.WriteLine("  · 如果不同意安装，安装会退出，**不会修改任何系统设置**。");
             Console.WriteLine();
             Console.WriteLine("安装 Npcap 时会打开官方安装窗口，请保持以下选项：");
-            Console.WriteLine("  [ ] Install Npcap in WinPcap API-compatible Mode");
+            Console.WriteLine("  [x] Install Npcap in WinPcap API-compatible Mode");
+            Console.WriteLine("      （Suricata 需要 System32 下的 wpcap.dll；该模式会替换已有 WinPcap）");
+            Console.WriteLine("      Suricata needs wpcap.dll in System32; this mode replaces any WinPcap install.");
             Console.WriteLine("  [ ] Support loopback traffic");
             Console.WriteLine("  [ ] Support raw 802.11 traffic");
             Console.WriteLine("  [x] Restrict Npcap driver's access to Administrators only");
@@ -432,8 +447,16 @@ internal static class Program
         if (!NpcapLocator.IsAvailable)
         {
             Bilingual.Fail(
-                $"{NpcapLocator.GetUnavailableReason()}安装中止。",
+                $"{NpcapLocator.GetUnavailableReason()}；安装中止。",
                 "Npcap is still unavailable after the installer finished; installation aborted.");
+            return 9;
+        }
+
+        if (!NpcapLocator.HasWinPcapCompatibility)
+        {
+            Bilingual.Fail(
+                "Npcap 仍未启用 WinPcap 兼容模式，Suricata 无法加载 wpcap.dll；安装中止。",
+                "Npcap still lacks WinPcap compatibility, so Suricata cannot load wpcap.dll; installation aborted.");
             return 9;
         }
 
@@ -486,6 +509,7 @@ internal static class Program
 
         Directory.CreateDirectory(InstallDirectory);
         CopyPayload(payload);
+        InstallSuricataAssets(payload);
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
@@ -1657,6 +1681,214 @@ internal static class Program
         return new Payload(source, temporary: false);
     }
 
+    /// <summary>
+    /// 5.0：部署 Suricata + ET Open。
+    ///
+    /// 规则放在 ProgramData，Suricata 本体用官方 MSI 安装；安装失败只禁用
+    /// 被动检测，不影响防火墙主功能。
+    /// </summary>
+    private static void InstallSuricataAssets(Payload payload)
+    {
+        try
+        {
+            Directory.CreateDirectory(ServicePaths.SuricataDirectory);
+            Directory.CreateDirectory(ServicePaths.SuricataRulesDirectory);
+
+            CopyIfDifferent(payload.EtStandardRules, ServicePaths.SuricataStdRulesFile);
+            CopyIfDifferent(payload.EtAllRules, ServicePaths.SuricataFullRulesFile);
+            CopyIfDifferent(
+                payload.EtRulesZip,
+                Path.Combine(ServicePaths.SuricataDirectory, "emerging.rules.zip"));
+            CopyIfDifferent(
+                payload.EtLicense,
+                Path.Combine(ServicePaths.SuricataDirectory, "ET-LICENSE"));
+            CopyIfDifferent(
+                payload.EtBsdLicense,
+                Path.Combine(ServicePaths.SuricataDirectory, "ET-BSD-License.txt"));
+            CopyIfDifferent(
+                payload.EtGplLicense,
+                Path.Combine(ServicePaths.SuricataDirectory, "ET-GPL-2.0.txt"));
+            CopyIfDifferent(
+                payload.EtClassification,
+                Path.Combine(ServicePaths.SuricataDirectory, "ET-classification.config"));
+            CopyIfDifferent(
+                payload.GplLicense,
+                Path.Combine(InstallDirectory, "GPL-2.0.txt"));
+            CopyIfDifferent(
+                payload.SuricataSourceOffer,
+                Path.Combine(InstallDirectory, "SURICATA-SOURCE-OFFER.txt"));
+            CopyIfDifferent(
+                payload.ThirdPartyNotices,
+                Path.Combine(InstallDirectory, "THIRD-PARTY-NOTICES.md"));
+
+            EnsureSuricataInstalled(payload);
+            RemoveSuricataDesktopShortcuts();
+        }
+        catch (Exception ex)
+        {
+            Bilingual.Say(
+                $"网络检测组件部署失败（防火墙仍可用）：{ex.Message}",
+                $"Network detection setup failed (the firewall still works): {ex.Message}");
+        }
+    }
+
+    private static void EnsureSuricataInstalled(Payload payload)
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "Suricata", "suricata.exe"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "Suricata", "suricata.exe"),
+            Path.Combine(InstallDirectory, "suricata", "suricata.exe"),
+        })
+        {
+            if (File.Exists(candidate))
+            {
+                Bilingual.Say(
+                    $"已检测到 Suricata：{candidate}",
+                    $"Suricata already installed: {candidate}");
+                return;
+            }
+        }
+
+        if (!File.Exists(payload.SuricataMsi))
+        {
+            Bilingual.Say(
+                "安装包未包含 Suricata；被动网络检测将不可用。",
+                "The package does not contain Suricata; passive network detection will be unavailable.");
+            return;
+        }
+
+        Bilingual.Say(
+            "正在静默安装 Suricata（被动网络检测引擎）…",
+            "Installing Suricata (passive network detection engine) silently…");
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "msiexec.exe"),
+            Arguments = $"/i \"{payload.SuricataMsi}\" /qn /norestart",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        using var process = Process.Start(startInfo);
+
+        if (process is null || !process.WaitForExit(180_000))
+        {
+            try
+            {
+                process?.Kill(entireProcessTree: true);
+            }
+            catch (Exception)
+            {
+                // 安装器可能已经退出。
+            }
+
+            Bilingual.Say(
+                "Suricata 安装超时；被动网络检测暂不可用。",
+                "Suricata installation timed out; passive network detection is unavailable.");
+            return;
+        }
+
+        if (process.ExitCode is not (0 or 3010))
+        {
+            Bilingual.Say(
+                $"Suricata 安装返回代码 {process.ExitCode}；被动网络检测暂不可用。",
+                $"Suricata installer returned {process.ExitCode}; passive network detection is unavailable.");
+            return;
+        }
+
+        StopSuricataServiceIfPresent();
+        DisableSuricataServiceAutoStart();
+        RemoveSuricataDesktopShortcuts();
+
+        Bilingual.Say(
+            "Suricata 安装完成。",
+            "Suricata installation completed.");
+    }
+
+    private static void RemoveSuricataDesktopShortcuts()
+    {
+        foreach (var folder in new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+        })
+        {
+            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (var shortcut in Directory.EnumerateFiles(folder, "*.lnk"))
+                {
+                    var name = Path.GetFileNameWithoutExtension(shortcut);
+
+                    if (name.Contains("Suricata", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(shortcut);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // 桌面快捷方式删不掉不影响检测功能。
+            }
+        }
+    }
+
+    private static void DisableSuricataServiceAutoStart()
+    {
+        try
+        {
+            if (!ServiceControl.IsInstalled("Suricata"))
+            {
+                return;
+            }
+
+            // 5.0 由 WinAppGuardSvc 启动子进程；MSI 自带服务改为手动，避免抢占接口。
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "sc.exe"),
+                Arguments = "config Suricata start= demand",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(startInfo);
+            process?.WaitForExit(10_000);
+        }
+        catch (Exception)
+        {
+            // 服务不存在或没有权限时忽略。
+        }
+    }
+
+    private static void StopSuricataServiceIfPresent()
+    {
+        try
+        {
+            if (ServiceControl.IsInstalled("Suricata"))
+            {
+                // 5.0 由 WinAppGuardSvc 管理子进程，避免 MSI 自带服务抢占接口。
+                ServiceControl.Stop("Suricata");
+            }
+        }
+        catch (Exception)
+        {
+            // 服务不存在或没有权限时忽略；被动检测会显示最后错误。
+        }
+    }
+
     private static void CopyPayload(Payload payload)
     {
         File.Copy(payload.Ui, Path.Combine(InstallDirectory, UiExeName), overwrite: true);
@@ -1728,6 +1960,39 @@ internal static class Program
 
         internal string NpcapLicenseFile => Path.Combine(DirectoryPath, NpcapInstaller.LicenseFileName);
 
+        internal string SuricataMsi => Path.Combine(
+            DirectoryPath, EmbeddedPayload.SuricataMsiName);
+
+        internal string EtRulesZip => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtRulesZipName);
+
+        internal string EtStandardRules => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtStandardRulesName);
+
+        internal string EtAllRules => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtAllRulesName);
+
+        internal string EtLicense => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtLicenseName);
+
+        internal string EtBsdLicense => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtBsdLicenseName);
+
+        internal string EtGplLicense => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtGplLicenseName);
+
+        internal string EtClassification => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtClassificationName);
+
+        internal string SuricataSourceOffer => Path.Combine(
+            DirectoryPath, EmbeddedPayload.SuricataSourceOfferName);
+
+        internal string GplLicense => Path.Combine(
+            DirectoryPath, EmbeddedPayload.GplLicenseName);
+
+        internal string ThirdPartyNotices => Path.Combine(
+            DirectoryPath, EmbeddedPayload.ThirdPartyNoticesName);
+
         public void Dispose()
         {
             if (!IsTemporary)
@@ -1746,3 +2011,4 @@ internal static class Program
         }
     }
 }
+

@@ -26,6 +26,19 @@ internal static class EmbeddedPayload
     internal const string NpcapInstallerName = NpcapInstaller.FileName;
     internal const string NpcapLicenseName = NpcapInstaller.LicenseFileName;
 
+    // 5.0：随包 Suricata + ET Open。全部放在 payload 根目录，安装时再分目录。
+    internal const string SuricataMsiName = "Suricata-8.0.7-1-64bit.msi";
+    internal const string EtRulesZipName = "emerging.rules.zip";
+    internal const string EtStandardRulesName = "standard.rules";
+    internal const string EtAllRulesName = "all.rules";
+    internal const string EtLicenseName = "ET-LICENSE";
+    internal const string EtBsdLicenseName = "ET-BSD-License.txt";
+    internal const string EtGplLicenseName = "ET-GPL-2.0.txt";
+    internal const string EtClassificationName = "ET-classification.config";
+    internal const string SuricataSourceOfferName = "SURICATA-SOURCE-OFFER.txt";
+    internal const string GplLicenseName = "GPL-2.0.txt";
+    internal const string ThirdPartyNoticesName = "THIRD-PARTY-NOTICES.md";
+
     /// <summary>
     /// 提取载荷。没有载荷返回 null。
     /// </summary>
@@ -81,7 +94,11 @@ internal static class EmbeddedPayload
                 var name = Path.GetFileName(entry.FullName);
 
                 if (name is not (UiExeName or ServiceExeName or SetupExeName
-                    or NpcapInstallerName or NpcapLicenseName))
+                    or NpcapInstallerName or NpcapLicenseName
+                    or SuricataMsiName or EtRulesZipName or EtStandardRulesName
+                    or EtAllRulesName or EtLicenseName or EtBsdLicenseName
+                    or EtGplLicenseName or EtClassificationName
+                    or SuricataSourceOfferName or GplLicenseName or ThirdPartyNoticesName))
                 {
                     continue;
                 }
@@ -109,3 +126,4 @@ internal static class EmbeddedPayload
         }
     }
 }
+

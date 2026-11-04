@@ -6,7 +6,7 @@
 
 [简体中文](README.md) · English
 
-> Source & license: [github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard) (MIT)
+> Source & license: [github.com/lovercyh/winappguard](https://github.com/lovercyh/winappguard) (GPL-2.0)
 
 WinAppGuard is a simple firewall with anti-network-attack capabilities that also controls
 which programs can go online. It starts from the opposite end of most tools in its class:
@@ -51,7 +51,7 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > Older versions (3.0 service split, 3.1 protected mode, 3.7 Flow IDS, 4.0 anti-scan,
 > 4.1 precise traffic, 4.2 LAN detection) are listed in [CHANGELOG](CHANGELOG.md).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL-2.0](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-lightgrey.svg)](#requirements)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4.svg)](#build-from-source)
 [![Release](https://img.shields.io/github/v/release/lovercyh/winappguard)](https://github.com/lovercyh/winappguard/releases/latest)
@@ -569,4 +569,5 @@ that would have caught the bug.
 
 ## License
 
-[MIT](LICENSE).
+[GPL-2.0](LICENSE).
+

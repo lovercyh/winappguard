@@ -80,6 +80,9 @@ $payloadDir = Join-Path $root 'build\_payload'
 $payloadZip = Join-Path $root 'build\_payload.zip'
 $npcapInstaller = Join-Path $root 'third_party\npcap\npcap-1.90.exe'
 $npcapLicense = Join-Path $root 'third_party\npcap\LICENSE.txt'
+$suricataMsi = Join-Path $root 'third_party\suricata\Suricata-8.0.7-1-64bit.msi'
+$suricataOffer = Join-Path $root 'third_party\suricata\SOURCE-OFFER.md'
+$etDir = Join-Path $root 'third_party\et-open'
 
 if (-not (Test-Path $npcapInstaller)) {
     throw "缺少 Npcap 官方安装包：$npcapInstaller"
@@ -100,6 +103,35 @@ Copy-Item (Join-Path $distDir 'WinAppGuardSvc.exe')  $payloadDir
 Copy-Item (Join-Path $distDir 'WinAppGuardSetup.exe') $payloadDir
 Copy-Item $npcapInstaller (Join-Path $payloadDir 'npcap-1.90.exe')
 Copy-Item $npcapLicense (Join-Path $payloadDir 'Npcap-LICENSE.txt')
+
+# 5.0：Suricata + ET Open（默认捆绑，GPL-2.0 / BSD-3 / GPLv2 混合，见 notices）
+foreach ($required in @(
+    $suricataMsi,
+    $suricataOffer,
+    (Join-Path $etDir 'emerging.rules.zip'),
+    (Join-Path $etDir 'standard.rules'),
+    (Join-Path $etDir 'all.rules'),
+    (Join-Path $etDir 'LICENSE'),
+    (Join-Path $etDir 'BSD-License.txt'),
+    (Join-Path $etDir 'gpl-2.0.txt'),
+    (Join-Path $etDir 'classification.config')
+)) {
+    if (-not (Test-Path $required)) {
+        throw "5.0 缺少随包文件：$required"
+    }
+}
+
+Copy-Item $suricataMsi (Join-Path $payloadDir 'Suricata-8.0.7-1-64bit.msi')
+Copy-Item $suricataOffer (Join-Path $payloadDir 'SURICATA-SOURCE-OFFER.txt')
+Copy-Item (Join-Path $etDir 'emerging.rules.zip') (Join-Path $payloadDir 'emerging.rules.zip')
+Copy-Item (Join-Path $etDir 'standard.rules') (Join-Path $payloadDir 'standard.rules')
+Copy-Item (Join-Path $etDir 'all.rules') (Join-Path $payloadDir 'all.rules')
+Copy-Item (Join-Path $etDir 'LICENSE') (Join-Path $payloadDir 'ET-LICENSE')
+Copy-Item (Join-Path $etDir 'BSD-License.txt') (Join-Path $payloadDir 'ET-BSD-License.txt')
+Copy-Item (Join-Path $etDir 'gpl-2.0.txt') (Join-Path $payloadDir 'ET-GPL-2.0.txt')
+Copy-Item (Join-Path $etDir 'classification.config') (Join-Path $payloadDir 'ET-classification.config')
+Copy-Item (Join-Path $etDir 'gpl-2.0.txt') (Join-Path $payloadDir 'GPL-2.0.txt')
+Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.md') (Join-Path $payloadDir 'THIRD-PARTY-NOTICES.md')
 
 if (Test-Path $payloadZip) { Remove-Item $payloadZip -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -154,6 +186,7 @@ foreach ($name in @('3.4-验收脚本.ps1', '3.5-验收脚本.ps1', '3.6-验收�
 
     if (Test-Path $acceptanceScript) {
         Copy-Item $acceptanceScript $distTools -Force
+Copy-Item (Join-Path $root "docs\5.0-验收脚本.ps1") $distTools -Force
     }
 }
 
@@ -165,3 +198,5 @@ Write-Host "           dist\WinAppGuardUninstall.exe  （卸载器，双击完�
 Write-Host "           dist-tools\  （已同步：4 个 exe + WinAppGuard.SelfCheck.exe + 验收脚本）"
 Write-Host '    安装：管理员运行 dist\WinAppGuardSetup.exe --install'
 Write-Host '    界面以普通权限运行；修改规则时才弹一次 UAC。'
+
+

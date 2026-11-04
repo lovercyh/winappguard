@@ -160,6 +160,9 @@ internal sealed class ControlServer : IDisposable
         // 4.5：本机配置完整性（只读文件/注册表，不依赖 Npcap）。
         ConfigHost.Start();
 
+        // 5.0：网络被动检测（Suricata + ET Open），只告警，不自动拦截。
+        NetworkDetectionHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -199,6 +202,9 @@ internal sealed class ControlServer : IDisposable
         LanHost.Stop();
 
         ConfigHost.Stop();
+
+        // 5.0：先停检测，再停抓包/网络宿主。
+        NetworkDetectionHost.Stop();
 
         TrafficCaptureHost.Stop();
 
@@ -546,6 +552,21 @@ internal sealed class ControlServer : IDisposable
             },
 
             // 3.7：IDS 只读查询；写命令（write.ids.*）已由上面的提权检查统一拦截。
+            // 5.0：网络被动检测；写命令统一走 write.* 的授权检查。
+            ServiceProtocol.Commands.QueryNetworkDetection => NetworkDetectionHost.Query(request),
+
+            ServiceProtocol.Commands.NetworkDetectionConfigure => NetworkDetectionHost.Configure(request),
+
+            ServiceProtocol.Commands.NetworkDetectionAck => NetworkDetectionHost.Ack(request),
+
+            ServiceProtocol.Commands.NetworkDetectionClear => NetworkDetectionHost.Clear(request),
+
+            ServiceProtocol.Commands.NetworkDetectionBlock => NetworkDetectionHost.Block(request),
+
+            ServiceProtocol.Commands.NetworkDetectionRelease => NetworkDetectionHost.Release(request),
+
+            ServiceProtocol.Commands.NetworkDetectionReleaseAll => NetworkDetectionHost.Release(request),
+
             ServiceProtocol.Commands.QueryIdsAlerts => IdsHost.QueryAlerts(request),
 
             ServiceProtocol.Commands.IdsConfigure => IdsHost.Configure(request),

@@ -70,6 +70,37 @@ public static class NpcapLocator
     /// <summary>已安装但版本过旧。</summary>
     public static bool IsTooOld => GetState(out _) == NpcapState.TooOld;
 
+    /// <summary>
+    /// 5.0：Npcap 是否为 WinPcap API-compatible Mode。
+    /// Suricata 直接加载 System32\wpcap.dll；只有兼容模式才会放那个文件。
+    /// </summary>
+    public static bool HasWinPcapCompatibility
+    {
+        get
+        {
+            try
+            {
+                var systemWpcap = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    "System32", "wpcap.dll");
+
+                if (File.Exists(systemWpcap))
+                {
+                    return true;
+                }
+
+                using var key = Registry.LocalMachine.OpenSubKey(
+                    @"SYSTEM\CurrentControlSet\Services\Npcap\Parameters");
+
+                return key?.GetValue("WinPcapCompatible") is int value && value != 0;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+    }
+
     /// <summary>给日志/状态行用的原因说明。</summary>
     public static string GetUnavailableReason()
     {

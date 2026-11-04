@@ -124,6 +124,29 @@ public static class ServiceProtocol
         // ---- 3.7：用户态 Flow IDS（只检测、不阻断）----
 
         /// <summary>3.7：读取最近的 IDS 告警（只读）。</summary>
+        // ---- 5.0 网络被动检测（Suricata / ET Open） ----
+
+        /// <summary>5.0：读取网络检测告警、状态、配置、活动拦截（只读）。</summary>
+        public const string QueryNetworkDetection = "query.network-detection";
+
+        /// <summary>5.0：修改网络检测开关、证据保留。</summary>
+        public const string NetworkDetectionConfigure = "write.network-detection.configure";
+
+        /// <summary>5.0：确认一条网络检测告警。</summary>
+        public const string NetworkDetectionAck = "write.network-detection.ack";
+
+        /// <summary>5.0：清空网络检测告警。</summary>
+        public const string NetworkDetectionClear = "write.network-detection.clear";
+
+        /// <summary>5.0：用户手动拦截，WFP 动态过滤器执行。</summary>
+        public const string NetworkDetectionBlock = "write.network-detection.block";
+
+        /// <summary>5.0：释放一个手动拦截。</summary>
+        public const string NetworkDetectionRelease = "write.network-detection.release";
+
+        /// <summary>5.0：释放全部手动拦截。</summary>
+        public const string NetworkDetectionReleaseAll = "write.network-detection.release-all";
+
         public const string QueryIdsAlerts = "query.ids.alerts";
 
         /// <summary>3.7：修改 IDS 开关、规则、敏感度和保留期（写，需提权）。</summary>

@@ -147,6 +147,29 @@ public sealed class ServiceRequest
 
     /// <summary>4.5：true = 阻断，false = 解除。</summary>
     public bool NameBlockEnabled { get; set; }
+
+    // ---- 5.0 网络被动检测 ----
+
+    /// <summary>网络检测配置；null = 不修改。</summary>
+    public NetworkDetectionSettingsDto? NetworkDetectionSettings { get; set; }
+
+    /// <summary>要确认的告警 id。</summary>
+    public string? NetworkAlertId { get; set; }
+
+    /// <summary>手动拦截范围：connection / ip-port / ip / process。</summary>
+    public string? NetworkBlockKind { get; set; }
+
+    /// <summary>手动拦截目标：五元组、IP、IP:端口或程序路径。</summary>
+    public string? NetworkBlockTarget { get; set; }
+
+    /// <summary>拦截时长（分钟），服务端限制 1–60。</summary>
+    public int NetworkBlockMinutes { get; set; } = 10;
+
+    /// <summary>要释放的拦截 id；空且 ReleaseAll 时为全部。</summary>
+    public string? NetworkBlockId { get; set; }
+
+    /// <summary>true = 释放全部手动拦截。</summary>
+    public bool NetworkBlockReleaseAll { get; set; }
 }
 
 /// <summary>一条 IPC 响应。</summary>
@@ -222,6 +245,16 @@ public sealed class ServiceResponse
 
     /// <summary>IDS 运行状态。</summary>
     public IdsStatusDto? IdsStatus { get; set; }
+
+    // ---- 5.0 网络被动检测 ----
+
+    public List<NetworkAlertDto>? NetworkAlerts { get; set; }
+
+    public NetworkDetectionStatusDto? NetworkDetectionStatus { get; set; }
+
+    public NetworkDetectionSettingsDto? NetworkDetectionSettings { get; set; }
+
+    public List<NetworkBlockDto>? NetworkBlocks { get; set; }
 
     // ---- 4.0：反扫描 ----
 
@@ -411,6 +444,117 @@ public sealed class IdsStatusDto
     public DateTime? LastAlertUtc { get; set; }
 
     public int SuppressionCount { get; set; }
+}
+
+/// <summary>5.0：网络被动检测配置。</summary>
+public sealed class NetworkDetectionSettingsDto
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>standard / full。</summary>
+    public string RuleProfile { get; set; } = "standard";
+
+    public bool Notify { get; set; } = true;
+
+    public int RetentionDays { get; set; } = 30;
+}
+
+/// <summary>5.0：一条 Suricata/ET Open 网络告警。</summary>
+public sealed class NetworkAlertDto
+{
+    public string Id { get; set; } = string.Empty;
+
+    public DateTime TimeUtc { get; set; }
+
+    public long SignatureId { get; set; }
+
+    public string Signature { get; set; } = string.Empty;
+
+    public string Severity { get; set; } = "medium";
+
+    public string Category { get; set; } = string.Empty;
+
+    public string Protocol { get; set; } = string.Empty;
+
+    public string AppProto { get; set; } = string.Empty;
+
+    public string LocalAddress { get; set; } = string.Empty;
+
+    public int LocalPort { get; set; }
+
+    public string RemoteAddress { get; set; } = string.Empty;
+
+    public int RemotePort { get; set; }
+
+    public int Pid { get; set; }
+
+    public string ProcessName { get; set; } = string.Empty;
+
+    public string? ProcessPath { get; set; }
+
+    public long FlowId { get; set; }
+
+    /// <summary>证据摘要，默认只保留协议元数据。</summary>
+    public string Evidence { get; set; } = string.Empty;
+
+    /// <summary>new / ack / ignored。</summary>
+    public string Status { get; set; } = "new";
+
+    /// <summary>none / blocked。</summary>
+    public string BlockState { get; set; } = "none";
+}
+
+/// <summary>5.0：网络检测运行状态。</summary>
+public sealed class NetworkDetectionStatusDto
+{
+    public bool Enabled { get; set; }
+
+    public bool Running { get; set; }
+
+    public bool Collecting { get; set; }
+
+    public string? SuricataVersion { get; set; }
+
+    public string? RulesVersion { get; set; }
+
+    public int RuleCount { get; set; }
+
+    public string RuleProfile { get; set; } = "standard";
+
+    public string? LastError { get; set; }
+
+    public long EventsSeen { get; set; }
+
+    public long EventsLost { get; set; }
+
+    public int AlertsNew { get; set; }
+
+    public int AlertsTotal { get; set; }
+
+    public DateTime? LastAlertUtc { get; set; }
+
+    public int ActiveBlocks { get; set; }
+
+    public string? EvePath { get; set; }
+}
+
+/// <summary>5.0：一个用户手动 WFP 拦截。</summary>
+public sealed class NetworkBlockDto
+{
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>connection / ip-port / ip / process。</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    public string Target { get; set; } = string.Empty;
+
+    public string? RuleName { get; set; }
+
+    public string? AlertId { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public DateTime ExpiresUtc { get; set; }
 }
 
 /// <summary>4.0：反扫描设置。</summary>

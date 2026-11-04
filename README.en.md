@@ -19,34 +19,17 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > The 4.0 anti-scan reads inbound TCP headers only; it does not read payloads or drop packets inline.
 > Since 2.0 it no longer uses Windows Firewall, and it never changes any Windows Firewall setting.
 >
-> **4.3 adds DNS security.** A new *DNS security* sub-tab detects local DNS hijacking/poisoning
-> (unexpected response server, transaction/name mismatch, NXDOMAIN with answers, conflicting
-> answers, suspicious TTL, DNS server not gateway) and **plaintext DNS bypass**. Alert only,
-> never blocks; events reuse the 4.2 store and retention. See
-> [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md).
->
-> **4.4 adds IPv6 neighbour security.** The *LAN* page gains an **IPv6 neighbour** sub-tab that
-> detects rogue Router Advertisements (unexpected router, prefix/flags changes, RA flood),
-> DHCPv6 spoofing, and NDP spoofing (router NA MAC change, neighbour cache mismatch, Redirect,
-> DAD conflict, …). **Alert only by default**; an untrusted DHCPv6 server or router can be
-> blocked temporarily for 10 minutes (WFP transport layer, POC passed), and NDP is never
-> blocked. See [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md).
->
-> **4.5 closes three host-side blind spots.** The scan page now detects **UDP / ICMP scans**
-> (on by default, auto-block still off); the LAN page gains a **name resolution** sub-tab for
-> **LLMNR / NBNS / mDNS poisoning and WPAD**, with a narrow 10-minute block per source; and a
-> **local configuration** page watches hosts / proxy / PAC / DNS tampering (alert only, no
-> auto-revert). See [`docs/4.5-三功能设计.md`](docs/4.5-三功能设计.md).
->
-> **4.6 fixes digital-signature checking.** Offline networks no longer stall the whole batch:
-> each file gets its own 5-second timeout, results appear as they finish, pending rows show
-> *Checking…*, and unsigned files still turn yellow. Revocation checking stays on by default;
-> it can be turned off under Settings → Data & privacy.
+> **5.0 adds Anti-network attack (passive detection + manual blocking).** It bundles
+> Suricata 8.0.7 and ET Open, reads `eve.json`, and raises alerts only; after a match the user
+> chooses whether to apply a temporary WFP outbound block. No auto-blocking and no new kernel
+> driver; HTTPS payload is not visible. Npcap must be installed with WinPcap API-compatible Mode
+> (`wpcap.dll`). Suricata is extracted into `WinAppGuard\suricata` and removed with WinAppGuard.
 >
 > **4.7 requires Npcap 1.80 or newer.** Older versions are treated as unavailable (capture
 > features stop), the status bar offers an upgrade, and the bundled official 1.90 installer
 > performs an in-place upgrade. If the version cannot be read (portable/enterprise images),
 > capture is allowed with an upgrade recommendation.
+>
 >
 > Older versions (3.0 service split, 3.1 protected mode, 3.7 Flow IDS, 4.0 anti-scan,
 > 4.1 precise traffic, 4.2 LAN detection) are listed in [CHANGELOG](CHANGELOG.md).
@@ -90,6 +73,10 @@ connections** — so you start with *"what is online right now?"* and finish wit
   Windows DNS client are recorded; **no URLs or response contents**; DoH/DoT may be invisible.
 - **Dedicated rules page** — manage every rule the tool has created, even if the program
   is no longer running.
+- **Anti-network attack (5.0, alerts + manual blocking)** �� bundles Suricata 8.0.7 and
+  ET Open, reads `eve.json`, and raises alerts only; after a match you choose whether to apply a
+  temporary WFP outbound block. No auto-blocking. Suricata lives in `WinAppGuard\suricata` and is
+  removed with WinAppGuard.
 - **Flow IDS (detection only, never blocking)** — the *IDS* page is enabled by default and uses
   connection metadata plus DNS records to flag periodic beaconing, port/host scans, lateral
   movement and DNS anomalies. Alerts stay local for 30 days and can be acknowledged, suppressed
@@ -264,15 +251,13 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 
 ## Screenshots
 
-| IDS (detection only) | Protection (port scan) |
+| Anti-network attack (5.0, alerts only) | Protection (port scan) |
 |---|---|
-| ![IDS tab](docs/screenshots/06-ids.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
-| **DNS security (4.3)** | **LAN (4.2)** |
-| ![DNS security tab](docs/screenshots/11-dns-security.png) | ![LAN tab](docs/screenshots/10-lan.png) |
-| **IPv6 neighbour (4.4)** | **LAN (4.2)** |
-| ![IPv6 neighbour tab](docs/screenshots/12-ipv6-security.png) | ![LAN tab](docs/screenshots/10-lan.png) |
-| **Traffic** | **DNS** |
-| ![Traffic tab](docs/screenshots/07-traffic.png) | ![DNS tab](docs/screenshots/08-dns.png) |
+| ![Anti-network attack](docs/screenshots/15-anti-network-attack.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
+| **IDS (detection only)** | **Traffic** |
+| ![IDS tab](docs/screenshots/06-ids.png) | ![Traffic tab](docs/screenshots/07-traffic.png) |
+| **DNS** | **LAN (4.2)** |
+| ![DNS tab](docs/screenshots/08-dns.png) | ![LAN tab](docs/screenshots/10-lan.png) |
 | **Blocklist** | **Strict-mode whitelist** |
 | ![Blocklist tab](docs/screenshots/02-rules.png) | ![Strict-mode whitelist](docs/screenshots/05-whitelist.png) |
 | **Settings** | |
@@ -286,8 +271,8 @@ its full path, the scope of the change, and the rule that is about to be created
 > The IDS page only raises alerts and never blocks automatically; acknowledging, suppressing,
 > clearing and changing its settings each require one UAC prompt.
 >
-> Since 4.3 the *Protection* tab has four sub-tabs (Port scan / LAN / DNS security / IDS);
-> see [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md) for the DNS security acceptance steps.
+> Since 5.0 there is a new **Anti-network attack** page: passive detection plus user-initiated
+> temporary WFP blocking. Suricata is extracted into `WinAppGuard\suricata` and removed with it.
 
 ## Download (only two files from Releases)
 

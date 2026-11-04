@@ -17,33 +17,11 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
 > 4.0 的反扫描只读取入站 TCP 头做检测，不读载荷、不阻断数据包。
 > 从 2.0 起它不再使用 Windows 防火墙，也不再修改 Windows 防火墙的任何设置。
 >
-> **4.3 新增 DNS 安全**：「防护」页新增「DNS 安全」子标签，检测本地 DNS 劫持 / 投毒
-> （应答来源不符、事务 ID/域名不符、NXDOMAIN 带答案、冲突应答、TTL 异常、
-> DNS 服务器非网关）与**明文 DNS 绕过**；**只告警、不阻断**，
-> 事件复用 4.2 的落盘与保留期。详见
-> [`docs/4.3-DNS安全设计.md`](docs/4.3-DNS安全设计.md)。
->
-> **4.4 新增 IPv6 邻接安全**：「局域网」页新增 **IPv6 邻接** 二级页，
-> 检测 RA（非基线路由器、前缀/标志变化、RA 洪水）、DHCPv6 欺骗与 NDP 欺骗
-> （路由器 NA MAC 变化、邻居缓存不一致、Redirect、DAD 冲突等）；**默认只告警**，
-> 非信任 DHCPv6 服务器 / 路由器可**临时阻断 10 分钟**（WFP 传输层，POC 已通过），
-> NDP 永不阻断。详见
-> [`docs/4.4-IPv6邻接安全设计.md`](docs/4.4-IPv6邻接安全设计.md)。
->
-> **4.5 补齐三类本机攻击面**：端口扫描页新增 **UDP / ICMP 扫描检测**（默认开、自动封禁仍关）；
-> 局域网新增 **名称解析** 二级页，检测 **LLMNR / NBNS / mDNS 投毒与 WPAD**，
-> 可按来源窄阻断 10 分钟；防护页新增 **本机配置**，监控 hosts / 代理 / PAC / DNS 设置篡改，
-> 只告警、不自动回滚。详见
-> [`docs/4.5-三功能设计.md`](docs/4.5-三功能设计.md)。
->
-> **4.6 修复数字签名检查**：离线环境下不再整批卡住；单个文件 5 秒超时、
-> 边查边显示、未完成显示「检查中…」，未签名仍会标黄。
-> 吊销检查默认仍开启，可在「设置 → 数据与隐私」关闭。
->
 > **4.7 要求 Npcap 1.80 或更新**：版本过旧时和“未安装”一样停用抓包功能，
 > 状态栏提示「版本过旧，点击升级」，用随包官方 1.90 安装器覆盖升级；
 > 版本读不到（便携/企业镜像）时允许使用但提示建议升级。
-> **5.0 增加被动网络检测（可选手动阻断）**：随包 Suricata + ET Open，
+>
+> **5.0 新增反网络攻击（可选手动阻断）**：随包 Suricata 8.0.7 + ET Open，
 > 只读 eve.json 产生告警，命中后由用户手动选择 WFP 临时阻断；
 > 不自动拦截、不新增内核驱动、HTTPS 正文不可见；安装 Npcap 时启用 WinPcap 兼容模式（Suricata 需要 wpcap.dll）。
 >
@@ -80,6 +58,9 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
   字节口径是 IP 载荷，含重传、不含回环；归属不到的流量单列为「未归属」。
 - **DNS 查询记录**：新增「DNS」页，显示最近查询的**域名、PID、程序、结果**；
   只记录系统 DNS 客户端看到的域名，**不记录 URL、不记录响应内容**；DoH/DoT 可能看不到。
+- **反网络攻击（5.0，只告警 + 手动阻断）**：随包 Suricata 8.0.7 + ET Open，只读 `eve.json` 产生告警；
+  命中后由你手动选择 WFP 临时阻断，不自动拦截；Suricata 解包在 `WinAppGuard\suricata`，
+  卸载 WinAppGuard 时一并删除。
 - **IDS（只检测、不阻断）**：「防护 → IDS」默认开启，用连接元数据与 DNS 检测
   **周期性外联、端口/主机扫描、内网横向、DNS 异常**；告警本地保留 30 天，
   可确认 / 抑制 / 清空。IDS 自身不读取载荷，也不自动阻断。
@@ -221,17 +202,15 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 
 ## 界面
 
-| IDS（只检测、不阻断） | 防护（端口扫描） |
+| 反网络攻击（5.0，只告警） | 防护（端口扫描） |
 |---|---|
-| ![IDS 页](docs/screenshots/06-ids.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
-| **DNS 安全（4.3）** | **局域网（4.2）** |
-| ![DNS 安全页](docs/screenshots/11-dns-security.png) | ![局域网页](docs/screenshots/10-lan.png) |
-| **IPv6 邻接（4.4）** | **局域网（4.2）** |
-| ![IPv6 邻接页](docs/screenshots/12-ipv6-security.png) | ![局域网页](docs/screenshots/10-lan.png) |
-| **流量** | **DNS** |
-| ![流量页](docs/screenshots/07-traffic.png) | ![DNS 页](docs/screenshots/08-dns.png) |
-| **黑名单** | **严格模式下白名单** |
-| ![黑名单页](docs/screenshots/02-rules.png) | ![严格模式下白名单](docs/screenshots/05-whitelist.png) |
+| ![反网络攻击](docs/screenshots/15-anti-network-attack.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
+| **IDS（只检测、不阻断）** | **流量** |
+| ![IDS 页](docs/screenshots/06-ids.png) | ![流量页](docs/screenshots/07-traffic.png) |
+| **DNS** | **局域网（4.2）** |
+| ![DNS 页](docs/screenshots/08-dns.png) | ![局域网页](docs/screenshots/10-lan.png) |
+| **黑名单** | **严格模式白名单** |
+| ![黑名单页](docs/screenshots/02-rules.png) | ![严格模式白名单](docs/screenshots/05-whitelist.png) |
 | **设置** | |
 | ![设置页](docs/screenshots/03-settings.png) | |
 
@@ -242,10 +221,8 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 
 > IDS 页只产生告警，不会自动阻断；确认 / 抑制 / 清空和改设置同样要过一次 UAC。
 >
-> 4.3 起「防护」页有四个子标签（端口扫描 / 局域网 / DNS 安全 / IDS）；
-> DNS 安全子页的验收步骤见 [`docs/4.3-VM验收.md`](docs/4.3-VM验收.md)。
-
-## 下载（Releases 只需要两个文件）
+> 5.0 起新增「反网络攻击」页：被动检测 + 用户手动 WFP 临时阻断；
+> Suricata 随包解包到 WinAppGuard\suricata，卸载时一并删除。
 
 从 [Releases](https://github.com/lovercyh/winappguard/releases) 下载：
 
@@ -530,6 +507,7 @@ WinAppGuard.exe --recover
 ## 许可证
 
 [GPL-2.0](LICENSE)。
+
 
 
 

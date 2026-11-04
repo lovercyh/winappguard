@@ -1670,53 +1670,9 @@ internal static class Program
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "10-lan.png"));
 
-            TrySelectTab(form, "_tabDnsSecurity");
+            TrySelectTab(form, "_tabNetworkDetection");
             Application.DoEvents();
-            RenderFormTo(form, Path.Combine(outputDir, "11-dns-security.png"));
-
-            if (TryGetField<TabControl>(form, "_lanTabs", out var lanTabs)
-                && TryGetField<TabPage>(form, "_lanIpv6Page", out var ipv6Page))
-            {
-                TrySelectTab(form, "_tabLan");
-                lanTabs.SelectedTab = ipv6Page;
-
-                // 4.4：截图要能看见「阻断」列和「解除阻断」，所以落在 DHCPv6 标签页、
-                // 并选中被阻断的那一行（第二个 DHCPv6 服务器是演示用的 rogue）。
-                if (TryGetField<TabControl>(form, "_ipv6EndpointTabs", out var ipv6Tabs))
-                {
-                    var dhcpTab = ipv6Tabs.TabPages.Cast<TabPage>()
-                        .FirstOrDefault(page => page.Name == "_ipv6DhcpTab");
-
-                    if (dhcpTab is not null)
-                    {
-                        ipv6Tabs.SelectedTab = dhcpTab;
-                    }
-                }
-
-                if (TryGetField<WinAppGuard.Forms.DataGridViewBuffered>(form, "_ipv6DhcpGrid", out var dhcpGrid)
-                    && dhcpGrid.Rows.Count > 1)
-                {
-                    dhcpGrid.CurrentCell = dhcpGrid.Rows[1].Cells[0];
-                    Application.DoEvents();
-                    InvokePrivate(form, "UpdateIpv6Buttons", null);
-                }
-
-                Application.DoEvents();
-                RenderFormTo(form, Path.Combine(outputDir, "12-ipv6-security.png"));
-            }
-
-            TrySelectTab(form, "_tabConfig");
-            Application.DoEvents();
-            RenderFormTo(form, Path.Combine(outputDir, "13-config-integrity.png"));
-
-            if (TryGetField<TabControl>(form, "_lanTabs", out var lanTabControl)
-                && TryGetField<TabPage>(form, "_lanNamePage", out var namePage))
-            {
-                TrySelectTab(form, "_tabLan");
-                lanTabControl.SelectedTab = namePage;
-                Application.DoEvents();
-                RenderFormTo(form, Path.Combine(outputDir, "14-name-resolution.png"));
-            }
+            RenderFormTo(form, Path.Combine(outputDir, "15-anti-network-attack.png"));
 
             TrySelectTab(form, "_tabRules");
             Application.DoEvents();
@@ -2820,6 +2776,120 @@ internal static class Program
         });
 
         InvokePrivate(form, "RebuildAntiScanView", null);
+        ApplyDocsNetworkDetectionSamples(form, now);
+    }
+
+    /// <summary>
+    /// 5.0：给 README 的「反网络攻击」页填充演示告警，避免截图是空表。
+    /// </summary>
+    private static void ApplyDocsNetworkDetectionSamples(MainForm form, DateTime now)
+    {
+        var alerts = new List<NetworkAlertDto>
+        {
+            new()
+            {
+                Id = "nd-demo-1",
+                TimeUtc = now.AddMinutes(-2).ToUniversalTime(),
+                SignatureId = 2030803,
+                Signature = "ET MALWARE GoldenSpy Domain Observed",
+                Severity = "high",
+                Category = "A Network Trojan was detected",
+                Protocol = "UDP",
+                AppProto = "dns",
+                LocalAddress = "192.168.10.2",
+                LocalPort = 60532,
+                RemoteAddress = "223.5.5.5",
+                RemotePort = 53,
+                Pid = 0,
+                ProcessName = string.Empty,
+                Evidence = "DNS: ningzhidata.com",
+                Status = "new",
+                BlockState = "blocked",
+            },
+            new()
+            {
+                Id = "nd-demo-2",
+                TimeUtc = now.AddMinutes(-7).ToUniversalTime(),
+                SignatureId = 2027865,
+                Signature = "ET MALWARE Possible Cobalt Strike Beacon",
+                Severity = "high",
+                Category = "A Network Trojan was detected",
+                Protocol = "TCP",
+                AppProto = "tls",
+                LocalAddress = "192.168.10.2",
+                LocalPort = 51244,
+                RemoteAddress = "203.0.113.24",
+                RemotePort = 443,
+                Pid = 8340,
+                ProcessName = "rundll32.exe",
+                ProcessPath = @"C:\Windows\System32\rundll32.exe",
+                Evidence = "TLS SNI: cdn-update.example",
+                Status = "new",
+                BlockState = "none",
+            },
+            new()
+            {
+                Id = "nd-demo-3",
+                TimeUtc = now.AddMinutes(-15).ToUniversalTime(),
+                SignatureId = 2024001,
+                Signature = "ET MALWARE Suspicious HTTP Callback",
+                Severity = "medium",
+                Category = "Malware Command and Control Activity Detected",
+                Protocol = "TCP",
+                AppProto = "http",
+                LocalAddress = "192.168.10.2",
+                LocalPort = 49822,
+                RemoteAddress = "198.51.100.77",
+                RemotePort = 80,
+                Pid = 12120,
+                ProcessName = "powershell.exe",
+                ProcessPath = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                Evidence = "GET /gate.php  UA: Mozilla/5.0",
+                Status = "ack",
+                BlockState = "none",
+            },
+        };
+
+        TrySetField(form, "_ndAlerts", alerts);
+        TrySetField(form, "_ndBlockList", new List<NetworkBlockDto>
+        {
+            new()
+            {
+                Id = "nd-block-demo",
+                Kind = "ip-port",
+                Target = "223.5.5.5|53|UDP",
+                RuleName = "ET MALWARE GoldenSpy Domain Observed",
+                AlertId = "nd-demo-1",
+                CreatedUtc = now.AddMinutes(-2).ToUniversalTime(),
+                ExpiresUtc = now.AddMinutes(8).ToUniversalTime(),
+            },
+        });
+        TrySetField(form, "_ndSettings", new NetworkDetectionSettingsDto
+        {
+            Enabled = true,
+            RuleProfile = "standard",
+            Notify = true,
+            RetentionDays = 30,
+        });
+        TrySetField(form, "_ndStatus", new NetworkDetectionStatusDto
+        {
+            Enabled = true,
+            Running = true,
+            Collecting = true,
+            SuricataVersion = "8.0.7",
+            RulesVersion = "ET Open 7.0.3",
+            RuleCount = 12_528,
+            RuleProfile = "standard",
+            EventsSeen = 184_210,
+            EventsLost = 0,
+            AlertsNew = 2,
+            AlertsTotal = 3,
+            LastAlertUtc = now.AddMinutes(-2).ToUniversalTime(),
+            ActiveBlocks = 1,
+        });
+
+        TrySetField(form, "_ndSignature", null!);
+        InvokePrivate(form, "RebuildNetworkDetection", null);
     }
 
     private static DnsDto MakeDocsDns(

@@ -9,6 +9,9 @@ internal sealed class NetworkDetectionSettingsForm : Form
 {
     private readonly CheckBox _enabled;
     private readonly ComboBox _profile;
+    private readonly ComboBox _capture;
+    private readonly Button _captureRefresh;
+    private readonly Label _captureNote;
     private readonly CheckBox _notify;
     private readonly NumericUpDown _retention;
     private readonly CheckedListBox _categories;
@@ -25,26 +28,22 @@ internal sealed class NetworkDetectionSettingsForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         AutoScroll = true;
-        ClientSize = new Size(500, 600);
+        ClientSize = new Size(520, 660);
 
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             Padding = new Padding(16),
-            RowCount = 10,
+            RowCount = 13,
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 160));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 13; i++)
+        {
+            layout.RowStyles.Add(i == 7
+                ? new RowStyle(SizeType.Absolute, 170)
+                : new RowStyle(SizeType.AutoSize));
+        }
 
         _enabled = new CheckBox
         {
@@ -76,8 +75,51 @@ internal sealed class NetworkDetectionSettingsForm : Form
         {
             AutoSize = true,
             Margin = new Padding(0, 12, 0, 4),
-            Text = Localizer.T("规则分类（只作用于标准档）："),
+            Text = Localizer.T("监听网卡："),
         }, 0, 3);
+
+        var capturePanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0),
+        };
+
+        _capture = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 360,
+        };
+
+        _captureRefresh = new Button
+        {
+            Text = Localizer.T("刷新"),
+            Width = 72,
+            Margin = new Padding(6, 0, 0, 0),
+        };
+        _captureRefresh.Click += (_, _) => LoadCaptureDevices(SelectedCaptureDeviceId());
+
+        capturePanel.Controls.Add(_capture);
+        capturePanel.Controls.Add(_captureRefresh);
+        layout.Controls.Add(capturePanel, 0, 4);
+
+        _captureNote = new Label
+        {
+            AutoSize = true,
+            ForeColor = SystemColors.GrayText,
+            MaximumSize = new Size(470, 0),
+            Margin = new Padding(0, 4, 0, 0),
+            Text = Localizer.T("修改监听网卡会重启 Suricata 检测；保存设置需要一次 UAC。"),
+        };
+        layout.Controls.Add(_captureNote, 0, 5);
+
+        layout.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Margin = new Padding(0, 12, 0, 4),
+            Text = Localizer.T("规则分类（只作用于标准档）："),
+        }, 0, 6);
 
         _categories = new CheckedListBox
         {
@@ -101,7 +143,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
                 id, StringComparer.OrdinalIgnoreCase));
         }
 
-        layout.Controls.Add(_categories, 0, 4);
+        layout.Controls.Add(_categories, 0, 7);
 
         var categoryButtons = new FlowLayoutPanel
         {
@@ -115,7 +157,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
         _selectNone.Click += (_, _) => SetAllCategories(false);
         categoryButtons.Controls.Add(_selectAll);
         categoryButtons.Controls.Add(_selectNone);
-        layout.Controls.Add(categoryButtons, 0, 5);
+        layout.Controls.Add(categoryButtons, 0, 8);
 
         _notify = new CheckBox
         {
@@ -124,7 +166,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Margin = new Padding(0, 12, 0, 0),
             Text = Localizer.T("新的高危告警显示托盘通知"),
         };
-        layout.Controls.Add(_notify, 0, 6);
+        layout.Controls.Add(_notify, 0, 9);
 
         var retentionPanel = new FlowLayoutPanel
         {
@@ -146,7 +188,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Width = 80,
         };
         retentionPanel.Controls.Add(_retention);
-        layout.Controls.Add(retentionPanel, 0, 7);
+        layout.Controls.Add(retentionPanel, 0, 10);
 
         layout.Controls.Add(new Label
         {
@@ -156,7 +198,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Margin = new Padding(0, 12, 0, 0),
             Text = Localizer.T(
                 "被动检测只告警，不自动拦截。命中后由你手动选择是否用 WFP 临时阻断；HTTPS 正文不可见。全量档忽略分类开关。"),
-        }, 0, 8);
+        }, 0, 11);
 
         var buttons = new FlowLayoutPanel
         {
@@ -169,10 +211,11 @@ internal sealed class NetworkDetectionSettingsForm : Form
         var ok = new Button { Text = Localizer.T("保存"), DialogResult = DialogResult.OK, Width = 88 };
         buttons.Controls.Add(cancel);
         buttons.Controls.Add(ok);
-        layout.Controls.Add(buttons, 0, 9);
+        layout.Controls.Add(buttons, 0, 12);
 
         _profile.SelectedIndexChanged += (_, _) => UpdateCategoryState();
         UpdateCategoryState();
+        LoadCaptureDevices(current.CaptureDeviceId);
 
         Controls.Add(layout);
         AcceptButton = ok;
@@ -201,6 +244,64 @@ internal sealed class NetworkDetectionSettingsForm : Form
             .Select(option => option.Id)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private string SelectedCaptureDeviceId()
+        => (_capture.SelectedItem as AdapterOption)?.Id ?? string.Empty;
+
+    private void LoadCaptureDevices(string? selectedId)
+    {
+        var adapters = NetworkCaptureDevices.Enumerate().ToList();
+
+        _capture.BeginUpdate();
+        _capture.Items.Clear();
+        _capture.Items.Add(new AdapterOption(string.Empty, Localizer.T("自动（推荐）")));
+
+        foreach (var adapter in adapters
+                     .Where(item => !item.IsLoopback
+                                    && item.Type != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                     .OrderByDescending(item => item.IsUp)
+                     .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var status = adapter.IsUp ? string.Empty : Localizer.T("（未连接）");
+            var virtualAdapter = adapter.Description.Contains(
+                    "Virtual", StringComparison.OrdinalIgnoreCase)
+                || adapter.Description.Contains("VMware", StringComparison.OrdinalIgnoreCase)
+                || adapter.Description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase)
+                    ? Localizer.T("（虚拟网卡）")
+                    : string.Empty;
+            var tunnel = adapter.IsTunnel
+                ? Localizer.T("（VPN / 隧道，可能抓不到）")
+                : string.Empty;
+
+            _capture.Items.Add(new AdapterOption(
+                adapter.Id,
+                $"{adapter.DisplayName} — {adapter.Description}{status}{virtualAdapter}{tunnel}"));
+        }
+
+        var selected = _capture.Items
+            .Cast<AdapterOption>()
+            .FirstOrDefault(option =>
+                !string.IsNullOrEmpty(selectedId)
+                && string.Equals(option.Id, selectedId, StringComparison.OrdinalIgnoreCase));
+
+        if (selected is null && !string.IsNullOrWhiteSpace(selectedId))
+        {
+            selected = new AdapterOption(
+                selectedId.Trim(),
+                Localizer.T("原选择（当前不可用）"));
+            _capture.Items.Add(selected);
+            _captureNote.Text = Localizer.T(
+                "原选择不可用，已回退到自动；重新选择后会保存新网卡。");
+        }
+        else
+        {
+            _captureNote.Text = Localizer.T(
+                "修改监听网卡会重启 Suricata 检测；保存设置需要一次 UAC。");
+        }
+
+        _capture.SelectedItem = selected ?? _capture.Items[0];
+        _capture.EndUpdate();
+    }
 
     internal static NetworkDetectionSettingsDto? Ask(
         IWin32Window? owner,
@@ -234,12 +335,28 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Notify = form._notify.Checked,
             RetentionDays = (int)form._retention.Value,
             EnabledRuleCategories = categories,
+            CaptureDeviceId = form.SelectedCaptureDeviceId(),
         };
     }
 
     private sealed class CategoryOption
     {
         internal CategoryOption(string id, string name)
+        {
+            Id = id;
+            Name = name;
+        }
+
+        internal string Id { get; }
+
+        internal string Name { get; }
+
+        public override string ToString() => Name;
+    }
+
+    private sealed class AdapterOption
+    {
+        internal AdapterOption(string id, string name)
         {
             Id = id;
             Name = name;

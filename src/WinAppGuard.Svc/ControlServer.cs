@@ -502,6 +502,25 @@ internal sealed class ControlServer : IDisposable
             };
         }
 
+        // 5.2：alert.* 只改告警元数据，不碰 WFP / 设置，因此允许所有者用户免提权执行。
+        if (ServiceProtocol.IsAlertCommand(request.Command))
+        {
+            ServiceLog.Operation(
+                "WAG-ALERT-001",
+                $"Alert command: {request.Command} (pid={clientPid}, elevated={elevated}).");
+        }
+
+        // 但“永久不再提醒”会长期改变检测可见性，仍然要求管理员同意。
+        if (ServiceProtocol.IsPermanentAlertSuppression(request) && !elevated)
+        {
+            return new ServiceResponse
+            {
+                Id = request.Id,
+                Ok = false,
+                Error = "永久不再提醒需要管理员权限。",
+            };
+        }
+
         // 3.5：服务以 SYSTEM 运行，能读到界面读不到的提权/受保护进程路径。
         if (string.Equals(
                 request.Command, ServiceProtocol.Commands.QueryProcessPaths,
@@ -576,6 +595,17 @@ internal sealed class ControlServer : IDisposable
             ServiceProtocol.Commands.IdsSuppress => IdsHost.Suppress(request),
 
             ServiceProtocol.Commands.IdsClear => IdsHost.Clear(request),
+
+            // 5.2：告警元数据命令（无需提权；是否允许永久不再提醒由上面的守卫判断）。
+            ServiceProtocol.Commands.AlertIdsAck => IdsHost.Ack(request),
+
+            ServiceProtocol.Commands.AlertIdsSuppress => IdsHost.Suppress(request),
+
+            ServiceProtocol.Commands.AlertIdsClear => IdsHost.Clear(request),
+
+            ServiceProtocol.Commands.AlertNetworkAck => NetworkDetectionHost.Ack(request),
+
+            ServiceProtocol.Commands.AlertNetworkClear => NetworkDetectionHost.Clear(request),
 
             // 4.0：反扫描；写命令（write.antiscan.*）已由上面的提权检查统一拦截。
             ServiceProtocol.Commands.QueryAntiScan => AntiScanHost.Query(request),

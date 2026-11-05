@@ -24,6 +24,9 @@ public sealed class NetworkDetectionSettings
     /// <summary>5.1：标准档启用的规则分类；全量档忽略。</summary>
     public List<string> EnabledRuleCategories { get; set; } =
         NetworkRuleCategories.DefaultEnabled.ToList();
+
+    /// <summary>5.2：监听网卡 GUID；空字符串表示自动。</summary>
+    public string CaptureDeviceId { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -164,6 +167,15 @@ public static class NetworkDetectionStateFile
             state.Settings.EnabledRuleCategories = categories.Count > 0
                 ? categories
                 : NetworkRuleCategories.DefaultEnabled.ToList();
+
+            if (string.IsNullOrWhiteSpace(state.Settings.CaptureDeviceId))
+            {
+                state.Settings.CaptureDeviceId = string.Empty;
+            }
+            else
+            {
+                state.Settings.CaptureDeviceId = state.Settings.CaptureDeviceId.Trim();
+            }
 
             if (!string.Equals(
                     state.Settings.RuleProfile, "full", StringComparison.OrdinalIgnoreCase))

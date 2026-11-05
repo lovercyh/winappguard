@@ -2871,7 +2871,9 @@ internal static class Program
             RuleProfile = "standard",
             Notify = true,
             RetentionDays = 30,
+            CaptureDeviceId = string.Empty,
         });
+
         TrySetField(form, "_ndStatus", new NetworkDetectionStatusDto
         {
             Enabled = true,
@@ -2887,6 +2889,7 @@ internal static class Program
             AlertsTotal = 3,
             LastAlertUtc = now.AddMinutes(-2).ToUniversalTime(),
             ActiveBlocks = 1,
+            CaptureDeviceName = "以太网",
         });
 
         TrySetField(form, "_ndSignature", null!);
@@ -3118,7 +3121,7 @@ internal static class Program
             dialog.Show();
             Application.DoEvents();
 
-            RenderFormTo(dialog, Path.Combine(outputDir, "16-rule-categories.png"));
+            RenderFormTo(dialog, Path.Combine(outputDir, "16-network-settings.png"));
 
             dialog.Close();
             dialog.Dispose();
@@ -15507,6 +15510,47 @@ internal static class Program
             && ServiceProtocol.Commands.NetworkDetectionBlock.StartsWith("write.", StringComparison.Ordinal)
             && ServiceProtocol.Commands.NetworkDetectionReleaseAll.StartsWith("write.", StringComparison.Ordinal));
 
+        CheckAssertion(results, "告警处置命令使用 alert 前缀且只放行告警元数据",
+            ServiceProtocol.Commands.AlertIdsAck == "alert.ids.ack"
+            && ServiceProtocol.Commands.AlertIdsSuppress == "alert.ids.suppress"
+            && ServiceProtocol.Commands.AlertIdsClear == "alert.ids.clear"
+            && ServiceProtocol.Commands.AlertNetworkAck == "alert.network.ack"
+            && ServiceProtocol.Commands.AlertNetworkClear == "alert.network.clear"
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsAck)
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsSuppress)
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsClear)
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertNetworkAck)
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertNetworkClear)
+            && !ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.NetworkDetectionBlock)
+            && !ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.NetworkDetectionConfigure)
+            && !ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.IdsConfigure));
+
+        CheckAssertion(results, "永久不再提醒即使走 alert 命令也要求提权",
+            ServiceProtocol.IsPermanentAlertSuppression(new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.AlertIdsSuppress,
+                IdsSuppression = new IdsSuppressionDto { UntilUtc = null },
+            })
+            && !ServiceProtocol.IsPermanentAlertSuppression(new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.AlertIdsSuppress,
+                IdsSuppression = new IdsSuppressionDto
+                {
+                    UntilUtc = DateTime.UtcNow.AddHours(1),
+                },
+            })
+            && !ServiceProtocol.IsPermanentAlertSuppression(new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.AlertIdsSuppress,
+                IdsRemoveSuppression = true,
+                IdsSuppression = new IdsSuppressionDto { Id = "mute-1" },
+            })
+            && !ServiceProtocol.IsPermanentAlertSuppression(new ServiceRequest
+            {
+                Command = ServiceProtocol.Commands.AlertIdsAck,
+                IdsAlertId = "alert-1",
+            }));
+
         var defaultSettings = new NetworkDetectionSettings();
 
         CheckAssertion(results, "默认启用 7 个规则分类，phishing 默认关闭",
@@ -15514,6 +15558,86 @@ internal static class Program
             && !defaultSettings.EnabledRuleCategories.Contains(
                 NetworkRuleCategories.Phishing, StringComparer.OrdinalIgnoreCase)
             && NetworkRuleCategories.All.Count == 8);
+
+        CheckAssertion(results, "默认监听网卡为自动",
+            string.IsNullOrEmpty(defaultSettings.CaptureDeviceId));
+
+        var adapters = new List<NetworkCaptureAdapter>
+        {
+            new()
+            {
+                Id = "eth-1",
+                Name = "以太网",
+                Description = "Intel Ethernet",
+                Type = System.Net.NetworkInformation.NetworkInterfaceType.Ethernet,
+                IsUp = true,
+                HasGateway = true,
+            },
+            new()
+            {
+                Id = "wifi-1",
+                Name = "Wi-Fi",
+                Description = "Intel Wi-Fi",
+                Type = System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211,
+                IsUp = true,
+            },
+            new()
+            {
+                Id = "tun-1",
+                Name = "VPN",
+                Description = "VPN tunnel",
+                Type = System.Net.NetworkInformation.NetworkInterfaceType.Tunnel,
+                IsUp = true,
+            },
+            new()
+            {
+                Id = "down-1",
+                Name = "USB",
+                Description = "USB Ethernet",
+                Type = System.Net.NetworkInformation.NetworkInterfaceType.Ethernet,
+                IsUp = false,
+                HasGateway = true,
+            },
+            new()
+            {
+                Id = "loop-1",
+                Name = "Loopback",
+                Type = System.Net.NetworkInformation.NetworkInterfaceType.Loopback,
+                IsLoopback = true,
+                IsUp = true,
+            },
+        };
+
+        var automatic = NetworkCaptureDevices.Resolve(string.Empty, adapters);
+        CheckAssertion(results, "自动选择优先有网关的物理网卡",
+            automatic is { Fallback: false, AdapterName: "以太网" }
+            && automatic.DevicePath == @"\Device\NPF_eth-1");
+
+        var exact = NetworkCaptureDevices.Resolve("wifi-1", adapters);
+        CheckAssertion(results, "选择网卡时精确解析",
+            exact is { Fallback: false, AdapterName: "Wi-Fi" }
+            && exact.DevicePath == @"\Device\NPF_wifi-1");
+
+        var tunnel = NetworkCaptureDevices.Resolve("tun-1", adapters);
+        CheckAssertion(results, "允许显式选择 VPN / 隧道网卡",
+            tunnel is { Fallback: false, AdapterName: "VPN" }
+            && tunnel.DevicePath == @"\Device\NPF_tun-1");
+
+        var missing = NetworkCaptureDevices.Resolve("missing", adapters);
+        CheckAssertion(results, "所选网卡不存在时回退自动",
+            missing is { Fallback: true }
+            && missing.DevicePath == @"\Device\NPF_eth-1"
+            && !string.IsNullOrWhiteSpace(missing.Reason));
+
+        var down = NetworkCaptureDevices.Resolve("down-1", adapters);
+        CheckAssertion(results, "所选网卡未连接时回退自动",
+            down is { Fallback: true }
+            && down.DevicePath == @"\Device\NPF_eth-1");
+
+        var loopback = NetworkCaptureDevices.Resolve("loop-1", adapters);
+        CheckAssertion(results, "回环网卡不会被选中",
+            loopback is { Fallback: true }
+            && loopback.DevicePath == @"\Device\NPF_eth-1");
 
         const string httpLine =
             "{\"timestamp\":\"2026-11-04T12:00:00.000000+0000\",\"flow_id\":123," +
@@ -15611,6 +15735,7 @@ internal static class Program
                 RuleProfile = "full",
                 Notify = false,
                 RetentionDays = 7,
+                CaptureDeviceId = "eth-1",
             },
         };
         state.AlertStatuses["alert-1"] = "ack";
@@ -15624,6 +15749,7 @@ internal static class Program
                 !loaded.Settings.Enabled
                 && loaded.Settings.RuleProfile == "full"
                 && loaded.Settings.RetentionDays == 7
+                && loaded.Settings.CaptureDeviceId == "eth-1"
                 && loaded.AlertStatuses.TryGetValue("alert-1", out var status)
                 && status == "ack");
         }

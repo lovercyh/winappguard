@@ -460,6 +460,9 @@ public sealed class NetworkDetectionSettingsDto
 
     /// <summary>5.1：标准档启用的规则分类；全量档忽略。</summary>
     public List<string> EnabledRuleCategories { get; set; } = new();
+
+    /// <summary>5.2：监听网卡 GUID；空字符串表示自动。</summary>
+    public string CaptureDeviceId { get; set; } = string.Empty;
 }
 
 /// <summary>5.0：一条 Suricata/ET Open 网络告警。</summary>
@@ -539,6 +542,15 @@ public sealed class NetworkDetectionStatusDto
     public int ActiveBlocks { get; set; }
 
     public string? EvePath { get; set; }
+
+    /// <summary>5.2：实际监听的网卡名。</summary>
+    public string? CaptureDeviceName { get; set; }
+
+    /// <summary>5.2：所选网卡不可用、已回退到自动时为 true。</summary>
+    public bool CaptureDeviceFallback { get; set; }
+
+    /// <summary>5.2：回退原因或网卡状态说明。</summary>
+    public string? CaptureDeviceNote { get; set; }
 }
 
 /// <summary>5.0：一个用户手动 WFP 拦截。</summary>

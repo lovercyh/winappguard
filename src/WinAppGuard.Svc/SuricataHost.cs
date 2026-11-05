@@ -1,7 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core.Diagnostics.AntiScan;
@@ -37,6 +34,10 @@ internal static class SuricataHost
     private static string? _version;
     private static string _profile = "standard";
     private static IReadOnlyList<string> _enabledCategories = NetworkRuleCategories.DefaultEnabled;
+    private static string _captureDeviceId = string.Empty;
+    private static string? _captureDeviceName;
+    private static bool _captureFallback;
+    private static string? _captureNote;
     private static int _ruleCount;
     private static string _validatedSignature = string.Empty;
     private static string? _activeBackupPath;
@@ -68,10 +69,26 @@ internal static class SuricataHost
         get { lock (Gate) { return _ruleCount; } }
     }
 
+    internal static string? CaptureDeviceName
+    {
+        get { lock (Gate) { return _captureDeviceName; } }
+    }
+
+    internal static bool CaptureFallback
+    {
+        get { lock (Gate) { return _captureFallback; } }
+    }
+
+    internal static string? CaptureNote
+    {
+        get { lock (Gate) { return _captureNote; } }
+    }
+
     internal static void Start(
         bool enabled,
         string ruleProfile,
-        IReadOnlyList<string>? enabledCategories = null)
+        IReadOnlyList<string>? enabledCategories = null,
+        string? captureDeviceId = null)
     {
         lock (Gate)
         {
@@ -81,6 +98,7 @@ internal static class SuricataHost
                 ? "full"
                 : "standard";
             _enabledCategories = NormalizeCategories(enabledCategories);
+            _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             _generation++;
 
             if (!enabled)
@@ -120,7 +138,8 @@ internal static class SuricataHost
     /// <summary>配置档切换后调用：重启子进程，让 Suricata 重新加载规则。</summary>
     internal static void Reload(
         string ruleProfile,
-        IReadOnlyList<string>? enabledCategories = null)
+        IReadOnlyList<string>? enabledCategories = null,
+        string? captureDeviceId = null)
     {
         lock (Gate)
         {
@@ -128,6 +147,7 @@ internal static class SuricataHost
                 ? "full"
                 : "standard";
             _enabledCategories = NormalizeCategories(enabledCategories);
+            _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             StopProcessLocked();
             _nextRestartUtc = DateTime.MinValue;
         }
@@ -209,14 +229,23 @@ internal static class SuricataHost
 
                 CommitActiveRulesBackupLocked();
 
-                var device = FindCaptureDevice();
+                var resolution = NetworkCaptureDevices.Resolve(
+                    _captureDeviceId,
+                    NetworkCaptureDevices.Enumerate());
 
-                if (device is null)
+                _captureDeviceName = resolution.AdapterName;
+                _captureFallback = resolution.Fallback;
+                _captureNote = resolution.Reason;
+
+                if (resolution.DevicePath is null)
                 {
-                    _lastError = "找不到可用的物理网卡；请检查 Npcap 和网络连接。";
+                    _lastError = resolution.Reason
+                        ?? "找不到可用的网卡；请检查 Npcap 和网络连接。";
                     ScheduleRestartLocked();
                     return;
                 }
+
+                var device = resolution.DevicePath;
 
                 var classification = Path.Combine(_installDirectory!, "classification.config");
                 var reference = Path.Combine(_installDirectory!, "reference.config");
@@ -554,44 +583,6 @@ internal static class SuricataHost
         _ruleCount = CountRules(rulesFile);
 
         return true;
-    }
-
-    private static string? FindCaptureDevice()
-    {
-        string? first = null;
-
-        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (nic.OperationalStatus != OperationalStatus.Up
-                || nic.NetworkInterfaceType is NetworkInterfaceType.Loopback
-                    or NetworkInterfaceType.Tunnel)
-            {
-                continue;
-            }
-
-            if (nic.NetworkInterfaceType is not (NetworkInterfaceType.Ethernet
-                or NetworkInterfaceType.Wireless80211
-                or NetworkInterfaceType.GigabitEthernet))
-            {
-                continue;
-            }
-
-            // Npcap 在 Windows 上使用 \Device\NPF_{GUID}。
-            var device = $@"\Device\NPF_{nic.Id}";
-            first ??= device;
-
-            var hasGateway = nic.GetIPProperties().GatewayAddresses
-                .Any(gateway => gateway.Address is not null
-                    && !gateway.Address.Equals(IPAddress.Any)
-                    && !gateway.Address.Equals(IPAddress.IPv6Any));
-
-            if (hasGateway)
-            {
-                return device;
-            }
-        }
-
-        return first;
     }
 
     /// <summary>

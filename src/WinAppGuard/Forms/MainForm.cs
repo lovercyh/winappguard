@@ -1331,6 +1331,42 @@ public partial class MainForm : Form
     }
 
     /// <summary>
+    /// 5.2：发一条“告警元数据”命令（已读 / 同类告警不再提醒 / 清空告警）。
+    ///
+    /// 刻意不经过 <see cref="ElevatedClient"/>：这些命令只改告警状态，
+    /// 不碰 WFP、拦截和设置。服务端只对 <c>alert.*</c> 精确放行，
+    /// 系统变更命令仍然必须提权。
+    /// </summary>
+    private ServiceResponse? CallAlertService(
+        string command, ServiceRequest request, string actionName)
+    {
+        request.Command = command;
+
+        var response = ServiceClient.TryRequest(
+            request, TimeSpan.FromSeconds(5), out var error);
+
+        if (response is { Ok: true })
+        {
+            return response;
+        }
+
+        var reason = response?.Error ?? error ?? "防护服务没有响应。";
+        LocalLog.Warning(LocalLog.Pick(
+            $"{actionName}失败：{reason}",
+            $"{actionName} failed (command={command})."));
+
+        UiMessageBox.Show(
+            this,
+            $"{actionName}失败：\n\n{reason}\n\n" +
+            Localizer.T("告警操作不需要管理员权限；如果服务没有响应，请确认防护服务正在运行（安装目录里的 WinAppGuardSetup.exe --repair）。"),
+            AppConstants.AppName,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
+
+        return null;
+    }
+
+    /// <summary>
     /// 规则发生变化后的统一收尾：重新读规则，并刷新连接页的阻止状态显示。
     /// 任何修改规则的操作都应该以调用这个方法结束。
     /// </summary>

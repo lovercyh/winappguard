@@ -113,21 +113,21 @@ public sealed partial class MainForm
         {
             Location = new Point(474, 23),
             Width = 104,
-            Text = "确认",
+            Text = "标记已读",
         };
         _idsAckButton.Click += OnIdsAckClick;
 
         _idsSuppressButton = new Button
         {
             Location = new Point(586, 23),
-            Width = 88,
-            Text = "抑制…",
+            Width = 160,
+            Text = "同类告警不再提醒…",
         };
         _idsSuppressButton.Click += OnIdsSuppressClick;
 
         _idsSettingsButton = new Button
         {
-            Location = new Point(682, 23),
+            Location = new Point(754, 23),
             Width = 88,
             Text = "设置…",
         };
@@ -135,7 +135,7 @@ public sealed partial class MainForm
 
         _idsClearButton = new Button
         {
-            Location = new Point(778, 23),
+            Location = new Point(850, 23),
             Width = 88,
             Text = "清空…",
         };
@@ -529,9 +529,9 @@ public sealed partial class MainForm
         Status = alert.Status,
         StatusText = Localizer.T(alert.Status switch
         {
-            "ack" => "已确认",
+            "ack" => "已读",
             "ignored" => "已忽略",
-            _ => "新",
+            _ => "未读",
         }),
         ToolTip = string.IsNullOrEmpty(alert.ProcessPath)
             ? $"{alert.RuleName} · PID {alert.Pid}\n{alert.Evidence}"
@@ -574,7 +574,7 @@ public sealed partial class MainForm
             var collecting = Localizer.T(status.Collecting ? "采集中" : "采集未运行");
 
             text = Localizer.F(
-                "IDS 已开启 · {0}敏感度 · {1} · 只检测、不阻断 · flow {2} · 事件 {3} · 未确认 {4}",
+                "IDS 已开启 · {0}敏感度 · {1} · 只检测、不阻断 · flow {2} · 事件 {3} · 未读 {4}",
                 sensitivity,
                 collecting,
                 status.FlowCount,
@@ -584,6 +584,11 @@ public sealed partial class MainForm
             if (highCount > 0)
             {
                 text += Localizer.F(" · 高危 {0}", highCount);
+            }
+
+            if (status.SuppressionCount > 0)
+            {
+                text += Localizer.F(" · 不再提醒 {0}", status.SuppressionCount);
             }
         }
 
@@ -624,10 +629,10 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
-                ServiceProtocol.Commands.IdsAck,
+            var response = CallAlertService(
+                ServiceProtocol.Commands.AlertIdsAck,
                 new ServiceRequest { IdsAlertId = row.Id },
-                Localizer.T("确认 IDS 告警"));
+                Localizer.T("标记 IDS 告警为已读"));
 
             if (response is null)
             {
@@ -648,7 +653,7 @@ public sealed partial class MainForm
         }
         catch (Exception ex)
         {
-            ShowError("确认 IDS 告警失败", ex, "Failed to acknowledge an IDS alert");
+            ShowError("标记 IDS 告警为已读失败", ex, "Failed to mark an IDS alert as read");
         }
     }
 
@@ -673,23 +678,33 @@ public sealed partial class MainForm
         }
 
         var until = choice.Value.Duration is { } span ? DateTime.UtcNow.Add(span) : (DateTime?)null;
+        var permanent = until is null;
 
         try
         {
-            var response = CallService(
-                ServiceProtocol.Commands.IdsSuppress,
-                new ServiceRequest
+            var request = new ServiceRequest
+            {
+                IdsSuppression = new IdsSuppressionDto
                 {
-                    IdsSuppression = new IdsSuppressionDto
-                    {
-                        RuleId = row.RuleId,
-                        ProcessPath = row.ProcessPath,
-                        ProcessName = row.ProcessName,
-                        Target = row.Target,
-                        UntilUtc = until,
-                    },
+                    RuleId = row.RuleId,
+                    ProcessPath = row.ProcessPath,
+                    ProcessName = row.ProcessName,
+                    Target = row.Target,
+                    UntilUtc = until,
                 },
-                Localizer.T("抑制 IDS 告警"));
+            };
+
+            // 5.2：1 小时 / 24 小时只改告警可见性，免 UAC；
+            // 永久不再提醒会长期改变检测可见性，仍然走提权路径。
+            var response = permanent
+                ? CallService(
+                    ServiceProtocol.Commands.IdsSuppress,
+                    request,
+                    Localizer.T("设置永久不再提醒"))
+                : CallAlertService(
+                    ServiceProtocol.Commands.AlertIdsSuppress,
+                    request,
+                    Localizer.T("设置同类告警不再提醒"));
 
             if (response is null)
             {
@@ -697,22 +712,22 @@ public sealed partial class MainForm
             }
 
             LocalLog.Operation(LocalLog.Pick(
-                $"已抑制 IDS 告警：{row.RuleText} / {row.ProcessName} / {row.Target}",
-                $"IDS alert suppressed (rule={row.RuleId}, process={row.ProcessName})."));
+                $"已设置同类告警不再提醒：{row.RuleText} / {row.ProcessName} / {row.Target}",
+                $"IDS alert muted (rule={row.RuleId}, process={row.ProcessName}, permanent={permanent})."));
 
             ShowTrayBalloon(
-                Localizer.T("已抑制这条 IDS 告警"),
+                Localizer.T("已设置同类告警不再提醒"),
                 Localizer.F("{0} · {1}", row.RuleText, row.ProcessName) + "\n" +
-                (until is null
-                    ? Localizer.T("永久有效，可在设置里取消。")
+                (permanent
+                    ? Localizer.T("永久有效，可在 IDS 设置里取消。")
                     : Localizer.F(
-                        "有效至 {0}。", until.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))));
+                        "有效至 {0}。", until!.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))));
 
             _ = RefreshIdsAsync();
         }
         catch (Exception ex)
         {
-            ShowError("抑制 IDS 告警失败", ex, "Failed to suppress an IDS alert");
+            ShowError("设置同类告警不再提醒失败", ex, "Failed to mute similar IDS alerts");
         }
     }
 
@@ -754,8 +769,8 @@ public sealed partial class MainForm
             if (removed.Count > 0)
             {
                 LocalLog.Operation(LocalLog.Pick(
-                    $"已取消 {removed.Count} 条 IDS 抑制",
-                    $"Removed {removed.Count} IDS suppression(s)."));
+                    $"已恢复 {removed.Count} 条「同类告警不再提醒」",
+                    $"Removed {removed.Count} IDS alert mute(s)."));
             }
 
             ShowTrayBalloon(
@@ -778,7 +793,7 @@ public sealed partial class MainForm
             question: "确定要清空全部 IDS 告警吗？",
             details: new[]
             {
-                new KeyValuePair<string, string>("将要做的", "删除本机保存的 IDS 告警和确认状态"),
+                new KeyValuePair<string, string>("将要做的", "删除本机保存的 IDS 告警和已读状态"),
                 new KeyValuePair<string, string>("不会影响", "规则、白名单、临时锁网和其它记录"),
             },
             warnings: new[]
@@ -795,8 +810,8 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
-                ServiceProtocol.Commands.IdsClear,
+            var response = CallAlertService(
+                ServiceProtocol.Commands.AlertIdsClear,
                 new ServiceRequest(),
                 Localizer.T("清空 IDS 告警"));
 

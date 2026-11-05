@@ -8,7 +8,7 @@ namespace WinAppGuard.Forms;
 ///
 /// 只收集用户选择，真正的写操作由主窗体走提权 IPC（write.ids.configure）。
 /// 设置是机器级的，服务持久化；界面不直接写文件。
-/// 抑制列表也在这里管理：取消选中项后随设置一起提交，只弹一次 UAC。
+/// 「同类告警不再提醒」列表也在这里管理：取消选中项后随设置一起提交，只弹一次 UAC。
 /// </summary>
 internal sealed class IdsSettingsForm : Form
 {
@@ -156,7 +156,7 @@ internal sealed class IdsSettingsForm : Form
 
         var suppressionLabel = new Label
         {
-            Text = Localizer.T("现有抑制（只影响相同规则 / 程序 / 目标）："),
+            Text = Localizer.T("已设置「同类告警不再提醒」："),
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
             Margin = new Padding(3, 6, 12, 3),
@@ -164,7 +164,7 @@ internal sealed class IdsSettingsForm : Form
 
         _removeSuppression = new Button
         {
-            Text = Localizer.T("取消选中抑制"),
+            Text = Localizer.T("取消选中（恢复提醒）"),
             AutoSize = true,
             MinimumSize = new Size(112, 28),
         };

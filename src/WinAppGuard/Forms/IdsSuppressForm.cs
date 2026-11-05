@@ -15,7 +15,7 @@ internal sealed class IdsSuppressForm : Form
 
     private IdsSuppressForm(string rule, string process, string target)
     {
-        Text = Localizer.T("抑制 IDS 告警");
+        Text = Localizer.T("同类告警不再提醒");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false;
@@ -42,7 +42,7 @@ internal sealed class IdsSuppressForm : Form
         var scope = new Label
         {
             Text = Localizer.F(
-                "只抑制相同规则 / 程序 / 目标的告警：\n规则：{0}\n程序：{1}\n目标：{2}",
+                "只对相同规则 / 程序 / 目标的告警不再提醒：\n规则：{0}\n程序：{1}\n目标：{2}",
                 rule, process, target),
             AutoSize = true,
             Dock = DockStyle.Fill,
@@ -63,14 +63,14 @@ internal sealed class IdsSuppressForm : Form
 
         _forever = new RadioButton
         {
-            Text = Localizer.T("永久（可在设置里取消）"),
+            Text = Localizer.T("永久（需要管理员权限）"),
             AutoSize = true,
         };
 
         var hint = new Label
         {
             Text = Localizer.T(
-                "抑制不会删除已有告警，也不会阻断连接；只是不再为同一目标反复提示。"),
+                "不再提醒不会删除已有告警，也不会阻断连接；只是不再为同一目标反复提示。"),
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
             Dock = DockStyle.Fill,
@@ -86,7 +86,7 @@ internal sealed class IdsSuppressForm : Form
 
         var ok = new Button
         {
-            Text = Localizer.T("抑制"),
+            Text = Localizer.T("不再提醒"),
             DialogResult = DialogResult.OK,
             AutoSize = true,
             MinimumSize = new Size(88, 30),

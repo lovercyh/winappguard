@@ -24,6 +24,11 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > The full profile ignores category toggles. Changing categories rebuilds `active.rules` and validates
 > it before Suricata restarts.
 >
+> **5.2 makes alert handling UAC-free and adds capture-adapter selection.** Marking alerts as read,
+> muting similar alerts and clearing alerts in IDS / Anti-network attack no longer prompt for UAC
+> (permanent mute still requires administrator rights). The Anti-network attack page now has
+> read/unread state, and Settings can pin a single capture adapter with automatic fallback.
+>
 > **5.0 adds Anti-network attack (passive detection + manual blocking).** It bundles
 > Suricata 8.0.7 and ET Open, reads `eve.json`, and raises alerts only; after a match the user
 > chooses whether to apply a temporary WFP outbound block. No auto-blocking and no new kernel
@@ -78,16 +83,18 @@ connections** — so you start with *"what is online right now?"* and finish wit
   Windows DNS client are recorded; **no URLs or response contents**; DoH/DoT may be invisible.
 - **Dedicated rules page** — manage every rule the tool has created, even if the program
   is no longer running.
-- **Anti-network attack (5.1, alerts + manual blocking)** — bundles Suricata 8.0.7 and
+- **Anti-network attack (5.2, alerts + manual blocking)** — bundles Suricata 8.0.7 and
   ET Open, reads `eve.json`, and raises alerts only; after a match you choose whether to apply a
   temporary WFP outbound block. The standard profile can enable rule categories independently
   (malware / exploit / DNS / TLS-JA3 / coinminer / phishing / web_client / other; phishing is off
-  by default); the full profile ignores category toggles. No auto-blocking. Suricata lives in
+  by default); the full profile ignores category toggles. Alerts can be marked read or cleared
+  without UAC, and Settings can pin a single capture adapter. No auto-blocking. Suricata lives in
   `WinAppGuard\suricata` and is removed with WinAppGuard.
 - **Flow IDS (detection only, never blocking)** — the *IDS* page is enabled by default and uses
   connection metadata plus DNS records to flag periodic beaconing, port/host scans, lateral
-  movement and DNS anomalies. Alerts stay local for 30 days and can be acknowledged, suppressed
-  or cleared. The IDS itself reads no payloads and never blocks.
+  movement and DNS anomalies. Alerts stay local for 30 days and can be marked read, muted
+  ("mute similar alerts") or cleared. These alert actions need no UAC; changing settings and
+  permanent mutes still do. The IDS itself reads no payloads and never blocks.
 - **Anti-port-scan (4.0)** — the *Protection → Port scan* tab uses Npcap to inspect inbound TCP SYN
   packets and detect port scans. It can temporarily block the source IP for 5 / 10 / 30 / 60
   minutes; automatic blocking is **off by default**, affects new connections only, and never cuts
@@ -258,7 +265,7 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 
 ## Screenshots
 
-| Anti-network attack (5.1, alerts only) | Protection (port scan) |
+| Anti-network attack (5.2, alerts only) | Protection (port scan) |
 |---|---|
 | ![Anti-network attack](docs/screenshots/15-anti-network-attack.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
 | **IDS (detection only)** | **Traffic** |
@@ -275,20 +282,23 @@ WinAppGuard.exe --list-blocked --lang en   # English for this run (default: foll
 Every state-changing action goes through a confirmation dialog that names the exact program,
 its full path, the scope of the change, and the rule that is about to be created or deleted.
 
-![Rule categories (5.1)](docs/screenshots/16-rule-categories.png)
+![Network detection settings (5.2)](docs/screenshots/16-network-settings.png)
 
 Since 5.1, **Anti-network attack → Settings** can enable rules by category. The standard profile
 turns on all 7 categories except phishing by default (12,528 rules in total); phishing has its own
 1,532 rules and is off by default. Switching to the full profile greys out the category toggles.
 A change rebuilds `active.rules` and validates it with `suricata -T`; if validation fails the
-previous rules are kept.
+previous rules are kept. Since 5.2 you can also pin a single capture adapter (automatic by default);
+the status line shows the adapter actually in use.
 
-> The IDS page only raises alerts and never blocks automatically; acknowledging, suppressing,
-> clearing and changing its settings each require one UAC prompt.
+> The IDS page only raises alerts and never blocks automatically; marking alerts read, muting
+> similar alerts and clearing alerts need no UAC. Only changing settings and permanent mutes
+> require one UAC prompt.
 >
 > Since 5.0 there is a new **Anti-network attack** page: passive detection plus user-initiated
 > temporary WFP blocking. Suricata is extracted into `WinAppGuard\suricata` and removed with it.
 > Since 5.1 the standard profile supports rule categories; the full profile ignores them.
+> Since 5.2 the Anti-network attack page has read/unread state and a capture-adapter selector.
 
 ## Download (only two files from Releases)
 

@@ -17,6 +17,7 @@ public sealed partial class MainForm
     private Label _ndNoticeLabel = null!;
     private Label _ndStatusLabel = null!;
     private Button _ndRefreshButton = null!;
+    private Button _ndAckButton = null!;
     private Button _ndBlockButton = null!;
     private Button _ndReleaseButton = null!;
     private Button _ndClearButton = null!;
@@ -64,6 +65,7 @@ public sealed partial class MainForm
         _ndStatusLabel = new Label
         {
             AutoSize = false,
+            AutoEllipsis = true,
             Dock = DockStyle.Top,
             Height = 22,
             Text = Localizer.T("反网络攻击状态未知。"),
@@ -81,6 +83,9 @@ public sealed partial class MainForm
         _ndRefreshButton = new Button { Text = Localizer.T("刷新"), Width = 78 };
         _ndRefreshButton.Click += (_, _) => RefreshNetworkDetection();
 
+        _ndAckButton = new Button { Text = Localizer.T("标记已读"), Width = 96, Enabled = false };
+        _ndAckButton.Click += OnNetworkAckClick;
+
         _ndBlockButton = new Button { Text = Localizer.T("拦截…"), Width = 88, Enabled = false };
         _ndBlockButton.Click += OnNetworkBlockClick;
 
@@ -94,6 +99,7 @@ public sealed partial class MainForm
         _ndSettingsButton.Click += OnNetworkSettingsClick;
 
         actions.Controls.Add(_ndRefreshButton);
+        actions.Controls.Add(_ndAckButton);
         actions.Controls.Add(_ndBlockButton);
         actions.Controls.Add(_ndReleaseButton);
         actions.Controls.Add(_ndClearButton);
@@ -121,31 +127,37 @@ public sealed partial class MainForm
         {
             DataPropertyName = nameof(NdRow.TimeText),
             HeaderText = Localizer.T("时间"),
-            Width = 130,
+            Width = 118,
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             DataPropertyName = nameof(NdRow.SeverityText),
             HeaderText = Localizer.T("级别"),
-            Width = 60,
+            Width = 68,
+        });
+        _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            DataPropertyName = nameof(NdRow.StatusText),
+            HeaderText = Localizer.T("状态"),
+            Width = 55,
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             DataPropertyName = nameof(NdRow.Signature),
             HeaderText = Localizer.T("规则"),
-            Width = 300,
+            Width = 270,
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             DataPropertyName = nameof(NdRow.TargetText),
             HeaderText = Localizer.T("远端"),
-            Width = 180,
+            Width = 170,
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             DataPropertyName = nameof(NdRow.ProcessText),
             HeaderText = Localizer.T("进程"),
-            Width = 150,
+            Width = 140,
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
@@ -283,6 +295,12 @@ public sealed partial class MainForm
                 Id = alert.Id,
                 TimeText = alert.TimeUtc.ToLocalTime().ToString("MM-dd HH:mm:ss"),
                 SeverityText = alert.Severity,
+                StatusText = Localizer.T(alert.Status switch
+                {
+                    "ack" => "已读",
+                    "ignored" => "已忽略",
+                    _ => "未读",
+                }),
                 Signature = alert.Signature,
                 TargetText = string.IsNullOrEmpty(alert.RemoteAddress)
                     ? string.Empty
@@ -299,7 +317,7 @@ public sealed partial class MainForm
 
         var signature = string.Join(
             "|",
-            rows.Take(100).Select(row => $"{row.Id}/{row.BlockStateText}"));
+            rows.Take(100).Select(row => $"{row.Id}/{row.StatusText}/{row.BlockStateText}"));
 
         if (!string.Equals(signature, _ndSignature, StringComparison.Ordinal))
         {
@@ -350,7 +368,7 @@ public sealed partial class MainForm
         else
         {
             _ndStatusLabel.Text = Localizer.F(
-                "反网络攻击：{0}；Suricata：{1}；规则：{2}（{3}）；告警：{4}（未确认 {5}）；活动拦截：{6}",
+                "反网络攻击：{0}；Suricata：{1}；规则：{2}（{3}）；告警：{4}（未读 {5}）；活动拦截：{6}",
                 Localizer.T(status.Enabled ? "已开启" : "已关闭"),
                 Localizer.T(status.Running ? "运行中" : "未运行"),
                 status.RuleCount,
@@ -358,6 +376,17 @@ public sealed partial class MainForm
                 status.AlertsTotal,
                 status.AlertsNew,
                 status.ActiveBlocks);
+
+            if (!string.IsNullOrWhiteSpace(status.CaptureDeviceName))
+            {
+                _ndStatusLabel.Text += Localizer.F(
+                    "；监听：{0}", status.CaptureDeviceName);
+            }
+
+            if (status.CaptureDeviceFallback)
+            {
+                _ndStatusLabel.Text += "（" + Localizer.T("所选网卡不可用，已回退到自动") + "）";
+            }
 
             if (!string.IsNullOrWhiteSpace(status.LastError))
             {
@@ -414,7 +443,10 @@ public sealed partial class MainForm
 
     private void UpdateNetworkButtons()
     {
-        _ndBlockButton.Enabled = _ndGrid.CurrentRow?.DataBoundItem is NdRow;
+        var alert = SelectedNetworkAlert();
+
+        _ndAckButton.Enabled = alert is { Status: "new" };
+        _ndBlockButton.Enabled = alert is not null;
         _ndReleaseButton.Enabled = _ndBlocks.SelectedIndex >= 0;
     }
 
@@ -422,6 +454,29 @@ public sealed partial class MainForm
         => _ndGrid.CurrentRow?.DataBoundItem is NdRow row
             ? _ndAlerts.FirstOrDefault(alert => string.Equals(alert.Id, row.Id, StringComparison.Ordinal))
             : null;
+
+    private void OnNetworkAckClick(object? sender, EventArgs e)
+    {
+        var alert = SelectedNetworkAlert();
+
+        if (alert is null || alert.Status != "new")
+        {
+            return;
+        }
+
+        var response = CallAlertService(
+            ServiceProtocol.Commands.AlertNetworkAck,
+            new ServiceRequest { NetworkAlertId = alert.Id },
+            Localizer.T("标记反网络攻击告警为已读"));
+
+        if (response is null)
+        {
+            return;
+        }
+
+        alert.Status = "ack";
+        RefreshNetworkDetection();
+    }
 
     private void OnNetworkBlockClick(object? sender, EventArgs e)
     {
@@ -556,7 +611,7 @@ public sealed partial class MainForm
             Localizer.T("确定要清空所有反网络攻击告警吗？"),
             new[]
             {
-                new KeyValuePair<string, string>("影响", "删除告警历史和未确认状态，不删除活动拦截"),
+                new KeyValuePair<string, string>("影响", "删除告警历史和未读状态，不删除活动拦截"),
             },
             new[] { "此操作不可撤销。" },
             Localizer.T("清空告警"));
@@ -566,18 +621,13 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = ElevatedClient.TryRequest(
-            new ServiceRequest { Command = ServiceProtocol.Commands.NetworkDetectionClear },
-            out var error);
+        var response = CallAlertService(
+            ServiceProtocol.Commands.AlertNetworkClear,
+            new ServiceRequest(),
+            Localizer.T("清空反网络攻击告警"));
 
-        if (response is not { Ok: true })
+        if (response is null)
         {
-            UiMessageBox.Show(
-                DialogOwner,
-                error ?? response?.Error ?? Localizer.T("清空失败。"),
-                Localizer.T("清空失败"),
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
             return;
         }
 
@@ -620,6 +670,7 @@ public sealed partial class MainForm
         public string Id { get; init; } = string.Empty;
         public string TimeText { get; init; } = string.Empty;
         public string SeverityText { get; init; } = string.Empty;
+        public string StatusText { get; init; } = string.Empty;
         public string Signature { get; init; } = string.Empty;
         public string TargetText { get; init; } = string.Empty;
         public string ProcessText { get; init; } = string.Empty;

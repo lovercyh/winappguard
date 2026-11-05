@@ -151,6 +151,7 @@ internal static class NetworkDetectionHost
         bool enabled;
         string profile;
         List<string> categories;
+        string captureDeviceId;
 
         var requestedCategories = (dto.EnabledRuleCategories ?? new List<string>())
             .Where(NetworkRuleCategories.IsKnown)
@@ -182,10 +183,12 @@ internal static class NetworkDetectionHost
                 ? "full"
                 : "standard";
             _state.Settings.EnabledRuleCategories = requestedCategories;
+            _state.Settings.CaptureDeviceId = dto.CaptureDeviceId?.Trim() ?? string.Empty;
 
             enabled = _state.Settings.Enabled;
             profile = _state.Settings.RuleProfile;
             categories = requestedCategories.ToList();
+            captureDeviceId = _state.Settings.CaptureDeviceId;
         }
 
         PersistState();
@@ -194,7 +197,7 @@ internal static class NetworkDetectionHost
         {
             StartSuricata();
             StartReader();
-            SuricataHost.Reload(profile, categories);
+            SuricataHost.Reload(profile, categories, captureDeviceId);
         }
         else
         {
@@ -205,6 +208,7 @@ internal static class NetworkDetectionHost
         ServiceLog.Operation(
             "WAG-ND-023",
             $"Network detection configured: enabled={enabled}, profile={profile}, " +
+            $"capture={captureDeviceId}, " +
             $"retention={_state.Settings.RetentionDays}d, notify={_state.Settings.Notify}.");
 
         lock (Gate)
@@ -398,6 +402,7 @@ internal static class NetworkDetectionHost
     {
         string profile;
         List<string> categories;
+        string captureDeviceId;
 
         lock (Gate)
         {
@@ -406,9 +411,10 @@ internal static class NetworkDetectionHost
                 .Where(NetworkRuleCategories.IsKnown)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            captureDeviceId = _state.Settings.CaptureDeviceId;
         }
 
-        SuricataHost.Start(enabled: true, profile, categories);
+        SuricataHost.Start(enabled: true, profile, categories, captureDeviceId);
     }
 
     private static void StartReader()
@@ -577,6 +583,9 @@ internal static class NetworkDetectionHost
             LastAlertUtc = _alerts.Count > 0 ? _alerts[0].TimeUtc : null,
             ActiveBlocks = blocks.Count,
             EvePath = ServicePaths.SuricataEveFile,
+            CaptureDeviceName = SuricataHost.CaptureDeviceName,
+            CaptureDeviceFallback = SuricataHost.CaptureFallback,
+            CaptureDeviceNote = SuricataHost.CaptureNote,
         };
     }
 
@@ -637,6 +646,7 @@ internal static class NetworkDetectionHost
             Notify = settings.Notify,
             RetentionDays = settings.RetentionDays,
             EnabledRuleCategories = settings.EnabledRuleCategories.ToList(),
+            CaptureDeviceId = settings.CaptureDeviceId,
         };
 
     private static NetworkBlockDto ToDto(NetworkBlock block)

@@ -27,6 +27,27 @@ internal static class PathRegistration
     internal static bool TryRemove(string directory, out string? error)
         => Update(directory, add: false, out error);
 
+    /// <summary>只读校验：Machine PATH 里是否真的有这个目录。</summary>
+    internal static bool IsRegistered(string directory, out string? error)
+    {
+        error = null;
+
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(EnvironmentKey);
+            var raw = key?.GetValue(
+                "Path", string.Empty, RegistryValueOptions.DoNotExpandEnvironmentNames)
+                as string ?? string.Empty;
+
+            return EnvironmentPath.Contains(raw, directory);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private static bool Update(string directory, bool add, out string? error)
     {
         error = null;

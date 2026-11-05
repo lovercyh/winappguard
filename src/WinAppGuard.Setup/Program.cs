@@ -200,6 +200,7 @@ internal static class Program
         CopyPayload(payload);
         InstallSuricataAssets(payload);
         Bilingual.Say($"已复制到：{InstallDirectory}", $"Copied to: {InstallDirectory}");
+        ReportPathRegistration();
 
         // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
@@ -259,7 +260,6 @@ internal static class Program
         TryRecoverLegacyStrictMode();
 
         ReportNpcapProbe();
-        ReportPathRegistration();
 
         Bilingual.Say("服务已启动。", "Service started.");
         Console.WriteLine();
@@ -473,11 +473,34 @@ internal static class Program
     /// </summary>
     private static void ReportPathRegistration()
     {
-        if (PathRegistration.TryAdd(InstallDirectory, out var error))
+        var added = PathRegistration.TryAdd(InstallDirectory, out var error);
+        string? verifyError = null;
+        var verified = added && PathRegistration.IsRegistered(InstallDirectory, out verifyError);
+
+        if (!verified && string.IsNullOrWhiteSpace(error))
+        {
+            error = verifyError ?? "写入后没有读回 PATH 项。";
+        }
+
+        try
+        {
+            var logDirectory = Path.Combine(ServicePaths.DataDirectory, "logs");
+            Directory.CreateDirectory(logDirectory);
+            File.AppendAllText(
+                Path.Combine(logDirectory, "setup-path.log"),
+                $"{DateTime.UtcNow:O}\tadd\t{InstallDirectory}\t" +
+                $"added={added}\tverified={verified}\terror={error ?? "-"}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+            // 诊断日志写不了不影响安装。
+        }
+
+        if (verified)
         {
             Bilingual.Say(
-                $"已把安装目录加入系统 PATH：{InstallDirectory}（重开终端后可直接运行 WinAppGuard.exe）。",
-                $"Added the install folder to the system PATH: {InstallDirectory} (reopen the terminal to use WinAppGuard.exe directly).");
+                $"已把安装目录加入系统 PATH：{InstallDirectory}（重开终端后可直接运行 WinAppGuard）。",
+                $"Added the install folder to the system PATH: {InstallDirectory} (reopen the terminal to use WinAppGuard directly).");
             return;
         }
 
@@ -533,6 +556,7 @@ internal static class Program
         Directory.CreateDirectory(InstallDirectory);
         CopyPayload(payload);
         InstallSuricataAssets(payload);
+        ReportPathRegistration();
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
@@ -591,7 +615,6 @@ internal static class Program
         }
 
         ReportNpcapProbe();
-        ReportPathRegistration();
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
             ? Bilingual.One("修复完成，服务正在运行。", "Repair completed; the service is running.")

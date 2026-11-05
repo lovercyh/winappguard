@@ -61,9 +61,10 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
   字节口径是 IP 载荷，含重传、不含回环；归属不到的流量单列为「未归属」。
 - **DNS 查询记录**：新增「DNS」页，显示最近查询的**域名、PID、程序、结果**；
   只记录系统 DNS 客户端看到的域名，**不记录 URL、不记录响应内容**；DoH/DoT 可能看不到。
-- **反网络攻击（5.0，只告警 + 手动阻断）**：随包 Suricata 8.0.7 + ET Open，只读 `eve.json` 产生告警；
-  命中后由你手动选择 WFP 临时阻断，不自动拦截；Suricata 解包在 `WinAppGuard\suricata`，
-  卸载 WinAppGuard 时一并删除。
+- **反网络攻击（5.1，只告警 + 手动阻断）**：随包 Suricata 8.0.7 + ET Open，只读 `eve.json` 产生告警；
+  标准档可按 **malware / exploit / DNS / TLS·JA3 / coinminer / phishing / web_client / 其他** 分类启用规则
+  （钓鱼默认关闭，全量档忽略分类）；命中后由你手动选择 WFP 临时阻断，不自动拦截；
+  Suricata 解包在 `WinAppGuard\suricata`，卸载 WinAppGuard 时一并删除。
 - **IDS（只检测、不阻断）**：「防护 → IDS」默认开启，用连接元数据与 DNS 检测
   **周期性外联、端口/主机扫描、内网横向、DNS 异常**；告警本地保留 30 天，
   可确认 / 抑制 / 清空。IDS 自身不读取载荷，也不自动阻断。
@@ -205,7 +206,7 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 
 ## 界面
 
-| 反网络攻击（5.0，只告警） | 防护（端口扫描） |
+| 反网络攻击（5.1，只告警） | 防护（端口扫描） |
 |---|---|
 | ![反网络攻击](docs/screenshots/15-anti-network-attack.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
 | **IDS（只检测、不阻断）** | **流量** |
@@ -222,10 +223,17 @@ WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随�
 所有会改动系统状态的操作都要先过确认框。确认框里会写明：程序名、**完整路径**、
 影响范围、**即将创建或删除的规则名**。
 
+![规则分类设置（5.1）](docs/screenshots/16-rule-categories.png)
+
+5.1 起「反网络攻击 → 设置」可以按分类启用规则：标准档默认开启除钓鱼外的 7 个分类
+（合计 12,528 条），钓鱼单独 1,532 条、默认关闭；切到全量档时分类开关自动置灰。
+切换后先重新生成 `active.rules` 并用 `suricata -T` 校验，校验失败会保留旧规则。
+
 > IDS 页只产生告警，不会自动阻断；确认 / 抑制 / 清空和改设置同样要过一次 UAC。
 >
 > 5.0 起新增「反网络攻击」页：被动检测 + 用户手动 WFP 临时阻断；
 > Suricata 随包解包到 WinAppGuard\suricata，卸载时一并删除。
+> 5.1 起标准档支持按规则分类启用，全量档忽略分类开关。
 
 从 [Releases](https://github.com/lovercyh/winappguard/releases) 下载：
 

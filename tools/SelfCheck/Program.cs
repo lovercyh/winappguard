@@ -1705,6 +1705,7 @@ internal static class Program
         }
 
         RenderBlockConfirmSample(outputDir);
+        RenderRuleCategoriesSample(outputDir);
 
         W();
         W("完成。改完界面重跑一次本模式，把生成的图提交上去即可。");
@@ -3080,6 +3081,51 @@ internal static class Program
         catch (Exception ex)
         {
             W($"！（渲染确认框失败：{ex.Message}）");
+        }
+    }
+
+    /// <summary>5.1：渲染「反网络攻击设置」的规则分类开关。</summary>
+    private static void RenderRuleCategoriesSample(string outputDir)
+    {
+        try
+        {
+            var settings = new NetworkDetectionSettingsDto
+            {
+                Enabled = true,
+                RuleProfile = "standard",
+                Notify = true,
+                RetentionDays = 30,
+                EnabledRuleCategories = NetworkRuleCategories.DefaultEnabled.ToList(),
+            };
+
+            // 构造函数是私有的（正常只能通过模态的 Ask 用它），
+            // 这里用反射把它建出来、非模态显示，才能截图。
+            var constructor = typeof(NetworkDetectionSettingsForm).GetConstructor(
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                new[] { typeof(NetworkDetectionSettingsDto) },
+                modifiers: null);
+
+            if (constructor?.Invoke(new object[] { settings })
+                is not NetworkDetectionSettingsForm dialog)
+            {
+                W("！（找不到 NetworkDetectionSettingsForm 的构造函数，跳过 16 的渲染）");
+                return;
+            }
+
+            dialog.StartPosition = FormStartPosition.Manual;
+            dialog.Location = new Point(0, 0);
+            dialog.Show();
+            Application.DoEvents();
+
+            RenderFormTo(dialog, Path.Combine(outputDir, "16-rule-categories.png"));
+
+            dialog.Close();
+            dialog.Dispose();
+        }
+        catch (Exception ex)
+        {
+            W($"！（渲染规则分类设置失败：{ex.Message}）");
         }
     }
 

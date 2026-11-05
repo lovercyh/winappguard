@@ -28,6 +28,9 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
 > 不再弹 UAC（永久不再提醒仍要求管理员）；反网络攻击页补上「标记已读」和已读/未读状态。
 > 「反网络攻击 → 设置」可选择单块监听网卡，所选网卡不可用时自动回退。
 >
+> **5.3 CLI 扩展**：只读查询、JSON、精确解除 / 限时阻止、规则导入导出、反网络攻击命令和诊断。
+> 只读命令只要求所有者账户；写命令仍要求管理员；批量 / 不可逆操作需要 --yes。
+>
 > **5.0 新增反网络攻击（可选手动阻断）**：随包 Suricata 8.0.7 + ET Open，
 > 只读 eve.json 产生告警，命中后由用户手动选择 WFP 临时阻断；
 > 不自动拦截、不新增内核驱动、HTTPS 正文不可见；安装 Npcap 时启用 WinPcap 兼容模式（Suricata 需要 wpcap.dll）。
@@ -65,7 +68,7 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
   字节口径是 IP 载荷，含重传、不含回环；归属不到的流量单列为「未归属」。
 - **DNS 查询记录**：新增「DNS」页，显示最近查询的**域名、PID、程序、结果**；
   只记录系统 DNS 客户端看到的域名，**不记录 URL、不记录响应内容**；DoH/DoT 可能看不到。
-- **反网络攻击（5.2，只告警 + 手动阻断）**：随包 Suricata 8.0.7 + ET Open，只读 `eve.json` 产生告警；
+- **反网络攻击（5.3，只告警 + 手动阻断）**：随包 Suricata 8.0.7 + ET Open，只读 `eve.json` 产生告警；
   标准档可按 **malware / exploit / DNS / TLS·JA3 / coinminer / phishing / web_client / 其他** 分类启用规则
   （钓鱼默认关闭，全量档忽略分类）；命中后由你手动选择 WFP 临时阻断，不自动拦截；
   告警可「标记已读 / 清空」，不需要 UAC；设置里可选择单块监听网卡；
@@ -193,26 +196,38 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
 
 ## 命令行模式
 
-想脚本化 / 批量部署时可以直接用命令行（**需要管理员权限**，包括 `--help`）：
+只读查询不需要管理员；写规则、导入、拦截等仍然需要管理员。完整命令见
+[`docs/5.3-CLI.md`](docs/5.3-CLI.md)。
 
 ```powershell
-WinAppGuard.exe --block "C:\Tools\a.exe"   # 阻止某个程序联网（可重复执行，幂等）
-WinAppGuard.exe --list-blocked             # 列出所有「阻止」规则
-WinAppGuard.exe --unblock-all              # 只预览要删什么，什么都不删
-WinAppGuard.exe --unblock-all --yes        # 真的删掉
-WinAppGuard.exe --help                     # 用法
-WinAppGuard.exe --list-blocked --lang en   # 本次使用英文（默认跟随界面语言）
+WinAppGuard.exe --status --json                    # 服务 / 规则 / 检测状态
+WinAppGuard.exe --list-rules --json                # 所有规则
+WinAppGuard.exe --block "C:\Tools\a.exe"           # 永久阻止
+WinAppGuard.exe --block "C:\Tools\a.exe" --minutes 30
+WinAppGuard.exe --block @C:\list.txt --dry-run     # 批量预览
+WinAppGuard.exe --unblock "C:\Tools\a.exe"         # 只解除这一个程序
+WinAppGuard.exe --export-rules rules.json          # 导出阻止规则
+WinAppGuard.exe --import-rules rules.json --dry-run
+WinAppGuard.exe --network-status --json            # 反网络攻击状态
+WinAppGuard.exe --network-alerts --limit 20 --json
+WinAppGuard.exe --network-ack <告警 id>            # 标记已读，不需要 UAC
+WinAppGuard.exe --network-block <id> --scope ip-port --minutes 10 --yes
+WinAppGuard.exe --audit-tail --limit 50 --json
+WinAppGuard.exe --doctor --json                    # 只读诊断
+WinAppGuard.exe --help
 ```
 
+- **权限**：只读命令只要求所有者账户；`--block` / `--unblock` / `--import-rules` / `--network-block` 等写命令要求管理员。
 - **语言**：默认跟随界面已生效的语言；`--lang zh|en|auto` 只影响本次命令，不写任何设置。
-- **退出码**：`0` 成功 / `1` 参数错误或未确认 / `2` 执行失败 / `3` 缺少管理员权限。
-- `--list-blocked` **一行一条**、制表符分隔，`#` 开头的是说明行 —— 便于脚本解析。
-- 这些命令**不弹确认框**（命令行参数本身就是明确指令）；**图形界面里的操作仍然每条都要确认**。
+- **退出码**：`0` 成功 / `1` 参数错误或未确认 / `2` 执行失败 / `3` 缺少管理员权限 / `4` 未找到。
+- **输出**：默认保持人读格式；加 `--json`（或 `--format json`）得到固定英文 key 的机器可读输出。
+- **安全**：命令行本身就是明确指令，不弹确认框；批量 / 不可逆操作要求 `--yes`，可先用 `--dry-run` 预览。
+  图形界面里的操作仍然每条都要确认。
 - 图形界面启动时会先出现约 0.5 秒的控制台窗口（控制台子系统换来的同步 CLI），随后自动收起。
 
 ## 界面
 
-| 反网络攻击（5.2，只告警） | 防护（端口扫描） |
+| 反网络攻击（5.3，只告警） | 防护（端口扫描） |
 |---|---|
 | ![反网络攻击](docs/screenshots/15-anti-network-attack.png) | ![防护（端口扫描）](docs/screenshots/09-protection.png) |
 | **IDS（只检测、不阻断）** | **流量** |

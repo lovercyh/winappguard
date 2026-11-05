@@ -29,6 +29,11 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > (permanent mute still requires administrator rights). The Anti-network attack page now has
 > read/unread state, and Settings can pin a single capture adapter with automatic fallback.
 >
+> **5.3 extends the CLI.** Read-only queries, JSON output, targeted unblock / timed blocks,
+> rule import/export, anti-network attack commands and diagnostics. Read-only commands only need
+> the owner account; write commands still need administrator rights; batch/irreversible actions
+> require `--yes`.
+>
 > **5.0 adds Anti-network attack (passive detection + manual blocking).** It bundles
 > Suricata 8.0.7 and ET Open, reads `eve.json`, and raises alerts only; after a match the user
 > chooses whether to apply a temporary WFP outbound block. No auto-blocking and no new kernel
@@ -83,7 +88,7 @@ connections** — so you start with *"what is online right now?"* and finish wit
   Windows DNS client are recorded; **no URLs or response contents**; DoH/DoT may be invisible.
 - **Dedicated rules page** — manage every rule the tool has created, even if the program
   is no longer running.
-- **Anti-network attack (5.2, alerts + manual blocking)** — bundles Suricata 8.0.7 and
+- **Anti-network attack (5.3, alerts + manual blocking)** — bundles Suricata 8.0.7 and
   ET Open, reads `eve.json`, and raises alerts only; after a match you choose whether to apply a
   temporary WFP outbound block. The standard profile can enable rule categories independently
   (malware / exploit / DNS / TLS-JA3 / coinminer / phishing / web_client / other; phishing is off
@@ -238,34 +243,43 @@ lookup. Turn it off and the tool reads only the local cache.
 
 ## Command line
 
-For scripting and batch deployment (**administrator rights required**, including `--help`):
+Read-only queries need no administrator rights; writing rules, importing and blocking still do.
+See [`docs/5.3-CLI.md`](docs/5.3-CLI.md) for the full list.
 
 ```powershell
-WinAppGuard.exe --block "C:\Tools\a.exe"   # block a program (idempotent)
-WinAppGuard.exe --list-blocked             # list every block rule
-WinAppGuard.exe --unblock-all              # preview only; deletes nothing
-WinAppGuard.exe --unblock-all --yes        # actually delete
-WinAppGuard.exe --migrate                  # migrate 1.x rules and print a report
-WinAppGuard.exe --recover                  # remove this tool's WFP objects and 1.x leftovers
-WinAppGuard.exe --help                     # usage
-WinAppGuard.exe --list-blocked --lang en   # English for this run (default: follow the UI)
+WinAppGuard.exe --status --json                    # service / rules / detection status
+WinAppGuard.exe --list-rules --json                # every rule
+WinAppGuard.exe --block "C:\Tools\a.exe"           # permanent block
+WinAppGuard.exe --block "C:\Tools\a.exe" --minutes 30
+WinAppGuard.exe --block @C:\list.txt --dry-run     # batch preview
+WinAppGuard.exe --unblock "C:\Tools\a.exe"         # remove one program's block
+WinAppGuard.exe --export-rules rules.json          # export block rules
+WinAppGuard.exe --import-rules rules.json --dry-run
+WinAppGuard.exe --network-status --json            # anti-network attack status
+WinAppGuard.exe --network-alerts --limit 20 --json
+WinAppGuard.exe --network-ack <alert id>           # mark read, no UAC
+WinAppGuard.exe --network-block <id> --scope ip-port --minutes 10 --yes
+WinAppGuard.exe --audit-tail --limit 50 --json
+WinAppGuard.exe --doctor --json                    # read-only diagnostics
+WinAppGuard.exe --help
 ```
 
+- **Permissions**: read-only commands only need the owner account; `--block` / `--unblock` /
+  `--import-rules` / `--network-block` and other write commands need administrator rights.
 - **Language**: follows the language the UI is actually running in; `--lang zh|en|auto` affects only
   this invocation and writes no settings.
-- **Exit codes**: `0` success / `1` bad arguments or not confirmed / `2` failed / `3` not elevated.
-- `--list-blocked` prints **one rule per line**, tab-separated, with `#` comment lines — easy to parse.
-- Since 3.1, `--block`, `--list-blocked` and `--unblock-all` go through **signed IPC** to the
-  protection service. `--migrate` and `--recover` remain administrator recovery commands that
-  work directly with WFP.
-- These commands **never show a confirmation dialog** (the command line *is* the instruction).
-  Operations in the GUI still ask every time.
+- **Exit codes**: `0` success / `1` bad arguments or not confirmed / `2` failed / `3` not elevated /
+  `4` not found.
+- **Output**: human-readable by default; `--json` (or `--format json`) gives machine-readable output
+  with stable English keys.
+- **Safety**: the command line *is* the instruction, so these commands never prompt; batch or
+  irreversible actions require `--yes` and support `--dry-run`. GUI actions still ask every time.
 - Starting the GUI briefly shows a console window (~0.5 s) — the price of a synchronous CLI —
   then it closes itself.
 
 ## Screenshots
 
-| Anti-network attack (5.2, alerts only) | Protection (port scan) |
+| Anti-network attack (5.3, alerts only) | Protection (port scan) |
 |---|---|
 | ![Anti-network attack](docs/screenshots/15-anti-network-attack.png) | ![Protection (port scan)](docs/screenshots/09-protection.png) |
 | **IDS (detection only)** | **Traffic** |

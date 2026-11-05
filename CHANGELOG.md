@@ -14,6 +14,32 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
+## [5.3] - 2026-11-05
+
+> CLI 扩展：只读查询、JSON、精确规则操作、反网络攻击命令和诊断。
+
+### 新增
+
+- 只读命令：`--version`、`--status`、`--service-status`、`--list-rules`、`--export-rules`、`--network-status`、`--network-alerts`、`--audit-tail`、`--doctor`、`--log-path`。
+- JSON 输出：`--json` / `--format json`，带 `schemaVersion`，错误也输出 JSON。
+- 精确规则操作：`--unblock <路径|--name>`、`--block --minutes` / `--until-reboot`、`--block @列表 --yes`。
+- 规则导入 / 导出：`--export-rules`、`--import-rules [--dry-run] [--yes]`。
+- 反网络攻击：`--network-status`、`--network-alerts`、`--network-ack`、`--network-clear`、`--network-block`、`--network-unblock`、`--network-unblock-all`、`--network-set-adapter`、`--network-set-categories`。
+- 诊断：`--doctor`、`--audit-tail`、`--log-path`。
+- `--dry-run`、`--quiet`、`--require-match`、`--limit`、`--unread` 等通用选项。
+
+### 变更
+
+- 只读命令只要求所有者账户，不再要求管理员；写命令仍然要求管理员。
+- 批量 / 不可逆操作要求 `--yes`；`--dry-run` 可先预览。
+- 退出码新增 `4`（未找到）；已有 `0/1/2/3` 含义不变。
+
+### 说明
+
+- JSON 的 key 固定英文，不做本地化；人读输出仍跟随 `--lang`。
+- 仍然不自动拦截、不自动更新规则；所有写操作都是显式命令。
+- `--recover` / `--migrate` 仍是管理员恢复命令。
+
 ## [5.2] - 2026-11-05
 
 > 告警处置免 UAC；反网络攻击页补已读状态；可选择监听网卡。

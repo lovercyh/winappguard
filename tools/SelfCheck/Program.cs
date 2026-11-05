@@ -17653,6 +17653,10 @@ internal static class Program
         CheckAssertion(results, "--block 后面多写了参数 → 参数错误（不静默忽略）",
             CommandLine.Parse(new[] { "--block", @"C:\a.exe", "--yes" }).Kind == CommandKind.Invalid);
 
+        var batch = CommandLine.Parse(new[] { "--block", @"@C:\list.txt", "--yes" });
+        CheckAssertion(results, "--block @列表 --yes",
+            batch.Kind == CommandKind.Block && batch.ProgramPath == @"@C:\list.txt" && batch.Confirmed);
+
         // ---------------- 3. --list-blocked ----------------
         W();
         W("===== 3. --list-blocked =====");
@@ -17755,6 +17759,116 @@ internal static class Program
             && CliText.Usage.Contains("--unblock-all") && CliText.Usage.Contains("--help"));
         CheckAssertion(results, "帮助里写清了退出码", CliText.Usage.Contains("退出码"));
         CheckAssertion(results, "帮助里写清了确认框的例外", CliText.Usage.Contains("不会弹确认框"));
+
+        // ---------------- 7. 5.3 新命令 ----------------
+        W();
+        W("===== 7. 5.3 CLI 新命令 =====");
+
+        CheckAssertion(results, "--version",
+            CommandLine.Parse(new[] { "--version" }).Kind == CommandKind.Version);
+
+        var statusJson = CommandLine.Parse(new[] { "--status", "--json" });
+        CheckAssertion(results, "--status --json",
+            statusJson.Kind == CommandKind.Status && statusJson.Json);
+
+        var formatJson = CommandLine.Parse(new[] { "--status", "--format", "json" });
+        CheckAssertion(results, "--format json 等价于 --json", formatJson.Json);
+
+        var listRules = CommandLine.Parse(
+            new[] { "--list-rules", "--action", "BLOCK", "--json" });
+        CheckAssertion(results, "--list-rules --action 归一化",
+            listRules.Kind == CommandKind.ListRules
+            && listRules.Action == "block"
+            && listRules.Json);
+
+        var unblockPath = CommandLine.Parse(
+            new[] { "--unblock", @"C:\Tools\a.exe", "--dry-run" });
+        CheckAssertion(results, "--unblock <path> --dry-run",
+            unblockPath.Kind == CommandKind.Unblock
+            && unblockPath.ProgramPath == @"C:\Tools\a.exe"
+            && unblockPath.DryRun);
+
+        var unblockName = CommandLine.Parse(
+            new[] { "--unblock", "--name", "AppGuard_Block_a", "--require-match" });
+        CheckAssertion(results, "--unblock --name --require-match",
+            unblockName.Kind == CommandKind.Unblock
+            && unblockName.RuleName == "AppGuard_Block_a"
+            && unblockName.RequireMatch);
+
+        CheckAssertion(results, "--unblock 路径和 --name 不能同时给",
+            CommandLine.Parse(new[] { "--unblock", @"C:\a.exe", "--name", "x" }).Kind
+            == CommandKind.Invalid);
+
+        var blockMinutes = CommandLine.Parse(
+            new[] { "--block", @"C:\Tools\a.exe", "--minutes", "30" });
+        CheckAssertion(results, "--block --minutes",
+            blockMinutes.Kind == CommandKind.Block && blockMinutes.Minutes == 30);
+
+        var blockUntilReboot = CommandLine.Parse(
+            new[] { "--block", @"C:\Tools\a.exe", "--until-reboot" });
+        CheckAssertion(results, "--block --until-reboot", blockUntilReboot.UntilReboot);
+
+        CheckAssertion(results, "--minutes 和 --until-reboot 互斥",
+            CommandLine.Parse(
+                new[] { "--block", @"C:\a.exe", "--minutes", "30", "--until-reboot" }).Kind
+            == CommandKind.Invalid);
+
+        var exportRules = CommandLine.Parse(
+            new[] { "--export-rules", "rules.json", "--action", "ALLOW" });
+        CheckAssertion(results, "--export-rules --action 归一化",
+            exportRules.Kind == CommandKind.ExportRules && exportRules.Action == "allow");
+
+        var importRules = CommandLine.Parse(
+            new[] { "--import-rules", "rules.json", "--action", "block", "--dry-run" });
+        CheckAssertion(results, "--import-rules --dry-run",
+            importRules.Kind == CommandKind.ImportRules && importRules.DryRun);
+
+        CheckAssertion(results, "--import-rules --yes",
+            CommandLine.Parse(new[] { "--import-rules", "rules.json", "--yes" }).Confirmed);
+
+        var networkAlerts = CommandLine.Parse(
+            new[] { "--network-alerts", "--limit", "5", "--unread", "--json" });
+        CheckAssertion(results, "--network-alerts --limit --unread",
+            networkAlerts.Kind == CommandKind.NetworkAlerts
+            && networkAlerts.Limit == 5
+            && networkAlerts.UnreadOnly
+            && networkAlerts.Json);
+
+        var networkBlock = CommandLine.Parse(
+            new[] { "--network-block", "alert-1", "--scope", "IP-PORT", "--minutes", "5", "--yes" });
+        CheckAssertion(results, "--network-block 归一化 scope",
+            networkBlock.Kind == CommandKind.NetworkBlock
+            && networkBlock.Scope == "ip-port"
+            && networkBlock.Minutes == 5
+            && networkBlock.Confirmed);
+
+        CheckAssertion(results, "--network-block 必须带 --scope",
+            CommandLine.Parse(new[] { "--network-block", "alert-1", "--yes" }).Kind
+            == CommandKind.Invalid);
+
+        CheckAssertion(results, "--network-set-adapter auto",
+            CommandLine.Parse(new[] { "--network-set-adapter", "auto" }).Kind
+            == CommandKind.NetworkSetAdapter);
+
+        CheckAssertion(results, "--network-set-categories",
+            CommandLine.Parse(new[] { "--network-set-categories", "malware,dns" }).Kind
+            == CommandKind.NetworkSetCategories);
+
+        var auditTail = CommandLine.Parse(new[] { "--audit-tail", "--limit", "10", "--json" });
+        CheckAssertion(results, "--audit-tail --limit",
+            auditTail.Kind == CommandKind.AuditTail && auditTail.Limit == 10 && auditTail.Json);
+
+        CheckAssertion(results, "--doctor --json",
+            CommandLine.Parse(new[] { "--doctor", "--json" }).Json);
+
+        CheckAssertion(results, "--log-path",
+            CommandLine.Parse(new[] { "--log-path" }).Kind == CommandKind.LogPath);
+
+        CheckAssertion(results, "帮助里列了 5.3 新命令",
+            CliText.Usage.Contains("--status")
+            && CliText.Usage.Contains("--network-alerts")
+            && CliText.Usage.Contains("--doctor")
+            && CliText.Usage.Contains("--json"));
 
         PrintSummary(results, showFirewallResidue: false);
     }

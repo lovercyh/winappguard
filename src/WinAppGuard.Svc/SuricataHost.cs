@@ -39,6 +39,7 @@ internal static class SuricataHost
     private static IReadOnlyList<string> _enabledCategories = NetworkRuleCategories.DefaultEnabled;
     private static int _ruleCount;
     private static string _validatedSignature = string.Empty;
+    private static string? _activeBackupPath;
     private static int _generation;
 
     internal static bool IsRunning
@@ -201,9 +202,12 @@ internal static class SuricataHost
 
                 if (!ValidateConfigLocked())
                 {
+                    RestoreActiveRulesBackupLocked();
                     ScheduleRestartLocked();
                     return;
                 }
+
+                CommitActiveRulesBackupLocked();
 
                 var device = FindCaptureDevice();
 
@@ -414,6 +418,18 @@ internal static class SuricataHost
                 }
             }
 
+            var backup = rulesFile + ".bak";
+            _activeBackupPath = backup;
+
+            if (File.Exists(rulesFile))
+            {
+                File.Copy(rulesFile, backup, overwrite: true);
+            }
+            else if (File.Exists(backup))
+            {
+                File.Delete(backup);
+            }
+
             File.Move(temporary, rulesFile, overwrite: true);
             return true;
         }
@@ -436,6 +452,54 @@ internal static class SuricataHost
                 // 临时文件清理失败不影响检测。
             }
         }
+    }
+
+    private static void CommitActiveRulesBackupLocked()
+    {
+        if (_activeBackupPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(_activeBackupPath))
+            {
+                File.Delete(_activeBackupPath);
+            }
+        }
+        catch (Exception)
+        {
+            // 备份删除失败不影响运行。
+        }
+
+        _activeBackupPath = null;
+    }
+
+    private static void RestoreActiveRulesBackupLocked()
+    {
+        if (_activeBackupPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(_activeBackupPath))
+            {
+                File.Copy(
+                    _activeBackupPath,
+                    ServicePaths.SuricataActiveRulesFile,
+                    overwrite: true);
+                File.Delete(_activeBackupPath);
+            }
+        }
+        catch (Exception)
+        {
+            // 恢复失败时保留备份；下次启动会重新生成。
+        }
+
+        _activeBackupPath = null;
     }
 
     private static bool EnsurePreparedLocked(string ruleProfile)

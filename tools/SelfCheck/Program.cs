@@ -15461,6 +15461,14 @@ internal static class Program
             && ServiceProtocol.Commands.NetworkDetectionBlock.StartsWith("write.", StringComparison.Ordinal)
             && ServiceProtocol.Commands.NetworkDetectionReleaseAll.StartsWith("write.", StringComparison.Ordinal));
 
+        var defaultSettings = new NetworkDetectionSettings();
+
+        CheckAssertion(results, "默认启用 7 个规则分类，phishing 默认关闭",
+            defaultSettings.EnabledRuleCategories.Count == 7
+            && !defaultSettings.EnabledRuleCategories.Contains(
+                NetworkRuleCategories.Phishing, StringComparer.OrdinalIgnoreCase)
+            && NetworkRuleCategories.All.Count == 8);
+
         const string httpLine =
             "{\"timestamp\":\"2026-11-04T12:00:00.000000+0000\",\"flow_id\":123," +
             "\"event_type\":\"alert\",\"src_ip\":\"192.168.1.10\",\"src_port\":50000," +

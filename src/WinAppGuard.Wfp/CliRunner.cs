@@ -624,6 +624,12 @@ internal static class CliRunner
 
     private static int RunUnblock(CommandLineOptions options)
     {
+        if (options.ProgramPath?.StartsWith('@') == true
+            && string.IsNullOrWhiteSpace(options.RuleName))
+        {
+            return RunUnblockBatch(options, options.ProgramPath[1..]);
+        }
+
         var all = QueryRules(out var error);
 
         if (all is null)
@@ -752,6 +758,159 @@ internal static class CliRunner
         if (deleted > 0)
         {
             LocalLog.Operation($"命令行：解除阻止 {deleted} 条");
+        }
+
+        return failures.Count == 0 ? ExitOk : ExitFailed;
+    }
+
+    private static int RunUnblockBatch(CommandLineOptions options, string listPath)
+    {
+        string[] lines;
+
+        try
+        {
+            lines = File.ReadAllLines(Path.GetFullPath(listPath), Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            return Fail(options, "BATCH_READ_FAILED",
+                Localizer.IsEnglish
+                    ? $"Cannot read the list: {ex.Message}"
+                    : $"读取列表失败：{ex.Message}",
+                ExitFailed);
+        }
+
+        var paths = lines
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .Select(TryResolvePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (paths.Count == 0)
+        {
+            return Fail(options, "BATCH_EMPTY",
+                Localizer.IsEnglish
+                    ? "The list contains no program paths."
+                    : "列表里没有程序路径。",
+                ExitUsage);
+        }
+
+        var all = QueryRules(out var error);
+
+        if (all is null)
+        {
+            return Fail(options, "RULES_UNAVAILABLE",
+                Localizer.IsEnglish
+                    ? $"Failed to read rules: {error}"
+                    : $"读取规则失败：{error}",
+                ExitFailed);
+        }
+
+        var matched = all
+            .Where(rule => string.Equals(rule.Action, "block", StringComparison.OrdinalIgnoreCase)
+                           && paths.Contains(rule.Value, StringComparer.OrdinalIgnoreCase))
+            .GroupBy(rule => rule.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        if (matched.Count == 0)
+        {
+            if (options.RequireMatch)
+            {
+                return Fail(options, "NOT_FOUND",
+                    Localizer.IsEnglish
+                        ? "No matching block rule was found."
+                        : "没有找到匹配的阻止规则。",
+                    ExitNotFound);
+            }
+
+            if (IsJson(options))
+            {
+                CliJson.WriteSuccess(new { changed = false, deleted = 0 }, VersionText);
+            }
+            else if (!options.Quiet)
+            {
+                Console.WriteLine(Localizer.IsEnglish
+                    ? "No matching block rule was found; nothing changed."
+                    : "没有找到匹配的阻止规则；没有改动任何东西。");
+            }
+
+            return ExitOk;
+        }
+
+        if (options.DryRun)
+        {
+            if (IsJson(options))
+            {
+                CliJson.WriteSuccess(new
+                {
+                    changed = false,
+                    dryRun = true,
+                    wouldDelete = matched,
+                }, VersionText);
+            }
+            else if (!options.Quiet)
+            {
+                Console.WriteLine($"# 预览：将删除 {matched.Count} 条阻止规则");
+                foreach (var rule in matched)
+                {
+                    Console.WriteLine(CliText.FormatRuleLine(rule));
+                }
+            }
+
+            return ExitOk;
+        }
+
+        var deleted = 0;
+        var failures = new List<string>();
+
+        foreach (var rule in matched)
+        {
+            var response = ServiceClient.TryRequest(
+                new ServiceRequest
+                {
+                    Command = ServiceProtocol.Commands.DeleteRule,
+                    RuleName = rule.Name,
+                },
+                TimeSpan.FromSeconds(15),
+                out var deleteError);
+
+            if (response is { Ok: true })
+            {
+                deleted++;
+            }
+            else
+            {
+                failures.Add($"{rule.Name}: {response?.Error ?? deleteError}");
+            }
+        }
+
+        if (IsJson(options))
+        {
+            CliJson.WriteSuccess(new
+            {
+                changed = deleted > 0,
+                deleted,
+                failed = failures.Count,
+                failures,
+            }, VersionText);
+        }
+        else if (!options.Quiet)
+        {
+            Console.WriteLine(Localizer.IsEnglish
+                ? $"Deleted {deleted} block rule(s)."
+                : $"已删除 {deleted} 条阻止规则。");
+
+            foreach (var failure in failures)
+            {
+                Console.Error.WriteLine($"  ! {failure}");
+            }
+        }
+
+        if (deleted > 0)
+        {
+            LocalLog.Operation($"命令行：批量解除阻止 {deleted} 条");
         }
 
         return failures.Count == 0 ? ExitOk : ExitFailed;

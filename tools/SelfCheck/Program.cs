@@ -17795,6 +17795,13 @@ internal static class Program
             && unblockName.RuleName == "AppGuard_Block_a"
             && unblockName.RequireMatch);
 
+        var unblockBatch = CommandLine.Parse(
+            new[] { "--unblock", @"@C:\list.txt", "--dry-run" });
+        CheckAssertion(results, "--unblock @列表 --dry-run",
+            unblockBatch.Kind == CommandKind.Unblock
+            && unblockBatch.ProgramPath == @"@C:\list.txt"
+            && unblockBatch.DryRun);
+
         CheckAssertion(results, "--unblock 路径和 --name 不能同时给",
             CommandLine.Parse(new[] { "--unblock", @"C:\a.exe", "--name", "x" }).Kind
             == CommandKind.Invalid);

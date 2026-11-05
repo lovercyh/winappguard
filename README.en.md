@@ -34,6 +34,10 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > the owner account; write commands still need administrator rights; batch/irreversible actions
 > require `--yes`.
 >
+> **5.4 adds the install folder to PATH.** After install/repair, the install folder is added to the
+> system PATH so a new terminal can run `WinAppGuard.exe` directly; uninstall removes it. Terminals
+> that were already open must be reopened.
+>
 > **5.0 adds Anti-network attack (passive detection + manual blocking).** It bundles
 > Suricata 8.0.7 and ET Open, reads `eve.json`, and raises alerts only; after a match the user
 > chooses whether to apply a temporary WFP outbound block. No auto-blocking and no new kernel
@@ -245,6 +249,9 @@ lookup. Turn it off and the tool reads only the local cache.
 
 Read-only queries need no administrator rights; writing rules, importing and blocking still do.
 See [`docs/5.3-CLI.md`](docs/5.3-CLI.md) for the full list.
+
+Since 5.4, install/repair adds the install folder to the system PATH. **New terminals** can use
+`WinAppGuard.exe` directly; terminals that were already open must be reopened.
 
 ```powershell
 WinAppGuard.exe --status --json                    # service / rules / detection status

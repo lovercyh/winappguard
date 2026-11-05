@@ -135,6 +135,7 @@ internal static class Program
         Console.WriteLine("                       --without-npcap 跳过 Npcap（仅自动化/特殊环境；流量统计与反扫描不可用）");
         Console.WriteLine("                       --allow-owner-mismatch  提权账户与登录账户不同时仍继续（所有者=提权账户）");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      修复（覆盖文件 + 重启服务，保留密钥/规则/数据）");
+        Console.WriteLine("5.4 起安装/修复会把安装目录加入系统 PATH（新开的终端生效）；卸载时移除。");
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  同一所有者换一把新密钥（旧密钥删除）");
         Console.WriteLine("  WinAppGuardSetup.exe --reset-owner 把当前提权账户设为新所有者（换新密钥）");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service 只启动服务（顺带修正为「自动（不延迟）」）");
@@ -155,6 +156,7 @@ internal static class Program
         Console.WriteLine("                       --without-npcap skip Npcap (automation only; traffic stats and anti-scan unavailable)");
         Console.WriteLine("                       --allow-owner-mismatch  continue when the elevated account differs (owner = elevated account)");
         Console.WriteLine("  WinAppGuardSetup.exe --repair      repair (overwrite files + restart service; keep key/rules/data)");
+        Console.WriteLine("Since 5.4 install/repair adds the install folder to the system PATH (new terminals); uninstall removes it.");
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  issue a new key for the same owner (old key deleted)");
         Console.WriteLine("  WinAppGuardSetup.exe --reset-owner make the current elevated account the new owner (new key)");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service start the service only (also fixes Automatic (Delayed Start))");
@@ -257,6 +259,7 @@ internal static class Program
         TryRecoverLegacyStrictMode();
 
         ReportNpcapProbe();
+        ReportPathRegistration();
 
         Bilingual.Say("服务已启动。", "Service started.");
         Console.WriteLine();
@@ -465,6 +468,25 @@ internal static class Program
     }
 
     /// <summary>
+    /// 5.4：把安装目录加入 Machine PATH，让 CLI 可以直接用 <c>WinAppGuard.exe</c>。
+    /// PATH 修改失败只警告，不阻断安装；用户可以按提示手动添加。
+    /// </summary>
+    private static void ReportPathRegistration()
+    {
+        if (PathRegistration.TryAdd(InstallDirectory, out var error))
+        {
+            Bilingual.Say(
+                $"已把安装目录加入系统 PATH：{InstallDirectory}（重开终端后可直接运行 WinAppGuard.exe）。",
+                $"Added the install folder to the system PATH: {InstallDirectory} (reopen the terminal to use WinAppGuard.exe directly).");
+            return;
+        }
+
+        Bilingual.Fail(
+            $"程序已安装，但无法把安装目录加入系统 PATH：{error}。可手动把 {InstallDirectory} 加入系统 PATH。",
+            $"Installed, but failed to add the install folder to the system PATH: {error}. Add {InstallDirectory} to the system PATH manually.");
+    }
+
+    /// <summary>
     /// 4.1：装完/启动服务后做一次只读探测。
     /// 打不开网卡**只警告**：驱动异常不该让用户连防火墙都用不了。
     /// </summary>
@@ -569,6 +591,7 @@ internal static class Program
         }
 
         ReportNpcapProbe();
+        ReportPathRegistration();
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
             ? Bilingual.One("修复完成，服务正在运行。", "Repair completed; the service is running.")
@@ -1352,9 +1375,28 @@ internal static class Program
         keyDeleted |= !ProtectedModeFilesExist();
 
         var installDeleted = DeleteInstallDirectory();
+        var pathRemoved = true;
+
+        if (installDeleted)
+        {
+            pathRemoved = PathRegistration.TryRemove(InstallDirectory, out var pathError);
+
+            if (pathRemoved)
+            {
+                Bilingual.Say(
+                    "已从系统 PATH 移除安装目录。",
+                    "Removed the install folder from the system PATH.");
+            }
+            else
+            {
+                Bilingual.Fail(
+                    $"卸载完成，但无法从系统 PATH 移除安装目录：{pathError}。可手动删除 {InstallDirectory}。",
+                    $"Uninstall completed, but failed to remove the install folder from the system PATH: {pathError}. Remove {InstallDirectory} manually.");
+            }
+        }
 
         Console.WriteLine();
-        Console.WriteLine(rulesRecovered && installDeleted && keyDeleted && serviceRemoved
+        Console.WriteLine(rulesRecovered && installDeleted && keyDeleted && serviceRemoved && pathRemoved
             ? Bilingual.One("卸载完成。", "Uninstall completed.")
             : Bilingual.One("卸载完成，但有部分内容未能删除（见上）。", "Uninstall completed, but some items could not be deleted (see above)."));
 
@@ -1365,7 +1407,9 @@ internal static class Program
                 $"Data folder kept: {DataDirectory} (the protected-mode key was deleted; reinstalling generates a new key).");
         }
 
-        return rulesRecovered && installDeleted && keyDeleted && serviceRemoved ? 0 : 3;
+        return rulesRecovered && installDeleted && keyDeleted && serviceRemoved && pathRemoved
+            ? 0
+            : 3;
     }
 
     /// <summary>卸载时删除密钥目录并校验；删不掉要如实报告。</summary>
@@ -2090,4 +2134,3 @@ internal static class Program
         }
     }
 }
-

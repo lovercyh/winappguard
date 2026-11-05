@@ -17877,6 +17877,43 @@ internal static class Program
             && CliText.Usage.Contains("--doctor")
             && CliText.Usage.Contains("--json"));
 
+        // ---------------- 8. 5.4 PATH 处理 ----------------
+        W();
+        W("===== 8. 5.4 安装 PATH 处理 =====");
+
+        const string installDir = @"C:\Program Files\WinAppGuard";
+        var path = EnvironmentPath.Add(@"C:\Windows;C:\Tools", installDir);
+
+        CheckAssertion(results, "PATH 追加安装目录",
+            EnvironmentPath.Contains(path, installDir)
+            && path.Split(';').Length == 3
+            && path.Contains(@"C:\Windows")
+            && path.Contains(@"C:\Tools"));
+
+        CheckAssertion(results, "PATH 已存在时不重复追加",
+            EnvironmentPath.Add(path, installDir) == path);
+
+        CheckAssertion(results, "PATH 比较忽略大小写和尾部反斜杠",
+            EnvironmentPath.Contains(path, @"c:\program files\winappguard\")
+            && EnvironmentPath.Add(path, @"c:\program files\winappguard\") == path);
+
+        var removed = EnvironmentPath.Remove(path, installDir);
+        CheckAssertion(results, "PATH 删除安装目录且保留其它项",
+            !EnvironmentPath.Contains(removed, installDir)
+            && removed.Contains(@"C:\Windows")
+            && removed.Contains(@"C:\Tools")
+            && removed.Split(';').Length == 2);
+
+        CheckAssertion(results, "删除不存在的 PATH 项不报错",
+            EnvironmentPath.Remove(removed, installDir) == removed);
+
+        CheckAssertion(results, "空 PATH 追加",
+            EnvironmentPath.Add(string.Empty, installDir) == installDir);
+
+        CheckAssertion(results, "带引号的 PATH 项也能去重",
+            EnvironmentPath.Add($"\"{installDir}\"", installDir)
+                .Split(';').Length == 1);
+
         PrintSummary(results, showFirewallResidue: false);
     }
 

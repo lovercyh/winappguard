@@ -1726,28 +1726,40 @@ internal static class CliRunner
 
         if (npcapUsable)
         {
-            var opened = false;
-            string? openError = null;
-
-            try
+            if (!AdminHelper.IsRunningAsAdmin())
             {
-                opened = NpcapProbe.TryOpen(out openError);
+                // 非管理员打开 Npcap 设备会触发权限问题（某些环境还会弹 UAC）；
+                // doctor 是只读诊断，不应该为了一个附加检查去提权。
+                checks.Add(new DoctorCheck(
+                    "npcap-open",
+                    "WARN",
+                    T("未检查（需要管理员权限）", "not checked (requires administrator rights)")));
             }
-            catch (Exception ex)
+            else
             {
-                openError = ex.Message;
-            }
+                var opened = false;
+                string? openError = null;
 
-            checks.Add(new DoctorCheck(
-                "npcap-open",
-                opened ? "OK" : "WARN",
-                opened
-                    ? (Localizer.IsEnglish
-                        ? "Npcap can open a capture device."
-                        : "Npcap 能打开抓包设备。")
-                    : (openError ?? (Localizer.IsEnglish
-                        ? "Npcap could not open a capture device."
-                        : "Npcap 打不开抓包设备。"))));
+                try
+                {
+                    opened = NpcapProbe.TryOpen(out openError);
+                }
+                catch (Exception ex)
+                {
+                    openError = ex.Message;
+                }
+
+                checks.Add(new DoctorCheck(
+                    "npcap-open",
+                    opened ? "OK" : "WARN",
+                    opened
+                        ? (Localizer.IsEnglish
+                            ? "Npcap can open a capture device."
+                            : "Npcap 能打开抓包设备。")
+                        : (openError ?? (Localizer.IsEnglish
+                            ? "Npcap could not open a capture device."
+                            : "Npcap 打不开抓包设备。"))));
+            }
         }
 
         var logDirectory = LocalLog.LogDirectory;

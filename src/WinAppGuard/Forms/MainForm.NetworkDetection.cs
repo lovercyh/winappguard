@@ -21,7 +21,6 @@ public sealed partial class MainForm
     private Button _ndReleaseButton = null!;
     private Button _ndClearButton = null!;
     private Button _ndSettingsButton = null!;
-    private Button _ndOpenFolderButton = null!;
     private DataGridViewBuffered _ndGrid = null!;
     private ListBox _ndBlocks = null!;
     private System.Windows.Forms.Timer? _ndTimer;
@@ -94,15 +93,11 @@ public sealed partial class MainForm
         _ndSettingsButton = new Button { Text = Localizer.T("设置…"), Width = 84 };
         _ndSettingsButton.Click += OnNetworkSettingsClick;
 
-        _ndOpenFolderButton = new Button { Text = Localizer.T("打开检测目录"), Width = 112 };
-        _ndOpenFolderButton.Click += (_, _) => OpenNetworkDetectionFolder();
-
         actions.Controls.Add(_ndRefreshButton);
         actions.Controls.Add(_ndBlockButton);
         actions.Controls.Add(_ndReleaseButton);
         actions.Controls.Add(_ndClearButton);
         actions.Controls.Add(_ndSettingsButton);
-        actions.Controls.Add(_ndOpenFolderButton);
 
         top.Controls.Add(actions);
         top.Controls.Add(_ndStatusLabel);
@@ -618,29 +613,6 @@ public sealed partial class MainForm
         }
 
         RefreshNetworkDetection();
-    }
-
-    private void OpenNetworkDetectionFolder()
-    {
-        try
-        {
-            Directory.CreateDirectory(ServicePaths.SuricataDirectory);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "explorer.exe",
-                Arguments = $"\"{ServicePaths.SuricataDirectory}\"",
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            UiMessageBox.Show(
-                DialogOwner,
-                ex.Message,
-                Localizer.T("打开目录失败"),
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-        }
     }
 
     private sealed class NdRow

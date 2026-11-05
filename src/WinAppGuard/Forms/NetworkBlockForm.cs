@@ -27,11 +27,21 @@ internal sealed class NetworkBlockForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(520, 300);
+
+        // Win11 的字体/DPI 度量比 Win10 大，固定 520x300 会把底部按钮裁掉。
+        // 改为 AutoSize + 最小尺寸，内容变高时窗体一起长高；极端 DPI 下还能滚动。
+        AutoScaleMode = AutoScaleMode.Font;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        AutoScroll = true;
+        MinimumSize = new Size(560, 360);
+        ClientSize = new Size(560, 360);
 
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
             Padding = new Padding(16),
             RowCount = 6,
@@ -61,6 +71,7 @@ internal sealed class NetworkBlockForm : Form
         _ipPortRadio = new RadioButton
         {
             AutoSize = true,
+            MaximumSize = new Size(500, 0),
             Checked = true,
             Text = Localizer.F(
                 "远端 IP:端口（推荐，阻止所有程序访问 {0}:{1}）",
@@ -71,6 +82,7 @@ internal sealed class NetworkBlockForm : Form
         _connectionRadio = new RadioButton
         {
             AutoSize = true,
+            MaximumSize = new Size(500, 0),
             Enabled = alert.LocalPort > 0 && !string.IsNullOrEmpty(alert.LocalAddress),
             Text = Localizer.T("只拦截此连接（五元组，精确但可能只影响当前连接）"),
         };
@@ -78,6 +90,7 @@ internal sealed class NetworkBlockForm : Form
         _ipRadio = new RadioButton
         {
             AutoSize = true,
+            MaximumSize = new Size(500, 0),
             Text = Localizer.F(
                 "远端 IP（影响所有程序访问 {0}，范围最大）",
                 alert.RemoteAddress),

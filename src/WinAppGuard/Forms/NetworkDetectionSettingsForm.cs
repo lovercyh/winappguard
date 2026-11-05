@@ -32,7 +32,9 @@ internal sealed class NetworkDetectionSettingsForm : Form
 
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
             Padding = new Padding(16),
             RowCount = 13,

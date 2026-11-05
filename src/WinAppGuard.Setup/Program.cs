@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using WinAppGuard.Contracts;
@@ -1721,6 +1722,20 @@ internal static class Program
                 payload.ThirdPartyNotices,
                 Path.Combine(InstallDirectory, "THIRD-PARTY-NOTICES.md"));
 
+            var categoriesZip = Path.Combine(
+                ServicePaths.SuricataRulesDirectory,
+                "standard-categories.zip");
+
+            CopyIfDifferent(payload.EtStandardCategoriesZip, categoriesZip);
+
+            if (File.Exists(categoriesZip))
+            {
+                ZipFile.ExtractToDirectory(
+                    categoriesZip,
+                    ServicePaths.SuricataRulesDirectory,
+                    overwriteFiles: true);
+            }
+
             EnsureSuricataInstalled(payload);
             RemoveSuricataDesktopShortcuts();
         }
@@ -2032,6 +2047,9 @@ internal static class Program
 
         internal string EtAllRules => Path.Combine(
             DirectoryPath, EmbeddedPayload.EtAllRulesName);
+
+        internal string EtStandardCategoriesZip => Path.Combine(
+            DirectoryPath, EmbeddedPayload.EtStandardCategoriesZipName);
 
         internal string EtLicense => Path.Combine(
             DirectoryPath, EmbeddedPayload.EtLicenseName);

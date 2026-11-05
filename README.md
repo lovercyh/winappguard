@@ -21,6 +21,9 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
 > 状态栏提示「版本过旧，点击升级」，用随包官方 1.90 安装器覆盖升级；
 > 版本读不到（便携/企业镜像）时允许使用但提示建议升级。
 >
+> **5.1 规则分类开关**：标准档可按 malware / exploit / DNS / TLS·JA3 / coinminer / phishing / web_client / 其他启用；
+> phishing 默认关闭，全量档忽略分类开关；切换后重新生成 active.rules，先校验再重启 Suricata。
+>
 > **5.0 新增反网络攻击（可选手动阻断）**：随包 Suricata 8.0.7 + ET Open，
 > 只读 eve.json 产生告警，命中后由用户手动选择 WFP 临时阻断；
 > 不自动拦截、不新增内核驱动、HTTPS 正文不可见；安装 Npcap 时启用 WinPcap 兼容模式（Suricata 需要 wpcap.dll）。

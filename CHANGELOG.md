@@ -14,6 +14,24 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
+## [5.1] - 2026-11-05
+
+> 反网络攻击规则分类开关：按类别启用/停用 ET Open 规则。
+
+### 新增
+
+- 规则分类开关：malware / exploit / DNS / TLS·JA3 / coinminer / phishing / web_client / 其他。
+- 默认启用除 phishing 外的全部标准档分类；phishing 默认关闭。
+- 分类变化后重新生成 `active.rules`，先 `suricata -T` 校验，失败保留旧规则。
+- 全量档忽略分类开关，继续使用 `all.rules`。
+- 安装包新增 `standard-categories.zip`，解压到 `%ProgramData%\\WinAppGuard\\network-detection\\suricata\\rules\\standard`。
+
+### 说明
+
+- 不做逐条规则开关；分类开关只作用于标准档。
+- 仍然只告警，不自动拦截；阻断仍由用户手动触发。
+- TLS / JA3 分类只对应 `emerging-ja3.rules`；TLS SNI 相关规则仍可能在 malware/exploit 中。
+
 ## [5.0] - 2026-11-04
 
 > 反网络攻击（被动网络检测）：Suricata + ET Open，只告警，用户手动 WFP 阻断。

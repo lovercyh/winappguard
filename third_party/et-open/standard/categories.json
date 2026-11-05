@@ -1,0 +1,54 @@
+{
+  "version": "ET Open suricata-7.0.3",
+  "generated": "2026-11-05",
+  "categories": [
+    {
+      "id": "malware",
+      "file": "malware.rules",
+      "count": 11883,
+      "default": true
+    },
+    {
+      "id": "exploit",
+      "file": "exploit.rules",
+      "count": 426,
+      "default": true
+    },
+    {
+      "id": "dns",
+      "file": "dns.rules",
+      "count": 1,
+      "default": true
+    },
+    {
+      "id": "ja3",
+      "file": "ja3.rules",
+      "count": 13,
+      "default": true
+    },
+    {
+      "id": "coinminer",
+      "file": "coinminer.rules",
+      "count": 13,
+      "default": true
+    },
+    {
+      "id": "phishing",
+      "file": "phishing.rules",
+      "count": 1532,
+      "default": false
+    },
+    {
+      "id": "web_client",
+      "file": "web_client.rules",
+      "count": 48,
+      "default": true
+    },
+    {
+      "id": "other",
+      "file": "other.rules",
+      "count": 144,
+      "default": true
+    }
+  ]
+}

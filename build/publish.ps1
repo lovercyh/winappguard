@@ -83,6 +83,8 @@ $npcapLicense = Join-Path $root 'third_party\npcap\LICENSE.txt'
 $suricataMsi = Join-Path $root 'third_party\suricata\Suricata-8.0.7-1-64bit.msi'
 $suricataOffer = Join-Path $root 'third_party\suricata\SOURCE-OFFER.md'
 $etDir = Join-Path $root 'third_party\et-open'
+$etCategoriesDir = Join-Path $etDir 'standard'
+$etCategoriesZip = Join-Path $root 'build\_standard-categories.zip'
 
 if (-not (Test-Path $npcapInstaller)) {
     throw "缺少 Npcap 官方安装包：$npcapInstaller"
@@ -111,6 +113,7 @@ foreach ($required in @(
     (Join-Path $etDir 'emerging.rules.zip'),
     (Join-Path $etDir 'standard.rules'),
     (Join-Path $etDir 'all.rules'),
+    (Join-Path $etCategoriesDir 'categories.json'),
     (Join-Path $etDir 'LICENSE'),
     (Join-Path $etDir 'BSD-License.txt'),
     (Join-Path $etDir 'gpl-2.0.txt'),
@@ -121,11 +124,15 @@ foreach ($required in @(
     }
 }
 
+if (Test-Path $etCategoriesZip) { Remove-Item $etCategoriesZip -Force }
+Compress-Archive -Path $etCategoriesDir -DestinationPath $etCategoriesZip -Force
+
 Copy-Item $suricataMsi (Join-Path $payloadDir 'Suricata-8.0.7-1-64bit.msi')
 Copy-Item $suricataOffer (Join-Path $payloadDir 'SURICATA-SOURCE-OFFER.txt')
 Copy-Item (Join-Path $etDir 'emerging.rules.zip') (Join-Path $payloadDir 'emerging.rules.zip')
 Copy-Item (Join-Path $etDir 'standard.rules') (Join-Path $payloadDir 'standard.rules')
 Copy-Item (Join-Path $etDir 'all.rules') (Join-Path $payloadDir 'all.rules')
+Copy-Item $etCategoriesZip (Join-Path $payloadDir 'standard-categories.zip')
 Copy-Item (Join-Path $etDir 'LICENSE') (Join-Path $payloadDir 'ET-LICENSE')
 Copy-Item (Join-Path $etDir 'BSD-License.txt') (Join-Path $payloadDir 'ET-BSD-License.txt')
 Copy-Item (Join-Path $etDir 'gpl-2.0.txt') (Join-Path $payloadDir 'ET-GPL-2.0.txt')

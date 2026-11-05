@@ -36,6 +36,7 @@ internal static class SuricataHost
     private static string? _lastError;
     private static string? _version;
     private static string _profile = "standard";
+    private static IReadOnlyList<string> _enabledCategories = NetworkRuleCategories.DefaultEnabled;
     private static int _ruleCount;
     private static string _validatedSignature = string.Empty;
     private static int _generation;
@@ -66,7 +67,10 @@ internal static class SuricataHost
         get { lock (Gate) { return _ruleCount; } }
     }
 
-    internal static void Start(bool enabled, string ruleProfile)
+    internal static void Start(
+        bool enabled,
+        string ruleProfile,
+        IReadOnlyList<string>? enabledCategories = null)
     {
         lock (Gate)
         {
@@ -75,6 +79,7 @@ internal static class SuricataHost
             _profile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
                 ? "full"
                 : "standard";
+            _enabledCategories = NormalizeCategories(enabledCategories);
             _generation++;
 
             if (!enabled)
@@ -112,13 +117,16 @@ internal static class SuricataHost
     }
 
     /// <summary>配置档切换后调用：重启子进程，让 Suricata 重新加载规则。</summary>
-    internal static void Reload(string ruleProfile)
+    internal static void Reload(
+        string ruleProfile,
+        IReadOnlyList<string>? enabledCategories = null)
     {
         lock (Gate)
         {
             _profile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
                 ? "full"
                 : "standard";
+            _enabledCategories = NormalizeCategories(enabledCategories);
             StopProcessLocked();
             _nextRestartUtc = DateTime.MinValue;
         }
@@ -127,6 +135,19 @@ internal static class SuricataHost
         {
             EnsureRunning(ruleProfile);
         }
+    }
+
+    private static IReadOnlyList<string> NormalizeCategories(
+        IReadOnlyList<string>? categories)
+    {
+        var selected = (categories ?? Array.Empty<string>())
+            .Where(NetworkRuleCategories.IsKnown)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return selected.Count > 0
+            ? selected
+            : NetworkRuleCategories.DefaultEnabled;
     }
 
     private static void MonitorTick()
@@ -335,6 +356,88 @@ internal static class SuricataHost
         }
     }
 
+    /// <summary>
+    /// 5.1：把用户勾选的分类规则拼成 active.rules。
+    /// 先写临时文件再原子替换，Suricata 校验失败时不会破坏旧文件。
+    /// </summary>
+    private static bool BuildActiveRulesLocked(out string rulesFile)
+    {
+        rulesFile = ServicePaths.SuricataActiveRulesFile;
+        var temporary = rulesFile + ".tmp";
+
+        var categories = _enabledCategories
+            .Where(NetworkRuleCategories.IsKnown)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (categories.Count == 0)
+        {
+            _lastError = "至少需要启用一个规则分类。";
+            return false;
+        }
+
+        try
+        {
+            using (var writer = new StreamWriter(
+                       temporary,
+                       append: false,
+                       new UTF8Encoding(false)))
+            {
+                writer.WriteLine("# WinAppGuard 5.1 active rule set");
+                writer.WriteLine($"# categories: {string.Join(",", categories)}");
+                writer.WriteLine($"# generated: {DateTime.UtcNow:O}");
+
+                foreach (var category in categories)
+                {
+                    var path = Path.Combine(
+                        ServicePaths.SuricataStandardRulesDirectory,
+                        NetworkRuleCategories.FileName(category));
+
+                    if (!File.Exists(path))
+                    {
+                        _lastError =
+                            $"缺少规则分类文件：{path}；请重新安装或更新 ET Open。";
+                        return false;
+                    }
+
+                    foreach (var line in File.ReadLines(path, Encoding.UTF8))
+                    {
+                        var trimmed = line.TrimStart();
+
+                        if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                        {
+                            continue;
+                        }
+
+                        writer.WriteLine(line);
+                    }
+                }
+            }
+
+            File.Move(temporary, rulesFile, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _lastError = $"生成生效规则失败：{ex.Message}";
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件清理失败不影响检测。
+            }
+        }
+    }
+
     private static bool EnsurePreparedLocked(string ruleProfile)
     {
         if (_executable is null || !File.Exists(_executable))
@@ -355,22 +458,23 @@ internal static class SuricataHost
         Directory.CreateDirectory(ServicePaths.SuricataDirectory);
         Directory.CreateDirectory(ServicePaths.SuricataRulesDirectory);
 
-        var rulesFile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
-            ? ServicePaths.SuricataFullRulesFile
-            : ServicePaths.SuricataStdRulesFile;
+        string rulesFile;
+
+        if (string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase))
+        {
+            rulesFile = ServicePaths.SuricataFullRulesFile;
+        }
+        else
+        {
+            if (!BuildActiveRulesLocked(out rulesFile))
+            {
+                return false;
+            }
+        }
 
         if (!File.Exists(rulesFile))
         {
-            // 兼容安装包没有生成标准档的情况：退到 any *.rules。
-            rulesFile = Directory
-                .EnumerateFiles(ServicePaths.SuricataRulesDirectory, "*.rules")
-                .OrderByDescending(path => new FileInfo(path).Length)
-                .FirstOrDefault() ?? string.Empty;
-        }
-
-        if (string.IsNullOrEmpty(rulesFile) || !File.Exists(rulesFile))
-        {
-            _lastError = "没有可加载的规则文件；请重新安装或导入 ET Open。";
+            _lastError = "没有可加载的规则文件；请重新安装或更新 ET Open。";
             return false;
         }
 

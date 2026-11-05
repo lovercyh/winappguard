@@ -150,6 +150,27 @@ internal static class NetworkDetectionHost
 
         bool enabled;
         string profile;
+        List<string> categories;
+
+        var requestedCategories = (dto.EnabledRuleCategories ?? new List<string>())
+            .Where(NetworkRuleCategories.IsKnown)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var requestedProfile = string.Equals(
+            dto.RuleProfile, "full", StringComparison.OrdinalIgnoreCase)
+            ? "full"
+            : "standard";
+
+        if (requestedCategories.Count == 0)
+        {
+            if (requestedProfile == "standard")
+            {
+                return Error(request, "至少需要启用一个规则分类。");
+            }
+
+            requestedCategories = NetworkRuleCategories.DefaultEnabled.ToList();
+        }
 
         lock (Gate)
         {
@@ -160,9 +181,11 @@ internal static class NetworkDetectionHost
                 dto.RuleProfile, "full", StringComparison.OrdinalIgnoreCase)
                 ? "full"
                 : "standard";
+            _state.Settings.EnabledRuleCategories = requestedCategories;
 
             enabled = _state.Settings.Enabled;
             profile = _state.Settings.RuleProfile;
+            categories = requestedCategories.ToList();
         }
 
         PersistState();
@@ -171,7 +194,7 @@ internal static class NetworkDetectionHost
         {
             StartSuricata();
             StartReader();
-            SuricataHost.Reload(profile);
+            SuricataHost.Reload(profile, categories);
         }
         else
         {
@@ -374,13 +397,18 @@ internal static class NetworkDetectionHost
     private static void StartSuricata()
     {
         string profile;
+        List<string> categories;
 
         lock (Gate)
         {
             profile = _state.Settings.RuleProfile;
+            categories = _state.Settings.EnabledRuleCategories
+                .Where(NetworkRuleCategories.IsKnown)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
-        SuricataHost.Start(enabled: true, profile);
+        SuricataHost.Start(enabled: true, profile, categories);
     }
 
     private static void StartReader()
@@ -608,6 +636,7 @@ internal static class NetworkDetectionHost
             RuleProfile = settings.RuleProfile,
             Notify = settings.Notify,
             RetentionDays = settings.RetentionDays,
+            EnabledRuleCategories = settings.EnabledRuleCategories.ToList(),
         };
 
     private static NetworkBlockDto ToDto(NetworkBlock block)

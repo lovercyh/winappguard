@@ -19,6 +19,11 @@ connections** — so you start with *"what is online right now?"* and finish wit
 > The 4.0 anti-scan reads inbound TCP headers only; it does not read payloads or drop packets inline.
 > Since 2.0 it no longer uses Windows Firewall, and it never changes any Windows Firewall setting.
 >
+> **5.1 adds rule-category toggles.** The standard profile can enable malware / exploit / DNS /
+> TLS-JA3 / coinminer / phishing / web_client / other independently; phishing is off by default.
+> The full profile ignores category toggles. Changing categories rebuilds `active.rules` and validates
+> it before Suricata restarts.
+>
 > **5.0 adds Anti-network attack (passive detection + manual blocking).** It bundles
 > Suricata 8.0.7 and ET Open, reads `eve.json`, and raises alerts only; after a match the user
 > chooses whether to apply a temporary WFP outbound block. No auto-blocking and no new kernel

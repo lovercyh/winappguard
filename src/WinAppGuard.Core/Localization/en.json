@@ -1048,9 +1048,23 @@
     "已拦截": "blocked",
     "拦截状态": "Block",
     "反网络攻击高危告警": "High-severity anti-network attack alert",
-    "{0}\n{1}:{2}  {3}": "{0}\n{1}:{2}  {3}"
+    "{0}\n{1}:{2}  {3}": "{0}\n{1}:{2}  {3}",
+    "恶意软件": "Malware",
+    "漏洞利用": "Exploit",
+    "TLS / JA3": "TLS / JA3",
+    "挖矿": "Coinminer",
+    "钓鱼": "Phishing",
+    "Web 客户端": "Web client",
+    "其他": "Other",
+    "规则分类（只作用于标准档）：": "Rule categories (standard profile only):",
+    "规则分类": "Rule categories",
+    "全选": "Select all",
+    "全不选": "Select none",
+    "至少需要启用一个规则分类。": "Enable at least one rule category.",
+    "被动检测只告警，不自动拦截。命中后由你手动选择是否用 WFP 临时阻断；HTTPS 正文不可见。全量档忽略分类开关。": "Passive detection only alerts, never blocks automatically. After a match you choose whether to apply a temporary WFP block; HTTPS payload is not visible. Categories are ignored in the full profile."
   }
 }
+
 
 
 

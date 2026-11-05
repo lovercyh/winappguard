@@ -31,6 +31,7 @@ internal static class EmbeddedPayload
     internal const string EtRulesZipName = "emerging.rules.zip";
     internal const string EtStandardRulesName = "standard.rules";
     internal const string EtAllRulesName = "all.rules";
+    internal const string EtStandardCategoriesZipName = "standard-categories.zip";
     internal const string EtLicenseName = "ET-LICENSE";
     internal const string EtBsdLicenseName = "ET-BSD-License.txt";
     internal const string EtGplLicenseName = "ET-GPL-2.0.txt";
@@ -98,7 +99,8 @@ internal static class EmbeddedPayload
                     or SuricataMsiName or EtRulesZipName or EtStandardRulesName
                     or EtAllRulesName or EtLicenseName or EtBsdLicenseName
                     or EtGplLicenseName or EtClassificationName
-                    or SuricataSourceOfferName or GplLicenseName or ThirdPartyNoticesName))
+                    or SuricataSourceOfferName or GplLicenseName or ThirdPartyNoticesName
+                    or EtStandardCategoriesZipName))
                 {
                     continue;
                 }

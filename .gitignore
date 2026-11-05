@@ -35,3 +35,6 @@ Desktop.ini
 
 # 本机下载的原始规则库（Sigma 等），不随仓库提交
 rules/
+
+# 5.1 构建时生成的分类规则 zip
+build/_standard-categories.zip

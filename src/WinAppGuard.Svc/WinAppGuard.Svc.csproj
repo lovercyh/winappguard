@@ -14,7 +14,7 @@
     <AssemblyName>WinAppGuardSvc</AssemblyName>
     <RootNamespace>WinAppGuard.Service</RootNamespace>
 
-    <Version>5.0</Version>
+    <Version>5.1</Version>
     <Company>lovercyh</Company>
     <Copyright>Copyright © 2026 lovercyh</Copyright>
   </PropertyGroup>
@@ -35,4 +35,5 @@
   </PropertyGroup>
 
 </Project>
+
 

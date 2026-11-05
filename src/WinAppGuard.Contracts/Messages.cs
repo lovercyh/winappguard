@@ -457,6 +457,9 @@ public sealed class NetworkDetectionSettingsDto
     public bool Notify { get; set; } = true;
 
     public int RetentionDays { get; set; } = 30;
+
+    /// <summary>5.1：标准档启用的规则分类；全量档忽略。</summary>
+    public List<string> EnabledRuleCategories { get; set; } = new();
 }
 
 /// <summary>5.0：一条 Suricata/ET Open 网络告警。</summary>

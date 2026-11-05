@@ -95,4 +95,12 @@ public static class ServicePaths
     public static string SuricataStdRulesFile => Path.Combine(SuricataRulesDirectory, "standard.rules");
 
     public static string SuricataFullRulesFile => Path.Combine(SuricataRulesDirectory, "all.rules");
+
+    /// <summary>5.1：按分类切分后的标准规则目录。</summary>
+    public static string SuricataStandardRulesDirectory =>
+        Path.Combine(SuricataRulesDirectory, "standard");
+
+    /// <summary>5.1：按用户选择拼接出的当前生效规则。</summary>
+    public static string SuricataActiveRulesFile =>
+        Path.Combine(SuricataRulesDirectory, "active.rules");
 }

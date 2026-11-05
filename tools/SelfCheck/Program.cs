@@ -12008,7 +12008,7 @@ internal static class Program
             var addResponse = ServiceClient.TryRequest(
                 new ServiceRequest
                 {
-                    Command = ServiceProtocol.Commands.IdsSuppress,
+                    Command = ServiceProtocol.Commands.AlertIdsSuppress,
                     IdsSuppression = new IdsSuppressionDto
                     {
                         RuleId = "dns",
@@ -12031,7 +12031,7 @@ internal static class Program
                 var removeResponse = ServiceClient.TryRequest(
                     new ServiceRequest
                     {
-                        Command = ServiceProtocol.Commands.IdsSuppress,
+                        Command = ServiceProtocol.Commands.AlertIdsSuppress,
                         IdsRemoveSuppression = true,
                         IdsSuppression = new IdsSuppressionDto { Id = added.Id },
                     },
@@ -12051,7 +12051,7 @@ internal static class Program
             var ackMissing = ServiceClient.TryRequest(
                 new ServiceRequest
                 {
-                    Command = ServiceProtocol.Commands.IdsAck,
+                    Command = ServiceProtocol.Commands.AlertIdsAck,
                     IdsAlertId = "no-such-alert",
                 },
                 TimeSpan.FromSeconds(15),
@@ -12060,7 +12060,7 @@ internal static class Program
             CheckAssertion(results, "确认不存在的告警返回失败", ackMissing is { Ok: false });
 
             var clear = ServiceClient.TryRequest(
-                new ServiceRequest { Command = ServiceProtocol.Commands.IdsClear },
+                new ServiceRequest { Command = ServiceProtocol.Commands.AlertIdsClear },
                 TimeSpan.FromSeconds(15),
                 out var clearError);
 

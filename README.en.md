@@ -251,24 +251,24 @@ Read-only queries need no administrator rights; writing rules, importing and blo
 See [`docs/5.3-CLI.md`](docs/5.3-CLI.md) for the full list.
 
 Since 5.4, install/repair adds the install folder to the system PATH. **New terminals** can use
-`WinAppGuard.exe` directly; terminals that were already open must be reopened.
+`WinAppGuard` directly; terminals that were already open must be reopened.
 
 ```powershell
-WinAppGuard.exe --status --json                    # service / rules / detection status
-WinAppGuard.exe --list-rules --json                # every rule
-WinAppGuard.exe --block "C:\Tools\a.exe"           # permanent block
-WinAppGuard.exe --block "C:\Tools\a.exe" --minutes 30
-WinAppGuard.exe --block @C:\list.txt --dry-run     # batch preview
-WinAppGuard.exe --unblock "C:\Tools\a.exe"         # remove one program's block
-WinAppGuard.exe --export-rules rules.json          # export block rules
-WinAppGuard.exe --import-rules rules.json --dry-run
-WinAppGuard.exe --network-status --json            # anti-network attack status
-WinAppGuard.exe --network-alerts --limit 20 --json
-WinAppGuard.exe --network-ack <alert id>           # mark read, no UAC
-WinAppGuard.exe --network-block <id> --scope ip-port --minutes 10 --yes
-WinAppGuard.exe --audit-tail --limit 50 --json
-WinAppGuard.exe --doctor --json                    # read-only diagnostics
-WinAppGuard.exe --help
+WinAppGuard --status --json                    # service / rules / detection status
+WinAppGuard --list-rules --json                # every rule
+WinAppGuard --block "C:\Tools\a.exe"           # permanent block
+WinAppGuard --block "C:\Tools\a.exe" --minutes 30
+WinAppGuard --block @C:\list.txt --dry-run     # batch preview
+WinAppGuard --unblock "C:\Tools\a.exe"         # remove one program's block
+WinAppGuard --export-rules rules.json          # export block rules
+WinAppGuard --import-rules rules.json --dry-run
+WinAppGuard --network-status --json            # anti-network attack status
+WinAppGuard --network-alerts --limit 20 --json
+WinAppGuard --network-ack <alert id>           # mark read, no UAC
+WinAppGuard --network-block <id> --scope ip-port --minutes 10 --yes
+WinAppGuard --audit-tail --limit 50 --json
+WinAppGuard --doctor --json                    # read-only diagnostics
+WinAppGuard --help
 ```
 
 - **Permissions**: read-only commands only need the owner account; `--block` / `--unblock` /
@@ -541,7 +541,7 @@ WinAppGuardUninstall.exe --uninstall --keep-data
 If you only need to clear this tool's WFP objects after a failure, run as administrator:
 
 ```powershell
-WinAppGuard.exe --recover
+WinAppGuard --recover
 ```
 
 ### Blocking works on paths, not PIDs

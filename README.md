@@ -203,24 +203,24 @@ WinAppGuard 是一个带有反网络攻击并且可以控制应用程序联网�
 [`docs/5.3-CLI.md`](docs/5.3-CLI.md)。
 
 5.4 起，安装/修复成功后安装目录会自动加入系统 PATH；**新开的终端**可以直接使用
-`WinAppGuard.exe`。已经打开的终端需要重开。
+`WinAppGuard`。已经打开的终端需要重开。
 
 ```powershell
-WinAppGuard.exe --status --json                    # 服务 / 规则 / 检测状态
-WinAppGuard.exe --list-rules --json                # 所有规则
-WinAppGuard.exe --block "C:\Tools\a.exe"           # 永久阻止
-WinAppGuard.exe --block "C:\Tools\a.exe" --minutes 30
-WinAppGuard.exe --block @C:\list.txt --dry-run     # 批量预览
-WinAppGuard.exe --unblock "C:\Tools\a.exe"         # 只解除这一个程序
-WinAppGuard.exe --export-rules rules.json          # 导出阻止规则
-WinAppGuard.exe --import-rules rules.json --dry-run
-WinAppGuard.exe --network-status --json            # 反网络攻击状态
-WinAppGuard.exe --network-alerts --limit 20 --json
-WinAppGuard.exe --network-ack <告警 id>            # 标记已读，不需要 UAC
-WinAppGuard.exe --network-block <id> --scope ip-port --minutes 10 --yes
-WinAppGuard.exe --audit-tail --limit 50 --json
-WinAppGuard.exe --doctor --json                    # 只读诊断
-WinAppGuard.exe --help
+WinAppGuard --status --json                    # 服务 / 规则 / 检测状态
+WinAppGuard --list-rules --json                # 所有规则
+WinAppGuard --block "C:\Tools\a.exe"           # 永久阻止
+WinAppGuard --block "C:\Tools\a.exe" --minutes 30
+WinAppGuard --block @C:\list.txt --dry-run     # 批量预览
+WinAppGuard --unblock "C:\Tools\a.exe"         # 只解除这一个程序
+WinAppGuard --export-rules rules.json          # 导出阻止规则
+WinAppGuard --import-rules rules.json --dry-run
+WinAppGuard --network-status --json            # 反网络攻击状态
+WinAppGuard --network-alerts --limit 20 --json
+WinAppGuard --network-ack <告警 id>            # 标记已读，不需要 UAC
+WinAppGuard --network-block <id> --scope ip-port --minutes 10 --yes
+WinAppGuard --audit-tail --limit 50 --json
+WinAppGuard --doctor --json                    # 只读诊断
+WinAppGuard --help
 ```
 
 - **权限**：只读命令只要求所有者账户；`--block` / `--unblock` / `--import-rules` / `--network-block` 等写命令要求管理员。
@@ -491,7 +491,7 @@ WinAppGuardUninstall.exe --uninstall --keep-data
 如果只是遇到异常、想清掉本工具在 WFP 里的对象，用管理员运行：
 
 ```powershell
-WinAppGuard.exe --recover
+WinAppGuard --recover
 ```
 
 ### 阻止是按路径生效的，不是按 PID

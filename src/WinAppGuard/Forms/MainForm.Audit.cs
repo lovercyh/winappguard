@@ -199,7 +199,9 @@ public sealed partial class MainForm
         _auditGrid.Columns.Add(NewAuditColumn("时间", 90, 0));
         _auditGrid.Columns.Add(NewAuditColumn("类型", 60, 0));
         _auditGrid.Columns.Add(NewAuditColumn("程序", 150, 0));
-        _auditGrid.Columns.Add(NewAuditColumn("远端", 160, 0));
+        var remoteColumn = NewAuditColumn("远端", 160, 0);
+        remoteColumn.Name = "remote";
+        _auditGrid.Columns.Add(remoteColumn);
         _auditGrid.Columns.Add(NewAuditColumn("域名（推测）", 220, 0));
         _auditGrid.Columns.Add(NewAuditColumn("命中规则", 200, 0));
 
@@ -566,6 +568,49 @@ public sealed partial class MainForm
         string Rule,
         string Detail);
 
+    /// <summary>5.5：把记录页里的远程 IP 交给后台归属查询。</summary>
+    private void RequestAuditOwnership()
+    {
+        if (_auditGrid is null || _auditGrid.IsDisposed)
+        {
+            return;
+        }
+
+        RequestIpOwnership(
+            _auditGrid.Rows
+                .Cast<DataGridViewRow>()
+                .Select(row => row.Tag)
+                .OfType<AuditRow>()
+                .Select(row => row.RemoteAddress));
+    }
+
+    /// <summary>5.5：把归属提示挂到记录页的「远端」列。</summary>
+    private void RefreshAuditOwnershipTooltips()
+    {
+        if (_auditGrid is null || _auditGrid.IsDisposed)
+        {
+            return;
+        }
+
+        var column = _auditGrid.Columns["remote"];
+
+        if (column is null)
+        {
+            return;
+        }
+
+        foreach (DataGridViewRow row in _auditGrid.Rows)
+        {
+            if (row.Tag is not AuditRow item)
+            {
+                continue;
+            }
+
+            row.Cells[column.Index].ToolTipText =
+                ResolveIpOwnership(item.RemoteAddress).TooltipText;
+        }
+    }
+
     private void RefreshAudit()
     {
         try
@@ -683,6 +728,9 @@ public sealed partial class MainForm
             {
                 _auditGrid.ResumeLayout();
             }
+
+            RequestAuditOwnership();
+            RefreshAuditOwnershipTooltips();
 
             var blocked = rows.Count(row => row.Kind == "拦截");
             var withDomain = events.Count(item => !string.IsNullOrEmpty(item.Domain));

@@ -302,6 +302,7 @@ public sealed partial class MainForm
                     _ => "未读",
                 }),
                 Signature = alert.Signature,
+                RemoteAddress = alert.RemoteAddress,
                 TargetText = string.IsNullOrEmpty(alert.RemoteAddress)
                     ? string.Empty
                     : $"{alert.RemoteAddress}:{alert.RemotePort}",
@@ -396,6 +397,52 @@ public sealed partial class MainForm
 
         MaybeNotifyNetworkAlert();
         UpdateNetworkButtons();
+        RequestNetworkOwnership();
+        RefreshNetworkOwnershipTooltips();
+    }
+
+    /// <summary>5.5：把当前告警里的远程 IP 交给后台归属查询。</summary>
+    private void RequestNetworkOwnership()
+    {
+        if (_ndGrid is null || _ndGrid.IsDisposed)
+        {
+            return;
+        }
+
+        RequestIpOwnership(_ndAlerts.Select(alert => alert.RemoteAddress));
+    }
+
+    /// <summary>5.5：把归属提示挂到反网络攻击表格的「远端」列。</summary>
+    private void RefreshNetworkOwnershipTooltips()
+    {
+        if (_ndGrid is null || _ndGrid.IsDisposed)
+        {
+            return;
+        }
+
+        var columnIndex = _ndGrid.Columns
+            .Cast<DataGridViewColumn>()
+            .FirstOrDefault(column =>
+                string.Equals(
+                    column.DataPropertyName,
+                    nameof(NdRow.TargetText),
+                    StringComparison.Ordinal))?.Index ?? -1;
+
+        if (columnIndex < 0)
+        {
+            return;
+        }
+
+        foreach (DataGridViewRow row in _ndGrid.Rows)
+        {
+            if (row.DataBoundItem is not NdRow item)
+            {
+                continue;
+            }
+
+            row.Cells[columnIndex].ToolTipText =
+                ResolveIpOwnership(item.RemoteAddress).TooltipText;
+        }
     }
 
     private void MaybeNotifyNetworkAlert()
@@ -672,6 +719,7 @@ public sealed partial class MainForm
         public string SeverityText { get; init; } = string.Empty;
         public string StatusText { get; init; } = string.Empty;
         public string Signature { get; init; } = string.Empty;
+        public string RemoteAddress { get; init; } = string.Empty;
         public string TargetText { get; init; } = string.Empty;
         public string ProcessText { get; init; } = string.Empty;
         public string Evidence { get; init; } = string.Empty;

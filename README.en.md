@@ -11,11 +11,12 @@
 WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a program list, it shows the
 **TCP connections that are online right now** — start from “which program is online”, end at “blocked”.
 
-> **Current release: 5.4**
+> **Current release: 5.5**
 >
 > - Install/repair adds the install folder to the system PATH, so a new terminal can run `WinAppGuard` directly.
 > - Anti-network attack: Suricata 8.0.7 + ET Open, alerts only; you choose whether to apply a temporary WFP block.
 >   Supports rule categories, one capture adapter and read/unread state.
+> - Remote-IP ownership tooltips are available on the Connections, Anti-network attack and Records pages.
 > - Flow IDS and protection: port scans, LAN ARP/DHCP, DNS security, IPv6 neighbour security, config integrity.
 > - CLI: read-only queries, JSON, rule operations, network detection and diagnostics. See [`docs/5.3-CLI.md`](docs/5.3-CLI.md).
 > - **No automatic blocking, no new kernel driver, no automatic rule updates, no telemetry**; HTTPS payload is not visible.
@@ -33,6 +34,8 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
 
 - **Current connections**: program, full path, PID, local/remote address and port, state, protocol and signature;
   search and sort.
+- **IP ownership tooltip**: hover a remote IP on the Connections, Anti-network attack or Records page to see country/region,
+  AS and prefix; can be disabled in Settings.
 - **Block / allow programs**: permanent, 30 minutes, 2 hours or until next restart; timed blocks expire automatically.
 - **Strict mode (off by default)**: only whitelisted programs can connect. It is a session-level restriction in the
   service; exiting or a service crash removes it automatically. Windows Firewall is not changed. Also offers a

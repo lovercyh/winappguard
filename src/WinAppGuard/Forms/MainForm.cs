@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Text;
 using WinAppGuard.Contracts;
@@ -3341,6 +3342,58 @@ public partial class MainForm : Form
     // ==================================================================
 
     /// <summary>
+    /// 5.5：把任意页面上的远程 IP 解析成归属提示。
+    ///
+    /// 只查缓存，不联网；真正的后台查询统一走 <see cref="IpOwnershipService"/>。
+    /// 私有 / 回环地址直接给 LocalOnly，明确告诉用户“没有往外查”。
+    /// </summary>
+    private IpOwnershipInfo ResolveIpOwnership(string? remoteAddress)
+    {
+        if (!_ipOwnershipService.IsEnabled
+            || string.IsNullOrWhiteSpace(remoteAddress)
+            || !IPAddress.TryParse(remoteAddress.Trim(), out var address))
+        {
+            return IpOwnershipInfo.None;
+        }
+
+        if (!IpOwnershipLookup.IsQueryable(address))
+        {
+            return IpOwnershipInfo.LocalOnly;
+        }
+
+        var key = IpOwnershipLookup.ToKey(address);
+        return _ipOwnershipService.TryGet(key, out var info)
+            ? info
+            : IpOwnershipInfo.None;
+    }
+
+    /// <summary>
+    /// 请后台查询一批字符串形式的远程 IP。关闭归属查询时什么都不做。
+    /// </summary>
+    private void RequestIpOwnership(IEnumerable<string>? addresses)
+    {
+        if (!_ipOwnershipService.IsEnabled || addresses is null)
+        {
+            return;
+        }
+
+        var parsed = new List<IPAddress>();
+
+        foreach (var text in addresses)
+        {
+            if (IPAddress.TryParse(text?.Trim(), out var address))
+            {
+                parsed.Add(address);
+            }
+        }
+
+        if (parsed.Count > 0)
+        {
+            _ipOwnershipService.Request(parsed);
+        }
+    }
+
+    /// <summary>
     /// 把缓存里已有的归属信息填到连接项上。
     ///
     /// 只在界面线程调用，而且只读内存缓存 —— 不联网、不阻塞。
@@ -3440,6 +3493,8 @@ public partial class MainForm : Form
                 // 只重挂悬停提示，不做整表重绑 ——
                 // 归属信息不影响行底色，重绑反而会让用户的选中闪一下。
                 RefreshOwnershipTooltips();
+                RefreshNetworkOwnershipTooltips();
+                RefreshAuditOwnershipTooltips();
             });
         }
         catch (InvalidOperationException)
@@ -3481,12 +3536,16 @@ public partial class MainForm : Form
 
         ApplyOwnership();
         RefreshOwnershipTooltips();
+        RefreshNetworkOwnershipTooltips();
+        RefreshAuditOwnershipTooltips();
 
         if (enabled)
         {
             // 先讲清楚会发生什么，再开始查。
             ShowIpOwnershipNoticeIfNeeded();
             RequestOwnershipForVisibleConnections();
+            RequestNetworkOwnership();
+            RequestAuditOwnership();
         }
     }
 

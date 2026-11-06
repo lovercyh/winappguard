@@ -22,6 +22,7 @@ public sealed partial class MainForm
     private Button _ndReleaseButton = null!;
     private Button _ndClearButton = null!;
     private Button _ndSettingsButton = null!;
+    private CheckBox _ndAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _ndGrid = null!;
     private ListBox _ndBlocks = null!;
     private System.Windows.Forms.Timer? _ndTimer;
@@ -98,12 +99,22 @@ public sealed partial class MainForm
         _ndSettingsButton = new Button { Text = Localizer.T("设置…"), Width = 84 };
         _ndSettingsButton.Click += OnNetworkSettingsClick;
 
+        _ndAutoRefreshCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Text = Localizer.T("每 3 秒自动刷新"),
+            Checked = true,
+            Margin = new Padding(12, 8, 3, 3),
+        };
+        _ndAutoRefreshCheckBox.CheckedChanged += OnNetworkAutoRefreshChanged;
+
         actions.Controls.Add(_ndRefreshButton);
         actions.Controls.Add(_ndAckButton);
         actions.Controls.Add(_ndBlockButton);
         actions.Controls.Add(_ndReleaseButton);
         actions.Controls.Add(_ndClearButton);
         actions.Controls.Add(_ndSettingsButton);
+        actions.Controls.Add(_ndAutoRefreshCheckBox);
 
         top.Controls.Add(actions);
         top.Controls.Add(_ndStatusLabel);
@@ -219,17 +230,49 @@ public sealed partial class MainForm
         _tabNetworkDetection.Controls.Add(top);
         _tabControl.TabPages.Add(_tabNetworkDetection);
 
+        _tabControl.SelectedIndexChanged += (_, _) =>
+        {
+            if (_tabControl.SelectedTab == _tabNetworkDetection)
+            {
+                RefreshNetworkDetection();
+            }
+        };
+
+        // 5.6：这一页原来没有自动刷新开关，定时器一直跑，
+        // 关掉别的页面的自动刷新后这里仍会每 3 秒重建表格、把滚动位置顶回顶部。
         _ndTimer = new System.Windows.Forms.Timer(components!)
         {
             Interval = NetworkDetectionRefreshIntervalMs,
+            Enabled = _ndAutoRefreshCheckBox.Checked,
         };
-        _ndTimer.Tick += (_, _) => RefreshNetworkDetection();
-        _ndTimer.Start();
+
+        _ndTimer.Tick += (_, _) =>
+        {
+            // 只在用户真的看着这一页、且没关掉自动刷新时拉数据。
+            if (_ndAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabNetworkDetection)
+            {
+                RefreshNetworkDetection();
+            }
+        };
+    }
+
+    private void OnNetworkAutoRefreshChanged(object? sender, EventArgs e)
+    {
+        if (_ndTimer is not null)
+        {
+            _ndTimer.Enabled = _ndAutoRefreshCheckBox.Checked;
+        }
+
+        if (_ndAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabNetworkDetection)
+        {
+            RefreshNetworkDetection();
+        }
     }
 
     private async void RefreshNetworkDetection()
     {
-        if (_ndLoading || IsDisposed || Disposing)
+        // 自检模式承诺不联网，也不启动后台查询。
+        if (SuppressBackgroundServices || _ndLoading || IsDisposed || Disposing)
         {
             return;
         }
@@ -322,6 +365,8 @@ public sealed partial class MainForm
 
         if (!string.Equals(signature, _ndSignature, StringComparison.Ordinal))
         {
+            // 5.6：重绑前记住滚动位置，重绑后放回去。
+            var firstDisplayedRow = CaptureFirstDisplayedRow(_ndGrid);
             var selectedId = (_ndGrid.CurrentRow?.DataBoundItem as NdRow)?.Id;
             _ndSignature = signature;
             _ndGrid.DataSource = rows;
@@ -338,6 +383,8 @@ public sealed partial class MainForm
                     }
                 }
             }
+
+            RestoreFirstDisplayedRow(_ndGrid, firstDisplayedRow);
         }
 
         var blocks = _ndBlockList

@@ -16962,6 +16962,7 @@ internal static class Program
                          ("_dnsAutoRefreshCheckBox", "_dnsTimer", "DNS"),
                          ("_auditAutoRefreshCheckBox", "_auditTimer", "记录"),
                          ("_lanAutoRefreshCheckBox", "_lanTimer", "局域网"),
+                         ("_ndAutoRefreshCheckBox", "_ndTimer", "反网络攻击"),
                      })
             {
                 if (TryGetField<CheckBox>(form, pair.Check, out var auto)
@@ -16980,6 +16981,36 @@ internal static class Program
                 else
                 {
                     CheckAssertion(results, $"找得到{pair.Label}页的自动刷新开关", false);
+                }
+            }
+
+            // 5.6：服务状态同步只能改状态文字，不能在关闭自动刷新后重建记录表。
+            if (TryGetField<DataGridView>(form, "_auditGrid", out var auditGrid)
+                && TryGetField<CheckBox>(form, "_auditAutoRefreshCheckBox", out var auditAuto)
+                && TryGetField<System.Windows.Forms.Timer>(form, "_auditTimer", out var auditTimer))
+            {
+                auditAuto.Checked = false;
+                Application.DoEvents();
+
+                auditGrid.Rows.Clear();
+                auditGrid.Rows.Add(
+                    "12:00:00", "连接", "demo.exe", "203.0.113.1:443", "example.com", "demo rule");
+                var auditRowsBefore = auditGrid.Rows.Count;
+
+                var applyAuditStatus = typeof(MainForm).GetMethod(
+                    "ApplyAuditStatus", BindingFlags.Instance | BindingFlags.NonPublic);
+
+                if (applyAuditStatus is not null)
+                {
+                    applyAuditStatus.Invoke(form, new object[] { new ServiceStatus() });
+                    Application.DoEvents();
+
+                    CheckAssertion(results, "关闭自动刷新后，服务状态同步不重建记录表",
+                        !auditTimer.Enabled && auditGrid.Rows.Count == auditRowsBefore);
+                }
+                else
+                {
+                    CheckAssertion(results, "找得到记录页的 ApplyAuditStatus", false);
                 }
             }
 

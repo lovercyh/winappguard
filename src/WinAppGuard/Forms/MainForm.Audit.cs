@@ -37,6 +37,12 @@ public sealed partial class MainForm
     /// <summary>上一次重建表格时的"数据签名"。相同就不再重建（避免每 3 秒打断用户选中/滚动）。</summary>
     private string? _auditLastSignature;
 
+    /// <summary>5.6：状态栏里显示的数量，单独存下来，服务状态变化时可以只更新文字而不重建表格。</summary>
+    private int _auditShownCount;
+    private int _auditBlockedCount;
+    private int _auditTotalCount;
+    private int _auditDomainCount;
+
     /// <summary>
     /// 自检工具构造窗体时置 true：不启动后台服务、不写真实审计目录。
     /// （ui-check 只是量布局，不应该产生副作用。）
@@ -347,7 +353,11 @@ public sealed partial class MainForm
         }
 
         UpdateAuditControlsEnabled();
-        RefreshAudit();
+
+        // 5.6：这里原来无条件 RefreshAudit()，服务状态每 5 秒探测一次，
+        // 于是关掉「自动刷新」后表格仍会按新记录重建、滚动位置被顶回第一行。
+        // 状态文字和行数据分开更新：行只在用户手动刷新或自动刷新开启时重建。
+        UpdateAuditStatusLabel();
     }
 
     /// <summary>服务不可用 / 记录关闭时，把不能用的控件灰掉（别让用户点了才发现失败）。</summary>
@@ -622,13 +632,19 @@ public sealed partial class MainForm
             var blockedOnly = _auditBlockedOnlyCheck.Checked;
 
             // 数据没变就不重建：每 3 秒重建一次会把用户的选中和滚动位置打断。
+            // 5.6：签名只包含会影响行的内容。服务状态 / 采集状态只影响状态栏文字，
+            // 由 UpdateAuditStatusLabel 单独更新，不再触发整表重建。
             var lastTicks = events.Count > 0 ? events[^1].TimeUtc.Ticks : 0;
-            var signature = $"{events.Count}|{lastTicks}|{keyword}|{blockedOnly}|{_auditCollecting}|{_serviceAvailable}";
+            var signature = $"{events.Count}|{lastTicks}|{keyword}|{blockedOnly}";
 
             if (string.Equals(signature, _auditLastSignature, StringComparison.Ordinal))
             {
+                UpdateAuditStatusLabel();
                 return;
             }
+
+            // 5.6：重建前记下滚动位置；只恢复选中行的话，选中项滚出屏幕后就回不到原处。
+            var firstDisplayedRow = CaptureFirstDisplayedRow(_auditGrid);
 
             // 重建前记下当前选中的是哪一条（用内容做 key，行号会变）。
             var selectedKey = _auditGrid.SelectedRows.Count > 0
@@ -732,46 +748,61 @@ public sealed partial class MainForm
             RequestAuditOwnership();
             RefreshAuditOwnershipTooltips();
 
-            var blocked = rows.Count(row => row.Kind == "拦截");
-            var withDomain = events.Count(item => !string.IsNullOrEmpty(item.Domain));
-            var total = events.Count;
+            _auditShownCount = rows.Count;
+            _auditBlockedCount = rows.Count(row => row.Kind == "拦截");
+            _auditTotalCount = events.Count;
+            _auditDomainCount = events.Count(item => !string.IsNullOrEmpty(item.Domain));
 
-            if (Localizer.IsEnglish)
-            {
-                var state = !_serviceAvailable
-                    ? "service is not running; recording stopped"
-                    : _auditCollecting
-                        ? "recording"
-                        : _settings.AuditEnabled
-                            ? "recording is not running (see logs)"
-                            : "recording is off";
-
-                _auditStatusLabel.Text =
-                    $"Showing {rows.Count} entries ({blocked} blocked) · " +
-                    $"{withDomain} of the latest {total} have a domain · " +
-                    $"retention {_settings.AuditRetentionDays} days · {state}";
-            }
-            else
-            {
-                _auditStatusLabel.Text =
-                    $"显示 {rows.Count} 条（拦截 {blocked}）· 最近 {total} 条里有 {withDomain} 条带域名" +
-                    $" · 保留 {_settings.AuditRetentionDays} 天 · " +
-                    (!_serviceAvailable
-                        ? "服务未运行，记录已停止"
-                        : _auditCollecting
-                            ? "记录中"
-                            : _settings.AuditEnabled
-                                ? "记录未启动（详见日志）"
-                                : "记录未开启");
-            }
+            UpdateAuditStatusLabel();
 
             _auditLastSignature = signature;
             UpdateAuditDetail();
+
+            // 5.6：把用户原来的滚动位置放回去。
+            RestoreFirstDisplayedRow(_auditGrid, firstDisplayedRow);
         }
         catch (Exception ex)
         {
             LocalLog.Error(LocalLog.Pick("刷新审计列表失败", "Failed to refresh the audit list."), ex);
             _auditStatusLabel.Text = Localizer.T("读取审计记录失败（详见日志）");
+        }
+    }
+
+    /// <summary>
+    /// 5.6：只更新记录页的状态文字，不重建表格。
+    ///
+    /// 服务状态每 5 秒探测一次；把它和行数据分开，关掉自动刷新后就不会
+    /// 因为一次状态探测把用户的滚动位置顶回第一行。
+    /// </summary>
+    private void UpdateAuditStatusLabel()
+    {
+        if (Localizer.IsEnglish)
+        {
+            var state = !_serviceAvailable
+                ? "service is not running; recording stopped"
+                : _auditCollecting
+                    ? "recording"
+                    : _settings.AuditEnabled
+                        ? "recording is not running (see logs)"
+                        : "recording is off";
+
+            _auditStatusLabel.Text =
+                $"Showing {_auditShownCount} entries ({_auditBlockedCount} blocked) · " +
+                $"{_auditDomainCount} of the latest {_auditTotalCount} have a domain · " +
+                $"retention {_settings.AuditRetentionDays} days · {state}";
+        }
+        else
+        {
+            _auditStatusLabel.Text =
+                $"显示 {_auditShownCount} 条（拦截 {_auditBlockedCount}）· 最近 {_auditTotalCount} 条里有 {_auditDomainCount} 条带域名" +
+                $" · 保留 {_settings.AuditRetentionDays} 天 · " +
+                (!_serviceAvailable
+                    ? "服务未运行，记录已停止"
+                    : _auditCollecting
+                        ? "记录中"
+                        : _settings.AuditEnabled
+                            ? "记录未启动（详见日志）"
+                            : "记录未开启");
         }
     }
 

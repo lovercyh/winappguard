@@ -1622,6 +1622,10 @@ public partial class MainForm : Form
     /// </summary>
     private void RebindGrid(RowKey? selectedKey)
     {
+        // 5.6：重建表格时记住用户滚到哪一行，重建完成后放回去。
+        // 只恢复选中行是不够的 —— 选中项可能早就滚出屏幕了。
+        var firstDisplayedRow = CaptureFirstDisplayedRow(_connectionGrid);
+
         // 重新绑定期间表格会短暂处于「当前行指向的数据已经不在了」的中间状态，
         // 这时候不能让 SelectionChanged 去读选中项，否则同样会越界。
         _isRebindingGrid = true;
@@ -1652,6 +1656,58 @@ public partial class MainForm : Form
         ColorizeRows();
         UpdateSortGlyphs();
         UpdateActionState();
+
+        // 最后再放回滚动位置：上面的恢复选中可能把视图拉到选中行。
+        RestoreFirstDisplayedRow(_connectionGrid, firstDisplayedRow);
+    }
+
+    /// <summary>
+    /// 5.6：记下表格当前显示的第一行。
+    ///
+    /// 表格没有行、已经销毁，或控件状态不允许读取时返回 -1 —— 调用方直接跳过恢复。
+    /// 这里只读，不改变选中，也不会触发任何刷新。
+    /// </summary>
+    private static int CaptureFirstDisplayedRow(DataGridView grid)
+    {
+        if (grid.IsDisposed || grid.Disposing || grid.Rows.Count == 0)
+        {
+            return -1;
+        }
+
+        try
+        {
+            return grid.FirstDisplayedScrollingRowIndex;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// 5.6：把表格滚回之前记下的第一行。
+    ///
+    /// 行数变少时收敛到最后一行；控件正在销毁时静默放弃 —— 恢复滚动位置不能影响刷新本身。
+    /// </summary>
+    private static void RestoreFirstDisplayedRow(DataGridView grid, int firstDisplayedRow)
+    {
+        if (firstDisplayedRow < 0
+            || grid.IsDisposed
+            || grid.Disposing
+            || grid.Rows.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            grid.FirstDisplayedScrollingRowIndex =
+                Math.Min(firstDisplayedRow, grid.Rows.Count - 1);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+        {
+            // 表格还没完成布局（或已经销毁）：这一轮不恢复，不影响数据本身。
+        }
     }
 
     /// <summary>
@@ -4229,6 +4285,13 @@ public partial class MainForm : Form
             return;
         }
 
+        // 5.6：定时器可能还有排队中的 Tick；再确认一次开关，
+        // 保证用户取消勾选后不会又被自动扫描带回去。
+        if (!_autoRefreshCheckBox.Checked)
+        {
+            return;
+        }
+
         // 只在用户看着连接页时刷新，避免在别的页上白白走一遍扫描。
         if (_tabControl.SelectedTab == _tabConnections)
         {
@@ -5394,6 +5457,7 @@ public partial class MainForm : Form
 
                 _auditCollecting = false;
                 UpdateAuditControlsEnabled();
+                UpdateAuditStatusLabel();
                 return;
             }
 
@@ -5428,6 +5492,7 @@ public partial class MainForm : Form
             // 审计采集也随服务停止；已有记录仍可读。
             _auditCollecting = false;
             UpdateAuditControlsEnabled();
+            UpdateAuditStatusLabel();
             return;
         }
 

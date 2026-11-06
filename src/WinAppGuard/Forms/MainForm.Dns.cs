@@ -267,8 +267,31 @@ public sealed partial class MainForm
 
         if (!string.Equals(signature, _dnsSignature, StringComparison.Ordinal))
         {
+            // 5.6：先记住滚动位置和选中行，重绑后放回去。
+            var firstDisplayedRow = CaptureFirstDisplayedRow(_dnsGrid);
+
+            var selectedKey = _dnsGrid.SelectedRows.Count > 0
+                              && _dnsGrid.SelectedRows[0].DataBoundItem is DnsRow selectedRow
+                ? $"{selectedRow.TimeText}|{selectedRow.Pid}|{selectedRow.QueryName}"
+                : null;
+
             _dnsSignature = signature;
             _dnsGrid.DataSource = view;
+
+            if (selectedKey is not null)
+            {
+                foreach (DataGridViewRow gridRow in _dnsGrid.Rows)
+                {
+                    if (gridRow.DataBoundItem is DnsRow row
+                        && $"{row.TimeText}|{row.Pid}|{row.QueryName}" == selectedKey)
+                    {
+                        gridRow.Selected = true;
+                        break;
+                    }
+                }
+            }
+
+            RestoreFirstDisplayedRow(_dnsGrid, firstDisplayedRow);
         }
 
         UpdateDnsStatus(view.Count);

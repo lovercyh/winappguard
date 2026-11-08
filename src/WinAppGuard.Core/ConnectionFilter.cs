@@ -44,6 +44,36 @@ public enum ConnectionSortColumn
 }
 
 /// <summary>
+/// 5.7：「按程序汇总」视图支持的排序列。
+///
+/// 刻意和明细排序分开：汇总行没有本地端口 / 状态这种单连接字段，
+/// 混用同一个枚举会让界面出现「点了不能排」的列。
+/// </summary>
+public enum ConnectionSummarySortColumn
+{
+    /// <summary>不排序 —— 保持第一次出现的顺序。</summary>
+    None = 0,
+
+    /// <summary>按程序名（不区分大小写）。</summary>
+    ProcessName,
+
+    /// <summary>按连接数。</summary>
+    ConnectionCount,
+
+    /// <summary>按不同远端地址数。</summary>
+    RemoteEndpointCount,
+
+    /// <summary>按上传字节数。</summary>
+    TrafficOut,
+
+    /// <summary>按下载字节数。</summary>
+    TrafficIn,
+
+    /// <summary>按总流量。</summary>
+    TrafficTotal,
+}
+
+/// <summary>
 /// 连接列表的过滤与排序 —— **纯逻辑，完全不依赖界面**。
 ///
 /// 为什么要单独抽出来：
@@ -101,6 +131,128 @@ public static class ConnectionFilter
                 : matched.OrderByDescending(item => item, comparer))
             .ToList();
     }
+
+    /// <summary>
+    /// 5.7：按程序把连接汇总成一行。
+    ///
+    /// 分组规则：
+    ///   - 有程序路径：按路径合并（同一程序的多开实例会进同一行）；
+    ///   - 没有路径：按 PID 合并，避免把互不相关的无归属连接混在一起。
+    ///
+    /// 流量取代表行的程序级累计值，**不做组内求和**（服务端已经按程序聚合过，
+    /// 每行拿到的都是同一个数字，相加会按连接数重复计算）。
+    /// </summary>
+    public static List<ConnectionSummaryItem> Summarize(
+        IReadOnlyList<TcpConnectionItem> all,
+        string? keyword,
+        ConnectionSummarySortColumn sortColumn = ConnectionSummarySortColumn.None,
+        bool ascending = true)
+    {
+        var groups = new Dictionary<string, List<TcpConnectionItem>>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+
+        foreach (var item in all)
+        {
+            if (!Matches(item, keyword))
+            {
+                continue;
+            }
+
+            var key = string.IsNullOrEmpty(item.ProcessPath)
+                ? $"pid:{item.Pid}"
+                : item.ProcessPath;
+
+            if (!groups.TryGetValue(key, out var list))
+            {
+                list = new List<TcpConnectionItem>();
+                groups[key] = list;
+                order.Add(key);
+            }
+
+            list.Add(item);
+        }
+
+        var result = new List<ConnectionSummaryItem>(order.Count);
+
+        foreach (var key in order)
+        {
+            result.Add(BuildSummary(key, groups[key]));
+        }
+
+        if (sortColumn == ConnectionSummarySortColumn.None)
+        {
+            return result;
+        }
+
+        var comparer = Comparer<ConnectionSummaryItem>.Create(
+            (a, b) => CompareSummary(a, b, sortColumn));
+
+        return (ascending
+                ? result.OrderBy(item => item, comparer)
+                : result.OrderByDescending(item => item, comparer))
+            .ToList();
+    }
+
+    private static ConnectionSummaryItem BuildSummary(
+        string key,
+        List<TcpConnectionItem> items)
+    {
+        var representative = items[0];
+
+        var pids = items
+            .Select(item => item.Pid)
+            .Distinct()
+            .OrderBy(pid => pid)
+            .ToArray();
+
+        var remoteEndpoints = items
+            .Where(item => item.RemotePort != 0)
+            .Select(item => $"{item.RemoteAddressText}:{item.RemotePortText}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new ConnectionSummaryItem
+        {
+            Key = key,
+            ProcessName = representative.ProcessName,
+            ProcessPath = representative.ProcessPath,
+            Pids = pids,
+            Representative = representative,
+            ConnectionCount = items.Count,
+            RemoteEndpoints = remoteEndpoints,
+            EstablishedCount = items.Count(item => item.State == TcpState.Established),
+            ListeningCount = items.Count(item => item.State == TcpState.Listen),
+        };
+    }
+
+    private static int CompareSummary(
+        ConnectionSummaryItem a,
+        ConnectionSummaryItem b,
+        ConnectionSummarySortColumn column)
+        => column switch
+        {
+            ConnectionSummarySortColumn.ProcessName =>
+                string.Compare(a.ProcessName, b.ProcessName, StringComparison.OrdinalIgnoreCase),
+
+            ConnectionSummarySortColumn.ConnectionCount =>
+                a.ConnectionCount.CompareTo(b.ConnectionCount),
+
+            ConnectionSummarySortColumn.RemoteEndpointCount =>
+                a.RemoteEndpoints.Count.CompareTo(b.RemoteEndpoints.Count),
+
+            ConnectionSummarySortColumn.TrafficOut =>
+                a.Representative.TrafficBytesOut.CompareTo(b.Representative.TrafficBytesOut),
+
+            ConnectionSummarySortColumn.TrafficIn =>
+                a.Representative.TrafficBytesIn.CompareTo(b.Representative.TrafficBytesIn),
+
+            ConnectionSummarySortColumn.TrafficTotal =>
+                ((Int128)a.Representative.TrafficBytesOut + a.Representative.TrafficBytesIn)
+                .CompareTo((Int128)b.Representative.TrafficBytesOut + b.Representative.TrafficBytesIn),
+
+            _ => 0,
+        };
+
 
     /// <summary>
     /// 判断一条连接是否命中关键词。

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
@@ -22,6 +23,7 @@ using WinAppGuard.Core.Diagnostics.Ids;
 using WinAppGuard.Core.Diagnostics.Lan;
 using WinAppGuard.Core.Diagnostics.NetworkDetection;
 using WinAppGuard.Core.Diagnostics.Traffic;
+using WinAppGuard.Core.Export;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Forms;
@@ -53,6 +55,8 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --ownership-test    IP 归属：**会联网**，核对查询结果与地址过滤
 ///   WinAppGuard.SelfCheck.exe --ownership-core-test  IP 归属：离线，核对缓存 / 淘汰 / 开关 / 设置持久化
 ///   WinAppGuard.SelfCheck.exe --connection-filter-test  连接列表：离线，核对搜索过滤与排序规则
+///   WinAppGuard.SelfCheck.exe --export-test      5.7：CSV / JSON 表格导出（离线）
+///   WinAppGuard.SelfCheck.exe --diagnostics-test 5.7：诊断包 zip 内容（临时目录）
 ///   WinAppGuard.SelfCheck.exe --temp-block-test  临时阻断：离线，核对待到期信息的编码 / 解析 / 判定
 ///   WinAppGuard.SelfCheck.exe --temp-block-status  临时阻断：只读，打印每条规则的到期解析结果
 ///   WinAppGuard.SelfCheck.exe --strict-mode-test  严格模式：会话内拦截（会短暂断开未放行程序的网络，结束即恢复）
@@ -132,6 +136,8 @@ internal static class Program
                          && !args.Contains("--ownership-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ownership-core-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--connection-filter-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--export-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--diagnostics-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--temp-block-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--temp-block-status", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-check", StringComparer.OrdinalIgnoreCase)
@@ -256,6 +262,14 @@ internal static class Program
             else if (args.Contains("--connection-filter-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunConnectionFilterTest();
+            }
+            else if (args.Contains("--export-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunExportTest();
+            }
+            else if (args.Contains("--diagnostics-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunDiagnosticsTest();
             }
             else if (args.Contains("--temp-block-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1558,6 +1572,7 @@ internal static class Program
             CheckWhitelistWiring(results, form);
             CheckStrictModeUi(results, form);
             CheckSafetyNoticeFits(results, form);
+            Check57UiWiring(results, form);
 
             hintLabel.Text = originalHint;
             detailLabel.Text = originalDetail;
@@ -3627,6 +3642,74 @@ internal static class Program
     /// 产品负责人最初的想法是「搭在每 3 秒的刷新循环上」，但那个开关**默认是关的**——
     /// 搭上去的话，没勾开关的用户就永远等不到临时阻断自动解除。
     /// </summary>
+    private static void Check57UiWiring(List<(string Title, bool Passed)> results, MainForm form)
+    {
+        W();
+        W("===== 5.7 连接汇总 / 诊断包 =====");
+
+        if (TryGetField<TabControl>(form, "_tabControl", out var tabs)
+            && TryGetField<Control>(form, "_tabConnections", out var connectionsPage)
+            && connectionsPage is TabPage connectionsTab)
+        {
+            tabs.SelectedTab = connectionsTab;
+            Application.DoEvents();
+        }
+
+        if (TryGetField<CheckBox>(form, "_connectionSummaryCheckBox", out var summaryCheck)
+            && TryGetField<DataGridView>(form, "_connectionSummaryGrid", out var summaryGrid)
+            && TryGetField<DataGridView>(form, "_connectionGrid", out var detailGrid))
+        {
+            CheckAssertion(results, "连接页有「按程序汇总」开关，默认关闭", !summaryCheck.Checked);
+            CheckAssertion(results, "汇总表预先建好并隐藏", !summaryGrid.Visible && summaryGrid.Columns.Count >= 10);
+
+            // 造一组数据，验证汇总表真的按程序合并，而不只是控件存在。
+            if (TryGetField<List<TcpConnectionItem>>(form, "_scannedConnections", out var scanned))
+            {
+                scanned.Clear();
+                scanned.AddRange(new[]
+                {
+                    MakeConnection(100, "chrome.exe", "8.8.8.8", 443, "IPv4", 50001,
+                        TcpState.Established, @"C:\Apps\chrome.exe"),
+                    MakeConnection(101, "chrome.exe", "1.1.1.1", 443, "IPv4", 50002,
+                        TcpState.Established, @"C:\Apps\chrome.exe"),
+                    MakeConnection(200, "notepad.exe", "9.9.9.9", 80, "IPv4", 50003,
+                        TcpState.Established, @"C:\Windows\notepad.exe"),
+                });
+
+                var rebuild = typeof(MainForm).GetMethod(
+                    "RebuildView", BindingFlags.Instance | BindingFlags.NonPublic);
+
+                rebuild?.Invoke(form, null);
+                Application.DoEvents();
+            }
+
+            summaryCheck.Checked = true;
+            Application.DoEvents();
+
+            CheckAssertion(results, "勾选后显示汇总表、隐藏明细表",
+                summaryGrid.Visible && !detailGrid.Visible);
+            CheckAssertion(results, "汇总表按程序合并（3 条连接 → 2 个程序）",
+                summaryGrid.Rows.Count == 2);
+            CheckAssertion(results, "汇总表选中一行后动作逻辑能拿到程序路径",
+                summaryGrid.Rows.Count > 0
+                && summaryGrid.Rows[0].DataBoundItem is ConnectionSummaryItem item
+                && !string.IsNullOrEmpty(item.ProcessPath));
+
+            summaryCheck.Checked = false;
+            Application.DoEvents();
+
+            CheckAssertion(results, "取消后恢复明细表", detailGrid.Visible && !summaryGrid.Visible);
+        }
+        else
+        {
+            CheckAssertion(results, "找得到连接汇总开关与汇总表", false);
+        }
+
+        CheckAssertion(results, "设置页有诊断包按钮",
+            TryGetField<Button>(form, "_diagnosticBundleButton", out var diagnosticButton)
+            && diagnosticButton.Text.Contains("诊断", StringComparison.Ordinal));
+    }
+
     private static void CheckExpiryTimerWiring(List<(string Title, bool Passed)> results, MainForm form)
     {
         W();
@@ -4710,10 +4793,276 @@ internal static class Program
         CheckAssertion(results, "过滤与排序可同时生效（chrome 两条按端口升序 = 80, 443）",
             combined.Count == 2 && combined[0].RemotePort == 80 && combined[1].RemotePort == 443);
 
+        // ---------- 5.7：按程序汇总 ----------
+        var summarySample = new List<TcpConnectionItem>
+        {
+            MakeConnection(100, "chrome.exe", "8.8.8.8", 443, "IPv4", 50001, TcpState.Established,
+                @"C:\Apps\chrome.exe"),
+            MakeConnection(101, "chrome.exe", "1.1.1.1", 443, "IPv4", 50002, TcpState.Established,
+                @"C:\Apps\chrome.exe"),
+            MakeConnection(200, "notepad.exe", "9.9.9.9", 443, "IPv4", 50003, TcpState.Listen,
+                @"C:\Windows\notepad.exe"),
+            MakeConnection(300, "orphan.exe", "10.0.0.1", 53, "IPv4", 50004, TcpState.Established),
+        };
+
+        summarySample[0].ApplyTraffic(1000, 2000);
+        summarySample[1].ApplyTraffic(1000, 2000);
+
+        var summary = ConnectionFilter.Summarize(summarySample, null);
+        var chromeSummary = summary.Single(item => item.ProcessPath == @"C:\Apps\chrome.exe");
+
+        CheckAssertion(results, "汇总：同一程序路径的多条连接合并成一行",
+            summary.Count == 3 && chromeSummary.ConnectionCount == 2);
+        CheckAssertion(results, "汇总：PID 去重后列出两个实例",
+            chromeSummary.Pids.Count == 2 && chromeSummary.Pids.SequenceEqual(new[] { 100, 101 }));
+        CheckAssertion(results, "汇总：远端地址去重计数",
+            chromeSummary.RemoteEndpoints.Count == 2);
+        CheckAssertion(results, "汇总：已建立 / 监听状态计数正确",
+            chromeSummary.EstablishedCount == 2
+            && summary.Single(item => item.ProcessName == "notepad.exe").ListeningCount == 1);
+        CheckAssertion(results, "汇总：流量取程序级代表值，不按连接数重复相加",
+            chromeSummary.Representative.TrafficBytesOut == 1000
+            && chromeSummary.Representative.TrafficBytesIn == 2000);
+        CheckAssertion(results, "汇总：拿不到路径的连接按 PID 分组",
+            summary.Any(item => item.Key == "pid:300" && item.ConnectionCount == 1));
+
+        var summaryFiltered = ConnectionFilter.Summarize(summarySample, "chrome");
+        CheckAssertion(results, "汇总：搜索词仍然生效",
+            summaryFiltered.Count == 1 && summaryFiltered[0].ProcessName == "chrome.exe");
+
+        var summaryByCount = ConnectionFilter.Summarize(
+            summarySample, null, ConnectionSummarySortColumn.ConnectionCount, false);
+        CheckAssertion(results, "汇总：按连接数降序",
+            summaryByCount[0].ProcessName == "chrome.exe" && summaryByCount[0].ConnectionCount == 2);
+
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    /// <summary>造一条用于断言的连接。</summary>
+    /// <summary>
+    /// 5.7：CSV / JSON 表格导出器（离线，不写用户目录）。
+    /// </summary>
+    private static void RunExportTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var tempDir = Path.Combine(Path.GetTempPath(), $"wag-export-{Guid.NewGuid():N}");
+
+        W("################################################################");
+        W("#   5.7 表格导出：CSV / JSON（离线）                             #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var columns = new[]
+            {
+                new TableExportColumn("name", "程序名"),
+                new TableExportColumn("note", "备注"),
+                new TableExportColumn("bytes", "字节"),
+            };
+
+            var rows = new List<IReadOnlyDictionary<string, object?>>
+            {
+                new Dictionary<string, object?>
+                {
+                    ["name"] = "a,b",
+                    ["note"] = "c\"d\ne",
+                    ["bytes"] = 123L,
+                },
+                new Dictionary<string, object?>
+                {
+                    ["name"] = "中文程序",
+                    ["note"] = " 前后空格 ",
+                    ["bytes"] = 0L,
+                },
+            };
+
+            var document = new TableExportDocument
+            {
+                ToolVersion = "5.7-test",
+                View = "unit-test",
+                Columns = columns,
+                Rows = rows,
+            };
+
+            var csv = TableExport.ToCsv(document);
+            W($"    CSV 前两行 = {csv.Split("\r\n").FirstOrDefault()}");
+            CheckAssertion(results, "CSV 表头跟随传入的表头",
+                csv.StartsWith("程序名,备注,字节\r\n", StringComparison.Ordinal));
+            CheckAssertion(results, "CSV 转义逗号 / 引号 / 换行",
+                csv.Contains("\"a,b\"", StringComparison.Ordinal)
+                && csv.Contains("\"c\"\"d\ne\"", StringComparison.Ordinal));
+            CheckAssertion(results, "CSV 给首尾空格加引号",
+                csv.Contains("\" 前后空格 \"", StringComparison.Ordinal));
+
+            var csvPath = Path.Combine(tempDir, "test.csv");
+            TableExport.WriteCsv(csvPath, document);
+            var csvBytes = File.ReadAllBytes(csvPath);
+            CheckAssertion(results, "CSV 文件带 UTF-8 BOM（Excel 打开中文不乱码）",
+                csvBytes.Length >= 3
+                && csvBytes[0] == 0xEF && csvBytes[1] == 0xBB && csvBytes[2] == 0xBF);
+
+            var json = TableExport.ToJson(document);
+            using var parsed = JsonDocument.Parse(json);
+            var root = parsed.RootElement;
+            CheckAssertion(results, "JSON 带 format / version / view",
+                root.GetProperty("format").GetString() == TableExport.FormatName
+                && root.GetProperty("version").GetInt32() == TableExport.CurrentVersion
+                && root.GetProperty("view").GetString() == "unit-test");
+            CheckAssertion(results, "JSON 保留中文表头与值",
+                json.Contains("程序名", StringComparison.Ordinal)
+                && json.Contains("中文程序", StringComparison.Ordinal));
+
+            var jsonPath = Path.Combine(tempDir, "test.json");
+            TableExport.WriteJson(jsonPath, document);
+            using var reopened = JsonDocument.Parse(File.ReadAllText(jsonPath));
+            CheckAssertion(results, "JSON 写入后可以重新解析",
+                reopened.RootElement.GetProperty("rows").GetArrayLength() == 2);
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "导出器检查执行完成", false);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    Directory.Delete(tempDir, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录清理失败不影响断言。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    /// <summary>
+    /// 5.7：诊断包（临时目录；不连接真实服务、不碰用户数据）。
+    /// </summary>
+    private static void RunDiagnosticsTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var root = Path.Combine(Path.GetTempPath(), $"wag-diag-{Guid.NewGuid():N}");
+
+        W("################################################################");
+        W("#   5.7 诊断包：zip 内容 / 排除项（临时目录）                    #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var auditDir = Path.Combine(root, "audit");
+            var uiLogDir = Path.Combine(root, "ui-logs");
+            var serviceLogDir = Path.Combine(root, "service-logs");
+            Directory.CreateDirectory(auditDir);
+            Directory.CreateDirectory(uiLogDir);
+            Directory.CreateDirectory(serviceLogDir);
+
+            File.WriteAllText(Path.Combine(auditDir, "audit-20261108-1.jsonl"), "{\"kind\":\"test\"}\n");
+            File.WriteAllText(Path.Combine(uiLogDir, "ui-test.log"), "ui log line\n");
+            File.WriteAllText(Path.Combine(serviceLogDir, "service-test.log"), "service log line\n");
+
+            var rulesPath = Path.Combine(root, "rules.json");
+            File.WriteAllText(rulesPath, "{\"rules\":[]}\n");
+            var settingsPath = Path.Combine(root, "settings.json");
+            File.WriteAllText(settingsPath, "{\"IpOwnershipEnabled\":false}\n");
+
+            var zipPath = Path.Combine(root, "diagnostics.zip");
+            var result = DiagnosticBundle.Create(zipPath, new DiagnosticBundleOptions
+            {
+                IncludeConnections = true,
+                IncludeServiceSnapshots = false,
+                IncludeAuditFiles = true,
+                IncludeRulesSnapshot = true,
+                IncludeSettings = true,
+                IncludeLogs = true,
+                UiLogDirectory = uiLogDir,
+                ServiceLogDirectory = serviceLogDir,
+                AuditDirectory = auditDir,
+                RulesSnapshotPath = rulesPath,
+                SettingsPath = settingsPath,
+            });
+
+            W($"    条目 = {result.Entries}，大小 = {result.Bytes} 字节");
+            CheckAssertion(results, "诊断包文件已生成且非空",
+                File.Exists(zipPath) && new FileInfo(zipPath).Length > 0 && result.Entries > 0);
+
+            using var archive = ZipFile.OpenRead(zipPath);
+            var names = archive.Entries
+                .Select(entry => entry.FullName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            CheckAssertion(results, "包含系统 / 服务 / Npcap / 设置摘要",
+                names.Contains("README.txt")
+                && names.Contains("system.txt")
+                && names.Contains("service-status.json")
+                && names.Contains("npcap.json")
+                && names.Contains("settings.json")
+                && names.Contains("summary.txt"));
+            CheckAssertion(results, "包含当前连接快照",
+                names.Contains("data/connections.json"));
+            CheckAssertion(results, "包含审计文件与规则快照",
+                names.Contains("data/audit/audit-20261108-1.jsonl")
+                && names.Contains("data/rules-snapshot.json"));
+            CheckAssertion(results, "包含界面与服务日志",
+                names.Contains("logs/ui/ui-test.log")
+                && names.Contains("logs/service/service-test.log"));
+            CheckAssertion(results, "不包含受保护模式私钥",
+                !names.Any(name => name.Contains("protected-mode", StringComparison.OrdinalIgnoreCase)));
+
+            var summary = ReadZipEntry(archive, "summary.txt");
+            CheckAssertion(results, "summary 记录数据数量与隐私提示",
+                summary.Contains("auditFiles: 1", StringComparison.Ordinal)
+                && summary.Contains("Privacy:", StringComparison.Ordinal));
+
+            var copiedSettings = ReadZipEntry(archive, "settings.json");
+            CheckAssertion(results, "设置文件原样复制",
+                copiedSettings.Contains("IpOwnershipEnabled", StringComparison.Ordinal));
+
+            var connectionsJson = ReadZipEntry(archive, "data/connections.json");
+            CheckAssertion(results, "连接快照是合法 JSON",
+                connectionsJson.TrimStart().StartsWith('{')
+                && connectionsJson.Contains("\"connections\"", StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "诊断包检查执行完成", false);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时目录清理失败不影响断言。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
+    private static string ReadZipEntry(ZipArchive archive, string name)
+    {
+        var entry = archive.GetEntry(name)
+                    ?? throw new InvalidOperationException($"zip 里缺少 {name}");
+
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
     private static TcpConnectionItem MakeConnection(
         int pid,
         string processName,
@@ -17896,6 +18245,22 @@ internal static class Program
         CheckAssertion(results, "--audit-tail --limit",
             auditTail.Kind == CommandKind.AuditTail && auditTail.Limit == 10 && auditTail.Json);
 
+        var connectionsCli = CommandLine.Parse(new[] { "--connections", "--limit", "20", "--json" });
+        CheckAssertion(results, "--connections --limit --json",
+            connectionsCli.Kind == CommandKind.Connections
+            && connectionsCli.Limit == 20
+            && connectionsCli.Json);
+
+        var dnsCli = CommandLine.Parse(new[] { "--dns", "--limit", "30", "--json" });
+        CheckAssertion(results, "--dns --limit --json",
+            dnsCli.Kind == CommandKind.Dns
+            && dnsCli.Limit == 30
+            && dnsCli.Json);
+
+        CheckAssertion(results, "--connections / --dns 不接受多余位置参数",
+            CommandLine.Parse(new[] { "--connections", "extra" }).Kind == CommandKind.Invalid
+            && CommandLine.Parse(new[] { "--dns", "extra" }).Kind == CommandKind.Invalid);
+
         CheckAssertion(results, "--doctor --json",
             CommandLine.Parse(new[] { "--doctor", "--json" }).Json);
 
@@ -17906,6 +18271,8 @@ internal static class Program
             CliText.Usage.Contains("--status")
             && CliText.Usage.Contains("--network-alerts")
             && CliText.Usage.Contains("--doctor")
+            && CliText.Usage.Contains("--connections")
+            && CliText.Usage.Contains("--dns")
             && CliText.Usage.Contains("--json"));
 
         // ---------------- 8. 5.4 PATH 处理 ----------------

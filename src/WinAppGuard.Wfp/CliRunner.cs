@@ -135,6 +135,8 @@ internal static class CliRunner
                 CommandKind.NetworkSetAdapter => RunNetworkSetAdapter(options),
                 CommandKind.NetworkSetCategories => RunNetworkSetCategories(options),
                 CommandKind.Doctor => RunDoctor(options),
+                CommandKind.Connections => RunConnections(options),
+                CommandKind.Dns => RunDns(options),
                 _ => ExitOk,
             };
         }
@@ -1838,9 +1840,142 @@ internal static class CliRunner
         return ExitOk;
     }
 
-    // ==================================================================
-    // 原有恢复命令
-    // ==================================================================
+    /// <summary>5.7：列出当前 TCP 连接（只读、不联网）。</summary>
+    private static int RunConnections(CommandLineOptions options)
+    {
+        List<TcpConnectionItem> connections;
+
+        try
+        {
+            // 和界面默认不同：CLI 为了排障更愿意看到监听端点和无归属连接；
+            // 仍然隐藏本机回环，避免把内部 IPC 噪声当成“联网”。
+            connections = ConnectionScanner.Scan(new ConnectionScanOptions
+                {
+                    IncludeListening = true,
+                    IncludeClosed = false,
+                    IncludeOwnerless = true,
+                    HideLoopback = true,
+                })
+                .OrderBy(item => item.ProcessName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.RemoteAddressText, StringComparer.OrdinalIgnoreCase)
+                .Take(options.Limit)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            return Fail(options, "CONNECTION_SCAN_FAILED",
+                Localizer.IsEnglish
+                    ? $"Failed to scan connections: {ex.Message}"
+                    : $"扫描连接失败：{ex.Message}",
+                ExitFailed);
+        }
+
+        if (IsJson(options))
+        {
+            CliJson.WriteSuccess(new
+            {
+                count = connections.Count,
+                connections = connections.Select(item => new
+                {
+                    processName = item.ProcessName,
+                    processPath = item.ProcessPath,
+                    pid = item.Pid,
+                    protocol = item.Protocol,
+                    localPort = item.LocalPort,
+                    remoteAddress = item.RemoteAddressText,
+                    remotePort = item.RemotePort,
+                    state = item.State.ToString(),
+                }),
+            }, VersionText);
+
+            return ExitOk;
+        }
+
+        if (!options.Quiet)
+        {
+            Console.WriteLine($"# {T("当前 TCP 连接", "current TCP connections")}：{connections.Count} {T("条", "entry/entries")}");
+
+            foreach (var item in connections)
+            {
+                Console.WriteLine(
+                    $"{item.ProcessName}\tPID {item.Pid}\t{item.LocalPortText}\t" +
+                    $"{item.RemoteAddressText}:{item.RemotePortText}\t{item.StateText}\t{item.Protocol}");
+            }
+        }
+
+        return ExitOk;
+    }
+
+    /// <summary>5.7：列出服务采集到的最近 DNS 查询（只读）。</summary>
+    private static int RunDns(CommandLineOptions options)
+    {
+        ServiceResponse? response;
+
+        try
+        {
+            response = ServiceClient.TryRequest(
+                new ServiceRequest { Command = ServiceProtocol.Commands.QueryDns },
+                TimeSpan.FromSeconds(5),
+                out var error);
+
+            if (response is not { Ok: true, DnsRecords: not null })
+            {
+                return Fail(options, "DNS_UNAVAILABLE",
+                    Localizer.IsEnglish
+                        ? $"Failed to read DNS records: {error ?? response?.Error}"
+                        : $"读取 DNS 记录失败：{error ?? response?.Error}",
+                    ExitFailed);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Fail(options, "DNS_UNAVAILABLE",
+                Localizer.IsEnglish
+                    ? $"Failed to read DNS records: {ex.Message}"
+                    : $"读取 DNS 记录失败：{ex.Message}",
+                ExitFailed);
+        }
+
+        var records = response.DnsRecords
+            .OrderByDescending(item => item.TimeUtc)
+            .Take(options.Limit)
+            .ToList();
+
+        if (IsJson(options))
+        {
+            CliJson.WriteSuccess(new
+            {
+                count = records.Count,
+                records = records.Select(item => new
+                {
+                    timeUtc = item.TimeUtc,
+                    pid = item.Pid,
+                    processPath = item.ProcessPath,
+                    processName = item.ProcessName,
+                    queryName = item.QueryName,
+                    status = item.Status,
+                    eventId = item.EventId,
+                }),
+            }, VersionText);
+
+            return ExitOk;
+        }
+
+        if (!options.Quiet)
+        {
+            Console.WriteLine($"# {T("最近 DNS 查询", "recent DNS queries")}：{records.Count} {T("条", "entry/entries")}");
+
+            foreach (var item in records)
+            {
+                Console.WriteLine(
+                    $"{item.TimeUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}\t{item.ProcessName}\tPID {item.Pid}\t" +
+                    $"{item.QueryName}\t{item.Status ?? "—"}");
+            }
+        }
+
+        return ExitOk;
+    }
+
 
     private static int RunUnblockAll(CommandLineOptions options)
     {

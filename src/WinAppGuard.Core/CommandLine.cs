@@ -78,6 +78,12 @@ public enum CommandKind
     /// <summary>5.3：读取最近审计记录。</summary>
     AuditTail,
 
+    /// <summary>5.7：列出当前 TCP 连接（只读）。</summary>
+    Connections,
+
+    /// <summary>5.7：列出当前 DNS 查询记录（只读）。</summary>
+    Dns,
+
     /// <summary>5.3：服务状态（--status 的别名，保留给脚本）。</summary>
     ServiceStatus,
 
@@ -179,6 +185,8 @@ public static class CommandLine
     public const string NetworkSetCategoriesSwitch = "--network-set-categories";
     public const string DoctorSwitch = "--doctor";
     public const string AuditTailSwitch = "--audit-tail";
+    public const string ConnectionsSwitch = "--connections";
+    public const string DnsSwitch = "--dns";
     public const string LogPathSwitch = "--log-path";
 
     public const string JsonSwitch = "--json";
@@ -702,6 +710,24 @@ public static class CommandLine
                     : InvalidArg(isAutostart, english, language,
                         $"{AuditTailSwitch} [--limit N]",
                         $"{AuditTailSwitch} [--limit N]");
+
+            case ConnectionsSwitch:
+                return NoPositionals()
+                       && flags.Count == 0
+                       && OnlyValues(LimitSwitch)
+                    ? Make(CommandKind.Connections)
+                    : InvalidArg(isAutostart, english, language,
+                        $"{ConnectionsSwitch} [--limit N] [--json]",
+                        $"{ConnectionsSwitch} [--limit N] [--json]");
+
+            case DnsSwitch:
+                return NoPositionals()
+                       && flags.Count == 0
+                       && OnlyValues(LimitSwitch)
+                    ? Make(CommandKind.Dns)
+                    : InvalidArg(isAutostart, english, language,
+                        $"{DnsSwitch} [--limit N] [--json]",
+                        $"{DnsSwitch} [--limit N] [--json]");
 
             case LogPathSwitch:
                 return NoPositionals() && flags.Count == 0 && values.Count == 0

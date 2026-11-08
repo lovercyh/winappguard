@@ -114,6 +114,15 @@ public sealed partial class MainForm
         };
         addIpButton.Click += OnAddIpRuleClick;
 
+        var exportButton = new Button
+        {
+            Location = new Point(170, 66),
+            Width = 90,
+            Height = 27,
+            Text = "导出…",
+        };
+        exportButton.Click += (_, _) => ExportAuditView();
+
         // 记录保留期：1 / 3 / 7 / 30 天。放第一行最右侧，和"清理"相关的按钮在同一行。
         _auditRetentionLabel = new Label
         {
@@ -186,6 +195,7 @@ public sealed partial class MainForm
             _auditDomainCheck,
             _auditStatusLabel,
             _auditAutoRefreshCheckBox,
+            exportButton,
         });
 
         _auditGrid = new DataGridViewBuffered

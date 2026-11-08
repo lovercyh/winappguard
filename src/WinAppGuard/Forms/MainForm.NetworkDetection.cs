@@ -99,6 +99,9 @@ public sealed partial class MainForm
         _ndSettingsButton = new Button { Text = Localizer.T("设置…"), Width = 84 };
         _ndSettingsButton.Click += OnNetworkSettingsClick;
 
+        var exportButton = new Button { Text = Localizer.T("导出…"), Width = 84 };
+        exportButton.Click += (_, _) => ExportNetworkAlertsView();
+
         _ndAutoRefreshCheckBox = new CheckBox
         {
             AutoSize = true,
@@ -114,6 +117,7 @@ public sealed partial class MainForm
         actions.Controls.Add(_ndReleaseButton);
         actions.Controls.Add(_ndClearButton);
         actions.Controls.Add(_ndSettingsButton);
+        actions.Controls.Add(exportButton);
         actions.Controls.Add(_ndAutoRefreshCheckBox);
 
         top.Controls.Add(actions);

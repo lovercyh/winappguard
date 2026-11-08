@@ -11,7 +11,7 @@
 WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a program list, it shows the
 **TCP connections that are online right now** — start from “which program is online”, end at “blocked”.
 
-> **Current release: 5.6**
+> **Current release: 5.7**
 >
 > - Install/repair adds the install folder to the system PATH, so a new terminal can run `WinAppGuard` directly.
 > - Anti-network attack: Suricata 8.0.7 + ET Open, alerts only; you choose whether to apply a temporary WFP block.
@@ -19,6 +19,8 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
 > - Remote-IP ownership tooltips are available on the Connections, Anti-network attack and Records pages.
 > - Auto-refresh can be switched off on the Connections, Records, DNS and Anti-network attack pages; the tables then
 >   stop rebuilding on a timer and no longer jump back to the top.
+> - The Connections page can group connections by program; all five list pages can export the current view (JSON / CSV).
+> - Settings can create a diagnostic bundle containing connections, DNS, rules, audit records, detection events and logs.
 > - Flow IDS and protection: port scans, LAN ARP/DHCP, DNS security, IPv6 neighbour security, config integrity.
 > - CLI: read-only queries, JSON, rule operations, network detection and diagnostics. See [`docs/5.3-CLI.md`](docs/5.3-CLI.md).
 > - **No automatic blocking, no new kernel driver, no automatic rule updates, no telemetry**; HTTPS payload is not visible.
@@ -36,6 +38,10 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
 
 - **Current connections**: program, full path, PID, local/remote address and port, state, protocol and signature;
   search and sort.
+- **Group by program**: merge multiple connections of the same program into one row with connection count, remote
+  endpoints and total traffic; block/allow actions still work.
+- **Export the current view**: Connections, Records, DNS, Anti-network attack and Traffic pages can export JSON or CSV
+  containing only the current filtered view.
 - **IP ownership tooltip**: hover a remote IP on the Connections, Anti-network attack or Records page to see country/region,
   AS and prefix; can be disabled in Settings.
 - **Block / allow programs**: permanent, 30 minutes, 2 hours or until next restart; timed blocks expire automatically.
@@ -52,7 +58,9 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
   ARP/DHCP, DNS security, IPv6 neighbour security, name resolution and config integrity.
 - **Records and rules**: who connected to whom, whether it was blocked, and which rule matched; IP blocking, rule groups
   and import/export.
-- **CLI**: status, rules, network detection and diagnostics, with `--json`; available from a new terminal after install.
+- **Diagnostic bundle**: create a zip from Settings containing connections, DNS, rules, audit records, detection events
+  and logs for troubleshooting or issue reports.
+- **CLI**: status, connections, DNS, rules, network detection and diagnostics, with `--json`; available from a new terminal after install.
 
 ## What it does **not** do
 
@@ -87,6 +95,8 @@ Read-only queries need no administrator rights; writing rules, importing and blo
 
 ```powershell
 WinAppGuard --status --json                    # service / rules / detection status
+WinAppGuard --connections --json --limit 50    # current TCP connections
+WinAppGuard --dns --json --limit 50            # recent DNS queries
 WinAppGuard --block "C:\Tools\a.exe"           # permanent block
 WinAppGuard --block "C:\Tools\a.exe" --minutes 30
 WinAppGuard --unblock "C:\Tools\a.exe"         # remove one program's block
@@ -190,6 +200,7 @@ deleted). To remove only WFP objects, run `WinAppGuard --recover` from an admini
 | [`docs/发布手册.md`](docs/发布手册.md) | Build, verify and release process |
 | [`docs/5.3-CLI.md`](docs/5.3-CLI.md) | CLI commands, permissions, JSON and exit codes |
 | [`docs/5.4-安装PATH.md`](docs/5.4-安装PATH.md) | Installer PATH behaviour and acceptance |
+| [`docs/5.7-数据出口与连接汇总.md`](docs/5.7-数据出口与连接汇总.md) | Connection summary, table export and diagnostic bundle |
 | [`docs/测试用例.md`](docs/测试用例.md) | Test cases and measured results |
 
 More design documents: [`docs/`](docs/).

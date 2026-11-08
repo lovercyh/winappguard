@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Text;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Localization;
 using WinAppGuard.Models;
@@ -797,6 +798,14 @@ public partial class MainForm : Form
     /// </summary>
     private void OnMainFormKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Control && e.KeyCode == Keys.E)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            ExportCurrentPage();
+            return;
+        }
+
         if (e.KeyCode == Keys.F5)
         {
             e.Handled = true;
@@ -945,6 +954,8 @@ public partial class MainForm : Form
         _connectionGrid.DataSource = _connectionSource;
         _connectionGrid.EmptyText =
             "没有匹配的连接。\r\n可以清除搜索，或勾选上面被隐藏的连接类型。";
+
+        SetupConnectionSummary();
     }
 
     /// <summary>
@@ -1581,6 +1592,7 @@ public partial class MainForm : Form
 
         _connections.Clear();
         _connections.AddRange(view);
+        RebuildSummaryView();
     }
 
     /// <summary>
@@ -1595,9 +1607,11 @@ public partial class MainForm : Form
         var total = _scannedConnections.Count;
         var time = _lastScanTime == DateTime.MinValue ? "--:--:--" : _lastScanTime.ToString("HH:mm:ss");
 
-        var text = shown == total
-            ? Localizer.F("最后刷新：{0}    共 {1} 条", time, total)
-            : Localizer.F("最后刷新：{0}    显示 {1} / 共 {2} 条", time, shown, total);
+        var text = _connectionViewMode == ConnectionViewMode.Summary
+            ? BuildSummaryStatusText(_lastScanTime)
+            : shown == total
+                ? Localizer.F("最后刷新：{0}    共 {1} 条", time, total)
+                : Localizer.F("最后刷新：{0}    显示 {1} / 共 {2} 条", time, shown, total);
 
         // 4.6：吊销检查开着但当前无网络时，明确告诉用户“没核对”，
         // 不能把“没查成”当成“已经查过且有效”。
@@ -1625,6 +1639,9 @@ public partial class MainForm : Form
         // 5.6：重建表格时记住用户滚到哪一行，重建完成后放回去。
         // 只恢复选中行是不够的 —— 选中项可能早就滚出屏幕了。
         var firstDisplayedRow = CaptureFirstDisplayedRow(_connectionGrid);
+
+        // 5.7：汇总表也要跟着刷新；先抓它的选中程序，数据源重建后会丢。
+        var summarySelectedKey = CaptureSummarySelection();
 
         // 重新绑定期间表格会短暂处于「当前行指向的数据已经不在了」的中间状态，
         // 这时候不能让 SelectionChanged 去读选中项，否则同样会越界。
@@ -1659,6 +1676,8 @@ public partial class MainForm : Form
 
         // 最后再放回滚动位置：上面的恢复选中可能把视图拉到选中行。
         RestoreFirstDisplayedRow(_connectionGrid, firstDisplayedRow);
+
+        RebindSummaryGrid(summarySelectedKey);
     }
 
     /// <summary>
@@ -2734,7 +2753,9 @@ public partial class MainForm : Form
 
     /// <summary>当前选中的连接。注意：没被用户主动点选过时，这个值不可信，见 <see cref="_connectionSelectionConfirmed"/>。</summary>
     private TcpConnectionItem? GetSelectedConnection()
-        => _connectionGrid.CurrentRow?.DataBoundItem as TcpConnectionItem;
+        => _connectionViewMode == ConnectionViewMode.Summary
+            ? (_connectionSummaryGrid.CurrentRow?.DataBoundItem as ConnectionSummaryItem)?.Representative
+            : _connectionGrid.CurrentRow?.DataBoundItem as TcpConnectionItem;
 
     /// <summary>当前选中的规则。注意：没被用户主动点选过时，这个值不可信，见 <see cref="_ruleSelectionConfirmed"/>。</summary>
     private FirewallRuleItem? GetSelectedRule()
@@ -2876,9 +2897,13 @@ public partial class MainForm : Form
         if (item is null)
         {
             // 表格里可能有高亮的行，但那不算用户选中，这里要说清楚，否则按钮灰着很莫名其妙。
-            return _connectionGrid.CurrentRow is null
-                ? "未选中任何连接"
-                : "点击一行来选择要操作的程序";
+            var hasCurrentRow = _connectionViewMode == ConnectionViewMode.Summary
+                ? _connectionSummaryGrid.CurrentRow is not null
+                : _connectionGrid.CurrentRow is not null;
+
+            return hasCurrentRow
+                ? "点击一行来选择要操作的程序"
+                : "未选中任何连接";
         }
 
         if (!hasPath)
@@ -4525,12 +4550,14 @@ public partial class MainForm : Form
     /// </summary>
     private void OnGridCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
     {
-        if (e.RowIndex < 0 || e.RowIndex >= _connectionGrid.Rows.Count)
+        var grid = sender as DataGridView ?? _connectionGrid;
+
+        if (e.RowIndex < 0 || e.RowIndex >= grid.Rows.Count)
         {
             return;
         }
 
-        _connectionGrid.CurrentCell = _connectionGrid.Rows[e.RowIndex].Cells[0];
+        grid.CurrentCell = grid.Rows[e.RowIndex].Cells[0];
         _connectionSelectionConfirmed = true;
 
         // SelectionChanged 有可能先于本事件触发，那时按钮还是灰的，所以这里要再刷新一次。
@@ -4540,7 +4567,9 @@ public partial class MainForm : Form
     /// <summary>用键盘在表格里移动，同样算「用户主动选择」。</summary>
     private void OnGridKeyDown(object? sender, KeyEventArgs e)
     {
-        if (_connectionGrid.CurrentRow is null)
+        var grid = sender as DataGridView ?? _connectionGrid;
+
+        if (grid.CurrentRow is null)
         {
             return;
         }
@@ -6146,6 +6175,101 @@ public partial class MainForm : Form
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 5.7：生成诊断包。内容较多，必须先讲清楚它包含什么，再让用户选择保存位置。
+    /// 生成过程只读本机数据，不弹 UAC、不联网、不上传。
+    /// </summary>
+    private async void OnDiagnosticBundleClick(object? sender, EventArgs e)
+    {
+        var confirmed = ConfirmForm.Show(
+            owner: DialogOwner,
+            title: "生成诊断包",
+            question: "诊断包会包含本机的运行数据，确定生成吗？",
+            details: new[]
+            {
+                new KeyValuePair<string, string>(
+                    "将包含",
+                    "系统 / 服务 / WFP / Npcap 状态、当前连接、DNS、规则、审计记录、" +
+                    "网络检测 / IDS / 局域网 / IPv6 / 配置完整性事件、界面与服务日志、设置文件"),
+                new KeyValuePair<string, string>(
+                    "不会包含",
+                    "受保护模式私钥、HTTPS 正文；不会自动上传到任何服务器"),
+                new KeyValuePair<string, string>(
+                    "保存位置",
+                    "由你在下一步选择的本地文件；生成后可以自行解压检查"),
+            },
+            warnings: new[]
+            {
+                "诊断包可能包含程序路径、远端 IP、DNS 查询和防火墙规则，只应交给可信的人。",
+                "生成过程只读本机数据，不联网、不提权。",
+                "服务未运行或某些日志不可读时，会在 summary.txt 里注明。",
+            },
+            confirmText: "生成诊断包");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        using var dialog = new SaveFileDialog
+        {
+            Title = Localizer.T("保存诊断包"),
+            Filter = Localizer.IsEnglish
+                ? "Diagnostic bundle (*.zip)|*.zip"
+                : "诊断包 (*.zip)|*.zip",
+            FileName = $"WinAppGuard-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}",
+            DefaultExt = "zip",
+            AddExtension = true,
+            OverwritePrompt = true,
+            RestoreDirectory = true,
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _diagnosticBundleButton.Enabled = false;
+        UseWaitCursor = true;
+
+        try
+        {
+            var path = dialog.FileName;
+            var result = await Task.Run(() => DiagnosticBundle.Create(path));
+
+            LocalLog.Operation(LocalLog.Pick(
+                $"生成诊断包：{result.Entries} 个条目，{result.Bytes / 1024.0 / 1024.0:0.0} MB → {result.Path}",
+                $"Diagnostic bundle: {result.Entries} entries, {result.Bytes / 1024.0 / 1024.0:0.0} MB -> {result.Path}."));
+
+            var warningText = result.Warnings.Count == 0
+                ? string.Empty
+                : Localizer.F(
+                    "\n\n有 {0} 项未能完整收集，详情见 summary.txt。",
+                    result.Warnings.Count);
+
+            UiMessageBox.Show(
+                this,
+                Localizer.F(
+                    "诊断包已生成。\n\n{0}\n\n大小约 {1:0.0} MB，共 {2} 个条目。{3}",
+                    result.Path,
+                    result.Bytes / 1024.0 / 1024.0,
+                    result.Entries,
+                    warningText),
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            ShowError("生成诊断包失败", ex, "Failed to create the diagnostic bundle");
+        }
+        finally
+        {
+            UseWaitCursor = false;
+            _diagnosticBundleButton.Enabled = true;
         }
     }
 

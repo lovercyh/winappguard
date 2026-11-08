@@ -116,6 +116,16 @@ public sealed partial class MainForm
         };
         _trafficAutoRefreshCheckBox.CheckedChanged += OnTrafficAutoRefreshChanged;
 
+        var exportButton = new Button
+        {
+            Text = Localizer.T("导出…"),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(76, 27),
+            Margin = new Padding(0, 0, 8, 0),
+        };
+        exportButton.Click += (_, _) => ExportTrafficView();
+
         var actions = new FlowLayoutPanel
         {
             Location = new Point(210, 22),
@@ -127,7 +137,7 @@ public sealed partial class MainForm
         actions.Controls.AddRange(new Control[]
         {
             _trafficRefreshButton, _trafficPauseButton, _trafficClearButton,
-            _trafficAutoRefreshCheckBox,
+            exportButton, _trafficAutoRefreshCheckBox,
         });
 
         _trafficSummaryLabel = new Label

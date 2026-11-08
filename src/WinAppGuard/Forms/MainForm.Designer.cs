@@ -121,6 +121,7 @@ partial class MainForm
     private Label _privacyLabel = null!;
     private Label _logPathLabel = null!;
     private Button _openLogFolderButton = null!;
+    private Button _diagnosticBundleButton = null!;
     private CheckBox _checkRevocationCheckBox = null!;
     private CheckBox _checkIpOwnershipCheckBox = null!;
     private Panel _privacyScrollHost = null!;
@@ -272,6 +273,7 @@ partial class MainForm
         _privacyLabel = new Label();
         _logPathLabel = new Label();
         _openLogFolderButton = new Button();
+        _diagnosticBundleButton = new Button();
         _checkRevocationCheckBox = new CheckBox();
         _checkIpOwnershipCheckBox = new CheckBox();
         _privacyScrollHost = new Panel();
@@ -1239,6 +1241,7 @@ partial class MainForm
         _privacyBottomPanel.TabIndex = 1;
         _privacyBottomPanel.Controls.Add(_logPathLabel);
         _privacyBottomPanel.Controls.Add(_openLogFolderButton);
+        _privacyBottomPanel.Controls.Add(_diagnosticBundleButton);
         _privacyBottomPanel.Controls.Add(_checkRevocationCheckBox);
         _privacyBottomPanel.Controls.Add(_checkIpOwnershipCheckBox);
 
@@ -1257,6 +1260,14 @@ partial class MainForm
         _openLogFolderButton.Text = "打开日志目录";
         _openLogFolderButton.UseVisualStyleBackColor = true;
         _openLogFolderButton.Click += OnOpenLogFolderClick;
+
+        _diagnosticBundleButton.Location = new Point(182, 26);
+        _diagnosticBundleButton.Name = "_diagnosticBundleButton";
+        _diagnosticBundleButton.Size = new Size(180, 30);
+        _diagnosticBundleButton.TabIndex = 2;
+        _diagnosticBundleButton.Text = "生成诊断包…";
+        _diagnosticBundleButton.UseVisualStyleBackColor = true;
+        _diagnosticBundleButton.Click += OnDiagnosticBundleClick;
 
         // 默认勾选：吊销状态查得准。代价是会有网络流量，界面上已经说清楚了。
         _checkRevocationCheckBox.AutoSize = true;

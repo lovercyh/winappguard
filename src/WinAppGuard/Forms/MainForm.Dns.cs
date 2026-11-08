@@ -64,6 +64,15 @@ public sealed partial class MainForm
         };
         _dnsClearButton.Click += OnDnsClearClick;
 
+        var exportButton = new Button
+        {
+            Location = new Point(480, 34),
+            Width = 90,
+            Height = 27,
+            Text = Localizer.T("导出…"),
+        };
+        exportButton.Click += (_, _) => ExportDnsView();
+
         _dnsStatusLabel = new Label
         {
             Location = new Point(486, 10),
@@ -97,6 +106,7 @@ public sealed partial class MainForm
             _dnsStatusLabel,
             _dnsAutoRefreshCheckBox,
             _dnsHintLabel,
+            exportButton,
         });
 
         _dnsGrid = new DataGridViewBuffered
@@ -252,6 +262,7 @@ public sealed partial class MainForm
             {
                 TimeText = record.TimeUtc.ToLocalTime().ToString("MM-dd HH:mm:ss"),
                 ProcessText = record.ProcessName,
+                ProcessPath = record.ProcessPath ?? string.Empty,
                 Pid = record.Pid,
                 QueryName = record.QueryName,
                 StatusText = string.IsNullOrEmpty(record.Status)
@@ -374,6 +385,8 @@ public sealed partial class MainForm
         public string TimeText { get; init; } = string.Empty;
 
         public string ProcessText { get; init; } = string.Empty;
+
+        public string ProcessPath { get; init; } = string.Empty;
 
         public int Pid { get; init; }
 

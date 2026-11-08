@@ -4919,6 +4919,39 @@ internal static class Program
             using var reopened = JsonDocument.Parse(File.ReadAllText(jsonPath));
             CheckAssertion(results, "JSON 写入后可以重新解析",
                 reopened.RootElement.GetProperty("rows").GetArrayLength() == 2);
+
+            // 诊断包用反射把服务 DTO 转成 CSV：这里用真实 DTO 验证列表/枚举也能展开。
+            var dnsCsv = DiagnosticCsv.FromObjects("dns", new[]
+            {
+                new DnsDto
+                {
+                    TimeUtc = new DateTime(2026, 11, 8, 12, 0, 0, DateTimeKind.Utc),
+                    Pid = 123,
+                    ProcessName = "demo.exe",
+                    QueryName = "example.com",
+                    Status = "OK",
+                },
+            });
+            CheckAssertion(results, "服务 DTO 转 CSV 有属性表头与值",
+                dnsCsv.StartsWith("TimeUtc,", StringComparison.Ordinal)
+                && dnsCsv.Contains("QueryName", StringComparison.Ordinal)
+                && dnsCsv.Contains("Status", StringComparison.Ordinal)
+                && dnsCsv.Contains("demo.exe", StringComparison.Ordinal)
+                && dnsCsv.Contains("example.com", StringComparison.Ordinal));
+
+            var trafficCsv = DiagnosticCsv.FromObjects("traffic", new[]
+            {
+                new TrafficDto
+                {
+                    Name = "demo.exe",
+                    Path = @"C:\Demo\demo.exe",
+                    Pids = new List<int> { 1, 2 },
+                    BytesIn = 100,
+                    BytesOut = 200,
+                },
+            });
+            CheckAssertion(results, "服务 DTO 的列表字段用分号连接",
+                trafficCsv.Contains("1; 2", StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
@@ -5007,10 +5040,12 @@ internal static class Program
                 && names.Contains("settings.json")
                 && names.Contains("summary.txt"));
             CheckAssertion(results, "包含当前连接快照",
-                names.Contains("data/connections.json"));
-            CheckAssertion(results, "包含审计文件与规则快照",
-                names.Contains("data/audit/audit-20261108-1.jsonl")
-                && names.Contains("data/rules-snapshot.json"));
+                names.Contains("data/connections.csv")
+                && names.Contains("data/raw/connections.json"));
+            CheckAssertion(results, "包含审计 CSV 与原始文件、规则原始快照",
+                names.Contains("data/audit.csv")
+                && names.Contains("data/audit/audit-20261108-1.jsonl")
+                && names.Contains("data/raw/rules-snapshot.json"));
             CheckAssertion(results, "包含界面与服务日志",
                 names.Contains("logs/ui/ui-test.log")
                 && names.Contains("logs/service/service-test.log"));
@@ -5026,10 +5061,12 @@ internal static class Program
             CheckAssertion(results, "设置文件原样复制",
                 copiedSettings.Contains("IpOwnershipEnabled", StringComparison.Ordinal));
 
-            var connectionsJson = ReadZipEntry(archive, "data/connections.json");
-            CheckAssertion(results, "连接快照是合法 JSON",
-                connectionsJson.TrimStart().StartsWith('{')
-                && connectionsJson.Contains("\"connections\"", StringComparison.Ordinal));
+            var connectionsCsv = ReadZipEntry(archive, "data/connections.csv");
+            CheckAssertion(results, "连接快照 CSV 有表头",
+                connectionsCsv.StartsWith("processName,processPath,pid", StringComparison.Ordinal));
+
+            var auditCsv = ReadZipEntry(archive, "data/audit.csv");
+            CheckAssertion(results, "审计 CSV 有表头", auditCsv.Contains("TimeUtc", StringComparison.Ordinal));
         }
         catch (Exception ex)
         {

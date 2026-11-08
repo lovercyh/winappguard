@@ -40,8 +40,8 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
   search and sort.
 - **Group by program**: merge multiple connections of the same program into one row with connection count, remote
   endpoints and total traffic; block/allow actions still work.
-- **Export the current view**: Connections, Records, DNS, Anti-network attack and Traffic pages can export JSON or CSV
-  containing only the current filtered view.
+- **Export the current view**: Connections, Records, DNS, Anti-network attack and Traffic pages can export CSV or JSON
+  (CSV by default) containing only the current filtered view.
 - **IP ownership tooltip**: hover a remote IP on the Connections, Anti-network attack or Records page to see country/region,
   AS and prefix; can be disabled in Settings.
 - **Block / allow programs**: permanent, 30 minutes, 2 hours or until next restart; timed blocks expire automatically.

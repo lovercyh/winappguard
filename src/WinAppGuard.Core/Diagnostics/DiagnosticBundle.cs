@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Models;
 
@@ -146,21 +147,25 @@ public static class DiagnosticBundle
             CopyFileOrNote(
                 zip,
                 options.RulesSnapshotPath ?? ServicePaths.RulesSnapshotFile,
-                "data/rules-snapshot.json",
+                "data/raw/rules-snapshot.json",
                 warnings,
                 "规则权威快照");
         }
 
         if (options.IncludeAuditFiles)
         {
+            var auditDirectory = options.AuditDirectory ?? ServicePaths.AuditDirectory;
+
             CopyDirectoryFiles(
                 zip,
-                options.AuditDirectory ?? ServicePaths.AuditDirectory,
+                auditDirectory,
                 "data/audit",
                 warnings,
                 "审计文件",
                 counts,
                 "audit");
+
+            AddAuditCsv(zip, auditDirectory, warnings, counts);
         }
 
         if (options.IncludeLogs)
@@ -222,13 +227,16 @@ public static class DiagnosticBundle
     {
         try
         {
-            var connections = ConnectionScanner.Scan(new ConnectionScanOptions
+            var items = ConnectionScanner.Scan(new ConnectionScanOptions
                 {
                     IncludeListening = true,
                     IncludeClosed = false,
                     IncludeOwnerless = true,
                     HideLoopback = false,
                 })
+                .ToList();
+
+            var connections = items
                 .Select(item => new
                 {
                     processName = item.ProcessName,
@@ -250,9 +258,10 @@ public static class DiagnosticBundle
 
             counts["connections"] = connections.Count;
 
+            AddText(zip, "data/connections.csv", DiagnosticCsv.Connections(items));
             AddText(
                 zip,
-                "data/connections.json",
+                "data/raw/connections.json",
                 JsonSerializer.Serialize(
                     new
                     {
@@ -265,7 +274,8 @@ public static class DiagnosticBundle
         catch (Exception ex)
         {
             warnings.Add($"连接快照失败：{ex.Message}");
-            AddText(zip, "data/connections.json", ErrorJson("连接快照失败", ex));
+            AddText(zip, "data/connections.csv", string.Empty);
+            AddText(zip, "data/raw/connections.json", ErrorJson("连接快照失败", ex));
         }
     }
 
@@ -292,11 +302,12 @@ public static class DiagnosticBundle
 
             if (response is null)
             {
-                AddText(zip, $"data/service/{fileName}", ErrorJson($"{command} 没有响应", null));
+                AddText(zip, $"data/raw/service/{fileName}", ErrorJson($"{command} 没有响应", null));
                 continue;
             }
 
-            AddText(zip, $"data/service/{fileName}", JsonSerializer.Serialize(response, JsonOptions));
+            AddText(zip, $"data/raw/service/{fileName}", JsonSerializer.Serialize(response, JsonOptions));
+            AddServiceCsv(zip, response, fileName);
 
             var count = fileName switch
             {
@@ -318,6 +329,107 @@ public static class DiagnosticBundle
             {
                 counts[fileName] = count.Value;
             }
+        }
+    }
+
+    /// <summary>把服务响应当中的列表导出成可直接用 Excel 打开的 CSV。</summary>
+    private static void AddServiceCsv(
+        ZipArchive zip,
+        ServiceResponse response,
+        string fileName)
+    {
+        switch (fileName)
+        {
+            case "rules.json":
+                AddText(zip, "data/rules.csv", DiagnosticCsv.FromObjects("rules", response.Rules));
+                break;
+
+            case "dns.json":
+                AddText(zip, "data/dns.csv", DiagnosticCsv.FromObjects("dns", response.DnsRecords));
+                break;
+
+            case "traffic.json":
+                AddText(zip, "data/traffic.csv", DiagnosticCsv.FromObjects("traffic", response.Traffic));
+                break;
+
+            case "network-detection.json":
+                AddText(
+                    zip,
+                    "data/network-alerts.csv",
+                    DiagnosticCsv.FromObjects("network-alerts", response.NetworkAlerts));
+                AddText(
+                    zip,
+                    "data/network-blocks.csv",
+                    DiagnosticCsv.FromObjects("network-blocks", response.NetworkBlocks));
+                break;
+
+            case "ids-alerts.json":
+                AddText(zip, "data/ids-alerts.csv", DiagnosticCsv.FromObjects("ids-alerts", response.IdsAlerts));
+                break;
+
+            case "anti-scan.json":
+                AddText(
+                    zip,
+                    "data/anti-scan.csv",
+                    DiagnosticCsv.FromObjects("anti-scan", response.AntiScanEvents));
+                AddText(
+                    zip,
+                    "data/anti-scan-blocks.csv",
+                    DiagnosticCsv.FromObjects("anti-scan-blocks", response.AntiScanBlocks));
+                break;
+
+            case "lan.json":
+                AddText(zip, "data/lan.csv", DiagnosticCsv.FromObjects("lan", response.LanEvents));
+                break;
+
+            case "dns-security.json":
+                AddText(
+                    zip,
+                    "data/dns-security.csv",
+                    DiagnosticCsv.FromObjects("dns-security", response.DnsSecurityEvents));
+                break;
+
+            case "ipv6-security.json":
+                AddText(
+                    zip,
+                    "data/ipv6-security.csv",
+                    DiagnosticCsv.FromObjects("ipv6-security", response.Ipv6SecurityEvents));
+                break;
+
+            case "config-integrity.json":
+                AddText(
+                    zip,
+                    "data/config-integrity.csv",
+                    DiagnosticCsv.FromObjects("config-integrity", response.ConfigIntegrityEvents));
+                break;
+
+            case "name-resolution.json":
+                AddText(
+                    zip,
+                    "data/name-resolution.csv",
+                    DiagnosticCsv.FromObjects("name-resolution", response.NameResolutionEvents));
+                break;
+        }
+    }
+
+    private static void AddAuditCsv(
+        ZipArchive zip,
+        string auditDirectory,
+        List<string> warnings,
+        Dictionary<string, int> counts)
+    {
+        try
+        {
+            using var store = new AuditStore(auditDirectory);
+            var events = store.ReadRecent(int.MaxValue);
+
+            counts["auditEvents"] = events.Count;
+            AddText(zip, "data/audit.csv", DiagnosticCsv.Audit(events));
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"审计记录 CSV 生成失败：{ex.Message}");
+            AddText(zip, "data/audit.csv", string.Empty);
         }
     }
 
@@ -402,12 +514,14 @@ public static class DiagnosticBundle
         => "WinAppGuard 诊断包\r\n" +
            "==================\r\n\r\n" +
            "这是由你主动在本机生成的排障文件，不会自动上传到任何地方。\r\n\r\n" +
+           "默认提供可直接用 Excel 打开的 CSV（data/*.csv）；\r\n" +
+           "data/raw 下保留服务原始 JSON，嵌套字段或完整结构以那里为准。\r\n\r\n" +
            "包含的内容可能包括：\r\n" +
            "  - 程序路径、PID、远端 IP / 端口\r\n" +
            "  - DNS 查询记录\r\n" +
            "  - 防火墙规则（本工具创建的规则）\r\n" +
-           "  - 审计记录\r\n" +
-           "  - 网络检测 / IDS / 局域网 / IPv6 / 配置完整性事件\r\n" +
+           "  - 审计记录（CSV + 原始 .jsonl）\r\n" +
+           "  - 流量、网络检测 / IDS / 局域网 / IPv6 / 配置完整性事件\r\n" +
            "  - 界面与服务日志\r\n" +
            "  - 设置文件（只有开关和保留天数）\r\n\r\n" +
            "不包含：受保护模式私钥、Suricata 规则文件、HTTPS 正文、任何未列出的系统数据。\r\n\r\n" +
@@ -486,6 +600,7 @@ public static class DiagnosticBundle
         builder.AppendLine("Data:");
         builder.AppendLine($"  connections: {GetCount(counts, "connections")}");
         builder.AppendLine($"  auditFiles: {GetCount(counts, "audit")}");
+        builder.AppendLine($"  auditEvents: {GetCount(counts, "auditEvents")}");
         builder.AppendLine($"  rulesFromService: {GetCount(counts, "rules.json")}");
         builder.AppendLine($"  dnsRecords: {GetCount(counts, "dns.json")}");
         builder.AppendLine($"  trafficRows: {GetCount(counts, "traffic.json")}");

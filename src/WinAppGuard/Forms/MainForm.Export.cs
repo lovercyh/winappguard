@@ -337,10 +337,10 @@ public sealed partial class MainForm
         using var dialog = new SaveFileDialog
         {
             Title = Localizer.F("导出{0}", pageTitle),
-            Filter = "JSON (*.json)|*.json|CSV (*.csv)|*.csv",
+            Filter = "CSV (*.csv)|*.csv|JSON (*.json)|*.json",
             FilterIndex = 1,
             FileName = $"{fileBaseName}-{DateTime.Now:yyyyMMdd-HHmmss}",
-            DefaultExt = "json",
+            DefaultExt = "csv",
             AddExtension = true,
             OverwritePrompt = true,
             RestoreDirectory = true,
@@ -351,7 +351,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var csv = dialog.FilterIndex == 2;
+        var csv = dialog.FilterIndex == 1;
         var path = Path.ChangeExtension(dialog.FileName, csv ? ".csv" : ".json");
 
         var document = new TableExportDocument

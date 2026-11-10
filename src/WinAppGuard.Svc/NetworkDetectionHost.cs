@@ -256,6 +256,37 @@ internal static class NetworkDetectionHost
         };
     }
 
+    /// <summary>5.8：把当前所有未读反网络攻击告警一次性标记为已读。</summary>
+    internal static ServiceResponse AckAll(ServiceRequest request)
+    {
+        var changed = 0;
+
+        lock (Gate)
+        {
+            foreach (var alert in _alerts)
+            {
+                if (!string.Equals(alert.Status, "new", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                alert.Status = "ack";
+                _state.AlertStatuses[alert.Id] = "ack";
+                changed++;
+            }
+        }
+
+        PersistState();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Affected = changed,
+            NetworkDetectionStatus = BuildStatus(),
+        };
+    }
+
     internal static ServiceResponse Clear(ServiceRequest request)
     {
         int cleared;

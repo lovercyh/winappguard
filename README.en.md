@@ -11,7 +11,7 @@
 WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a program list, it shows the
 **TCP connections that are online right now** — start from “which program is online”, end at “blocked”.
 
-> **Current release: 5.7**
+> **Current release: 5.8**
 >
 > - Install/repair adds the install folder to the system PATH, so a new terminal can run `WinAppGuard` directly.
 > - Anti-network attack: Suricata 8.0.7 + ET Open, alerts only; you choose whether to apply a temporary WFP block.
@@ -19,12 +19,15 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
 > - Remote-IP ownership tooltips are available on the Connections, Anti-network attack and Records pages.
 > - Auto-refresh can be switched off on the Connections, Records, DNS and Anti-network attack pages; the tables then
 >   stop rebuilding on a timer and no longer jump back to the top.
-> - The Connections page can group connections by program; all five list pages can export the current view (JSON / CSV).
+> - The Connections page can group connections by program; all five list pages can export the current view (CSV by default).
+> - New “New program alerts” page (off by default): records first/last network times, paths and process names, with block
+>   and strict-mode whitelist actions; optional “Block new programs by default” (off by default).
+> - The IDS and Anti-network attack pages support “Mark all as read”.
 > - Settings can create a diagnostic bundle containing connections, DNS, rules, audit records, detection events and logs.
 > - Flow IDS and protection: port scans, LAN ARP/DHCP, DNS security, IPv6 neighbour security, config integrity.
 > - CLI: read-only queries, JSON, rule operations, network detection and diagnostics. See [`docs/5.3-CLI.md`](docs/5.3-CLI.md).
-> - **No automatic blocking, no new kernel driver, no automatic rule updates, no telemetry**; HTTPS payload is not visible.
->   Npcap 1.80+ is required.
+> - **No automatic blocking by default, no new kernel driver, no automatic rule updates, no telemetry**; HTTPS payload is not visible.
+>   Npcap 1.80+ is required. “Block new programs by default” is an explicit, off-by-default temporary-block option.
 >
 > Full history and boundaries: [CHANGELOG](CHANGELOG.md), [`docs/安全说明.md`](docs/安全说明.md).
 
@@ -42,6 +45,9 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
   endpoints and total traffic; block/allow actions still work.
 - **Export the current view**: Connections, Records, DNS, Anti-network attack and Traffic pages can export CSV or JSON
   (CSV by default) containing only the current filtered view.
+- **New program alerts**: a dedicated page, off by default; records first/last network times, paths and process names,
+  with block and strict-mode whitelist actions. Optional “Block new programs by default” (off by default) shows a centered
+  prompt asking whether to allow the program.
 - **IP ownership tooltip**: hover a remote IP on the Connections, Anti-network attack or Records page to see country/region,
   AS and prefix; can be disabled in Settings.
 - **Block / allow programs**: permanent, 30 minutes, 2 hours or until next restart; timed blocks expire automatically.
@@ -53,7 +59,7 @@ WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a p
 - **DNS page**: latest domains, PID, program and result; no URLs or response contents are stored.
 - **Anti-network attack**: ET Open alerts, with categories for malware / exploit / DNS / TLS-JA3 / coinminer / phishing /
   web_client / other (phishing is off by default). After a match you can apply a temporary manual block. Alerts only;
-  never automatic blocking.
+  no automatic blocking. The optional “Block new programs by default” is the only exception and is off by default.
 - **Flow IDS and protection**: periodic beaconing, port/host scans, lateral movement and DNS anomalies; plus port scans,
   ARP/DHCP, DNS security, IPv6 neighbour security, name resolution and config integrity.
 - **Records and rules**: who connected to whom, whether it was blocked, and which rule matched; IP blocking, rule groups
@@ -201,6 +207,7 @@ deleted). To remove only WFP objects, run `WinAppGuard --recover` from an admini
 | [`docs/5.3-CLI.md`](docs/5.3-CLI.md) | CLI commands, permissions, JSON and exit codes |
 | [`docs/5.4-安装PATH.md`](docs/5.4-安装PATH.md) | Installer PATH behaviour and acceptance |
 | [`docs/5.7-数据出口与连接汇总.md`](docs/5.7-数据出口与连接汇总.md) | Connection summary, table export and diagnostic bundle |
+| [`docs/5.8-新程序联网提醒.md`](docs/5.8-新程序联网提醒.md) | New-program first-seen records, alerts and mark-all-read |
 | [`docs/测试用例.md`](docs/测试用例.md) | Test cases and measured results |
 
 More design documents: [`docs/`](docs/).

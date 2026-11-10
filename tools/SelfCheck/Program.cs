@@ -57,6 +57,7 @@ namespace WinAppGuard.SelfCheck;
 ///   WinAppGuard.SelfCheck.exe --connection-filter-test  连接列表：离线，核对搜索过滤与排序规则
 ///   WinAppGuard.SelfCheck.exe --export-test      5.7：CSV / JSON 表格导出（离线）
 ///   WinAppGuard.SelfCheck.exe --diagnostics-test 5.7：诊断包 zip 内容（临时目录）
+///   WinAppGuard.SelfCheck.exe --first-seen-test  5.8：新程序联网提醒记录（离线）
 ///   WinAppGuard.SelfCheck.exe --temp-block-test  临时阻断：离线，核对待到期信息的编码 / 解析 / 判定
 ///   WinAppGuard.SelfCheck.exe --temp-block-status  临时阻断：只读，打印每条规则的到期解析结果
 ///   WinAppGuard.SelfCheck.exe --strict-mode-test  严格模式：会话内拦截（会短暂断开未放行程序的网络，结束即恢复）
@@ -138,6 +139,7 @@ internal static class Program
                          && !args.Contains("--connection-filter-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--export-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--diagnostics-test", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--first-seen-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--temp-block-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--temp-block-status", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ui-check", StringComparer.OrdinalIgnoreCase)
@@ -270,6 +272,10 @@ internal static class Program
             else if (args.Contains("--diagnostics-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunDiagnosticsTest();
+            }
+            else if (args.Contains("--first-seen-test", StringComparer.OrdinalIgnoreCase))
+            {
+                RunFirstSeenTest();
             }
             else if (args.Contains("--temp-block-test", StringComparer.OrdinalIgnoreCase))
             {
@@ -1573,6 +1579,7 @@ internal static class Program
             CheckStrictModeUi(results, form);
             CheckSafetyNoticeFits(results, form);
             Check57UiWiring(results, form);
+            Check58UiWiring(results, form);
 
             hintLabel.Text = originalHint;
             detailLabel.Text = originalDetail;
@@ -1676,6 +1683,10 @@ internal static class Program
             TrySelectTab(form, "_tabDns");
             Application.DoEvents();
             RenderFormTo(form, Path.Combine(outputDir, "08-dns.png"));
+
+            TrySelectTab(form, "_tabFirstSeenPrograms");
+            Application.DoEvents();
+            RenderFormTo(form, Path.Combine(outputDir, "17-new-programs.png"));
 
             TrySelectTab(form, "_tabScan");
             Application.DoEvents();
@@ -2792,7 +2803,51 @@ internal static class Program
         });
 
         InvokePrivate(form, "RebuildAntiScanView", null);
+        ApplyDocsFirstSeenSamples(form, now);
         ApplyDocsNetworkDetectionSamples(form, now);
+    }
+
+    /// <summary>5.8：给 README 的「新程序联网提醒」页填充演示记录。</summary>
+    private static void ApplyDocsFirstSeenSamples(MainForm form, DateTime now)
+    {
+        if (!TryGetField<FirstSeenProgramStore>(form, "_firstSeenStore", out var store))
+        {
+            return;
+        }
+
+        var utc = now.ToUniversalTime();
+
+        store.Baseline(new[]
+        {
+            (@"C:\Program Files\Google\Chrome\Application\chrome.exe", "chrome.exe"),
+            (@"C:\Program Files\Microsoft VS Code\Code.exe", "Code.exe"),
+            (@"C:\Program Files (x86)\Steam\steam.exe", "steam.exe"),
+        }, utc.AddDays(-3));
+
+        store.Observe(new[]
+        {
+            (@"C:\Tools\new-tool.exe", "new-tool.exe"),
+            (@"C:\Users\demo\Downloads\setup-helper.exe", "setup-helper.exe"),
+        }, utc.AddMinutes(-3));
+
+        if (TryGetField<AppSettings>(form, "_settings", out var settings))
+        {
+            settings.NewProgramAlertsEnabled = true;
+        }
+
+        if (TryGetField<Button>(form, "_firstSeenModeButton", out var modeButton)
+            && TryGetField<CheckBox>(form, "_firstSeenBalloonCheckBox", out var balloon))
+        {
+            modeButton.Text = Localizer.T("关闭新程序联网提醒");
+            balloon.Enabled = true;
+        }
+
+        if (TryGetField<CheckBox>(form, "_firstSeenDefaultBlockCheckBox", out var defaultBlock))
+        {
+            defaultBlock.Enabled = true;
+        }
+
+        InvokePrivate(form, "RebuildFirstSeenView", null);
     }
 
     /// <summary>
@@ -3642,8 +3697,88 @@ internal static class Program
     /// 产品负责人最初的想法是「搭在每 3 秒的刷新循环上」，但那个开关**默认是关的**——
     /// 搭上去的话，没勾开关的用户就永远等不到临时阻断自动解除。
     /// </summary>
-    private static void Check57UiWiring(List<(string Title, bool Passed)> results, MainForm form)
+    private static void Check58UiWiring(List<(string Title, bool Passed)> results, MainForm form)
     {
+        W();
+        W("===== 5.8 新程序联网提醒 / 全部已读 =====");
+
+        if (TryGetField<TabControl>(form, "_tabControl", out var tabs)
+            && TryGetField<TabPage>(form, "_tabFirstSeenPrograms", out var page))
+        {
+            CheckAssertion(results, "有独立的「新程序联网提醒」标签页",
+                tabs.TabPages.Contains(page)
+                && page.Text.Contains("新程序联网提醒", StringComparison.Ordinal));
+        }
+        else
+        {
+            CheckAssertion(results, "找得到「新程序联网提醒」标签页", false);
+        }
+
+        if (TryGetField<Button>(form, "_firstSeenModeButton", out var mode)
+            && TryGetField<CheckBox>(form, "_firstSeenBalloonCheckBox", out var balloon)
+            && TryGetField<CheckBox>(form, "_firstSeenDefaultBlockCheckBox", out var defaultBlock)
+            && TryGetField<DataGridView>(form, "_firstSeenGrid", out var grid))
+        {
+            var modeEnabled = mode.Text.Contains("关闭", StringComparison.Ordinal);
+
+            CheckAssertion(results, "新程序页有模式按钮、气泡开关和列表",
+                grid.Columns.Count >= 7
+                && grid.Columns.Cast<DataGridViewColumn>().Any(column =>
+                    column.DataPropertyName == nameof(FirstSeenProgramRecord.ProcessingText))
+                && mode.Text.Contains("新程序", StringComparison.Ordinal)
+                && balloon.Text.Contains("托盘", StringComparison.Ordinal)
+                && defaultBlock.Text.Contains("高风险", StringComparison.Ordinal));
+            CheckAssertion(results, "气泡开关跟随主模式可用状态",
+                balloon.Enabled == modeEnabled);
+            CheckAssertion(results, "默认阻止开关跟随主模式可用状态",
+                defaultBlock.Enabled == modeEnabled);
+            CheckAssertion(results, "新程序页有刷新按钮",
+                TryGetField<Button>(form, "_firstSeenRefreshButton", out var refresh)
+                && refresh.Text.Contains("刷新", StringComparison.Ordinal));
+            CheckAssertion(results, "新程序页有 3 秒刷新定时器，且跟随模式开关",
+                TryGetField<System.Windows.Forms.Timer>(form, "_firstSeenTimer", out var firstSeenTimer)
+                && firstSeenTimer.Interval == 3000
+                && firstSeenTimer.Enabled == modeEnabled);
+
+            if (TryGetField<FirstSeenProgramStore>(form, "_firstSeenStore", out var store)
+                && TryGetField<TabControl>(form, "_tabControl", out var firstSeenTabs)
+                && TryGetField<TabPage>(form, "_tabFirstSeenPrograms", out var firstSeenPage))
+            {
+                var now = new DateTime(2026, 11, 10, 12, 0, 0, DateTimeKind.Utc);
+                store.Baseline(new[]
+                {
+                    (@"C:\Apps\known.exe", "known.exe"),
+                }, now);
+                store.Observe(new[]
+                {
+                    (@"C:\Tools\new.exe", "new.exe"),
+                }, now.AddMinutes(1));
+
+                firstSeenTabs.SelectedTab = firstSeenPage;
+                InvokePrivate(form, "RebuildFirstSeenView", null);
+                Application.DoEvents();
+
+                CheckAssertion(results, "新程序页能显示记录并标出新程序",
+                    grid.Rows.Count >= 2
+                    && grid.Rows.Cast<DataGridViewRow>()
+                        .Select(row => row.DataBoundItem)
+                        .OfType<FirstSeenProgramRecord>()
+                        .Any(record => record.ProcessName == "new.exe" && record.IsNew));
+            }
+        }
+        else
+        {
+            CheckAssertion(results, "找得到新程序页的模式 / 气泡 / 列表", false);
+        }
+
+        CheckAssertion(results, "IDS 和反网络攻击页都有「全部已读」按钮",
+            TryGetField<Button>(form, "_idsAckAllButton", out var idsAckAll)
+            && idsAckAll.Text.Contains("全部已读", StringComparison.Ordinal)
+            && TryGetField<Button>(form, "_ndAckAllButton", out var ndAckAll)
+            && ndAckAll.Text.Contains("全部已读", StringComparison.Ordinal));
+    }
+
+    private static void Check57UiWiring(List<(string Title, bool Passed)> results, MainForm form)    {
         W();
         W("===== 5.7 连接汇总 / 诊断包 =====");
 
@@ -4841,6 +4976,133 @@ internal static class Program
     /// <summary>
     /// 5.7：CSV / JSON 表格导出器（离线，不写用户目录）。
     /// </summary>
+    /// <summary>
+    /// 5.8：新程序联网提醒的本地记录（离线，临时文件）。
+    /// </summary>
+    private static void RunFirstSeenTest()
+    {
+        var results = new List<(string Title, bool Passed)>();
+        var path = Path.Combine(Path.GetTempPath(), $"wag-first-seen-{Guid.NewGuid():N}.json");
+
+        W("################################################################");
+        W("#   5.8 新程序联网提醒：记录 / 基线 / 去重（离线）               #");
+        W("################################################################");
+        W();
+
+        try
+        {
+            var settings = new AppSettings();
+            CheckAssertion(results, "设置默认关闭新程序提醒、气泡默认开启",
+                !settings.NewProgramAlertsEnabled && settings.NewProgramBalloonEnabled
+                && !settings.NewProgramDefaultBlockEnabled);
+
+            CheckAssertion(results, "新程序临时阻止命令使用 guard 前缀",
+                ServiceProtocol.Commands.GuardNewProgramBlock == "guard.new-program.block"
+                && ServiceProtocol.Commands.GuardNewProgramRelease == "guard.new-program.release");
+
+            var now = new DateTime(2026, 11, 10, 12, 0, 0, DateTimeKind.Utc);
+            var store = new FirstSeenProgramStore(path);
+
+            var baseline = store.Baseline(new[]
+            {
+                (@"C:\Apps\a.exe", "a.exe"),
+                (@"C:\Apps\b.exe", "b.exe"),
+            }, now);
+
+            CheckAssertion(results, "首次基线把当前程序记为已知",
+                baseline == 2
+                && store.Count == 2
+                && store.NewCount == 0
+                && store.Snapshot().All(record => record.Acknowledged && record.IsBaseline));
+
+            var added = store.Observe(new[]
+            {
+                (@"C:\Apps\a.exe", "a.exe"),
+            }, now.AddMinutes(1));
+
+            CheckAssertion(results, "同一路径再次出现不重复新增",
+                added.Count == 0
+                && store.Count == 2
+                && store.Find(@"C:\apps\A.EXE")?.LastSeenUtc == now.AddMinutes(1));
+
+            var newRecords = store.Observe(new[]
+            {
+                (@"C:\Tools\new.exe", "new.exe"),
+                (@"C:\Tools\new.exe", "new.exe"),
+            }, now.AddMinutes(2));
+
+            CheckAssertion(results, "新路径只记录一次，并按路径去重",
+                newRecords.Count == 1
+                && store.Count == 3
+                && store.NewCount == 1
+                && store.Find(@"C:\Tools\new.exe") is { IsNew: true, IsBaseline: false });
+
+            var newRecord = store.Find(@"C:\Tools\new.exe")!;
+            CheckAssertion(results, "新程序首次提醒可用",
+                store.ShouldNotify(newRecord, now.AddMinutes(2)));
+
+            store.MarkNotified(new[] { newRecord.Path }, now.AddMinutes(2));
+            CheckAssertion(results, "同一程序 24 小时内不重复提醒",
+                !store.ShouldNotify(store.Find(newRecord.Path)!, now.AddHours(1)));
+
+            CheckAssertion(results, "标记为已知后不再是新程序",
+                store.MarkKnown(newRecord.Path)
+                && store.Find(newRecord.Path) is { IsNew: false });
+
+            CheckAssertion(results, "记录用户在默认阻止弹窗里的选择",
+                store.SetDecision(newRecord.Path, FirstSeenDecision.Allowed)
+                && store.Find(newRecord.Path)?.Decision == FirstSeenDecision.Allowed);
+
+            store.Observe(new[] { (@"C:\Tools\another.exe", "another.exe") }, now.AddMinutes(3));
+            CheckAssertion(results, "全部已读把剩余新程序标记为已知",
+                store.MarkAllKnown() == 1 && store.NewCount == 0);
+
+            CheckAssertion(results, "删除单条记录",
+                store.Delete(newRecord.Path)
+                && store.Find(newRecord.Path) is null
+                && store.Count == 3);
+
+            var readded = store.Observe(
+                new[] { (newRecord.Path, "new.exe") },
+                now.AddMinutes(4));
+
+            CheckAssertion(results, "删除后再次联网会重新成为新程序",
+                readded.Count == 1
+                && store.Find(newRecord.Path) is { IsNew: true });
+
+            var reloaded = new FirstSeenProgramStore(path);
+            CheckAssertion(results, "记录可以持久化并重新读取",
+                reloaded.Find(@"C:\Apps\a.exe") is not null
+                && reloaded.Find(@"C:\Tools\another.exe") is not null);
+
+            File.WriteAllText(path, "not a json file");
+            var corrupted = new FirstSeenProgramStore(path);
+            CheckAssertion(results, "记录文件损坏时回退为空，不影响启动",
+                corrupted.Count == 0 && !string.IsNullOrEmpty(corrupted.LastError));
+        }
+        catch (Exception ex)
+        {
+            W($"    ！{ex.GetType().Name}: {ex.Message}");
+            CheckAssertion(results, "新程序提醒记录检查执行完成", false);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件删除失败不影响断言。
+            }
+        }
+
+        PrintSummary(results, showFirewallResidue: false);
+    }
+
     private static void RunExportTest()
     {
         var results = new List<(string Title, bool Passed)>();
@@ -5007,6 +5269,10 @@ internal static class Program
             var settingsPath = Path.Combine(root, "settings.json");
             File.WriteAllText(settingsPath, "{\"IpOwnershipEnabled\":false}\n");
 
+            var firstSeenPath = Path.Combine(root, "first-seen.json");
+            var firstSeenStore = new FirstSeenProgramStore(firstSeenPath);
+            firstSeenStore.Baseline(new[] { (@"C:\Apps\demo.exe", "demo.exe") }, DateTime.UtcNow);
+
             var zipPath = Path.Combine(root, "diagnostics.zip");
             var result = DiagnosticBundle.Create(zipPath, new DiagnosticBundleOptions
             {
@@ -5021,6 +5287,7 @@ internal static class Program
                 AuditDirectory = auditDir,
                 RulesSnapshotPath = rulesPath,
                 SettingsPath = settingsPath,
+                FirstSeenProgramsPath = firstSeenPath,
             });
 
             W($"    条目 = {result.Entries}，大小 = {result.Bytes} 字节");
@@ -5046,6 +5313,9 @@ internal static class Program
                 names.Contains("data/audit.csv")
                 && names.Contains("data/audit/audit-20261108-1.jsonl")
                 && names.Contains("data/raw/rules-snapshot.json"));
+            CheckAssertion(results, "包含新程序联网提醒记录",
+                names.Contains("data/new-programs.csv")
+                && names.Contains("data/raw/new-programs.json"));
             CheckAssertion(results, "包含界面与服务日志",
                 names.Contains("logs/ui/ui-test.log")
                 && names.Contains("logs/service/service-test.log"));
@@ -15898,14 +16168,18 @@ internal static class Program
 
         CheckAssertion(results, "告警处置命令使用 alert 前缀且只放行告警元数据",
             ServiceProtocol.Commands.AlertIdsAck == "alert.ids.ack"
+            && ServiceProtocol.Commands.AlertIdsAckAll == "alert.ids.ack-all"
             && ServiceProtocol.Commands.AlertIdsSuppress == "alert.ids.suppress"
             && ServiceProtocol.Commands.AlertIdsClear == "alert.ids.clear"
             && ServiceProtocol.Commands.AlertNetworkAck == "alert.network.ack"
+            && ServiceProtocol.Commands.AlertNetworkAckAll == "alert.network.ack-all"
             && ServiceProtocol.Commands.AlertNetworkClear == "alert.network.clear"
             && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsAck)
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsAckAll)
             && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsSuppress)
             && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertIdsClear)
             && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertNetworkAck)
+            && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertNetworkAckAll)
             && ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.AlertNetworkClear)
             && !ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.NetworkDetectionBlock)
             && !ServiceProtocol.IsAlertCommand(ServiceProtocol.Commands.NetworkDetectionConfigure)

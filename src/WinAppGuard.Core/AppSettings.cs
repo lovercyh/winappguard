@@ -65,6 +65,23 @@ public sealed class AppSettings
     /// </summary>
     public int AuditRetentionDays { get; set; } = DefaultAuditRetentionDays;
 
+    /// <summary>
+    /// 5.8：是否开启「新程序联网提醒」。默认关闭，用户必须在独立页面手动开启。
+    /// 开启后才会在本地记录程序路径和联网时间。
+    /// </summary>
+    public bool NewProgramAlertsEnabled { get; set; }
+
+    /// <summary>
+    /// 5.8：发现新程序时是否显示托盘气泡。主开关关闭时无效；默认开启。
+    /// </summary>
+    public bool NewProgramBalloonEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 5.8：新程序默认阻止（高风险）。开启后新程序会被服务临时阻止，
+    /// 并弹出居中确认框询问是否允许联网。默认关闭。
+    /// </summary>
+    public bool NewProgramDefaultBlockEnabled { get; set; }
+
     /// <summary>保留期下限（1 天）。</summary>
     public const int MinAuditRetentionDays = 1;
 

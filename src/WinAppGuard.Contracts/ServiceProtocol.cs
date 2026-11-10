@@ -169,6 +169,9 @@ public static class ServiceProtocol
         /// <summary>5.2：标记一条 IDS 告警为已读。</summary>
         public const string AlertIdsAck = "alert.ids.ack";
 
+        /// <summary>5.8：把当前所有 IDS 告警标记为已读。</summary>
+        public const string AlertIdsAckAll = "alert.ids.ack-all";
+
         /// <summary>5.2：新增或取消一条“同类告警不再提醒”。</summary>
         public const string AlertIdsSuppress = "alert.ids.suppress";
 
@@ -178,8 +181,17 @@ public static class ServiceProtocol
         /// <summary>5.2：标记一条反网络攻击告警为已读。</summary>
         public const string AlertNetworkAck = "alert.network.ack";
 
+        /// <summary>5.8：把当前所有反网络攻击告警标记为已读。</summary>
+        public const string AlertNetworkAckAll = "alert.network.ack-all";
+
         /// <summary>5.2：清空反网络攻击告警历史。</summary>
         public const string AlertNetworkClear = "alert.network.clear";
+
+        /// <summary>5.8：为新程序创建临时阻止（仅本功能，动态会话，免 UAC）。</summary>
+        public const string GuardNewProgramBlock = "guard.new-program.block";
+
+        /// <summary>5.8：释放新程序的临时阻止。</summary>
+        public const string GuardNewProgramRelease = "guard.new-program.release";
 
         // ---- 4.0：反端口扫描与临时 IP 封禁 ----
 
@@ -277,9 +289,11 @@ public static class ServiceProtocol
     /// </summary>
     public static bool IsAlertCommand(string command)
         => command is Commands.AlertIdsAck
+            or Commands.AlertIdsAckAll
             or Commands.AlertIdsSuppress
             or Commands.AlertIdsClear
             or Commands.AlertNetworkAck
+            or Commands.AlertNetworkAckAll
             or Commands.AlertNetworkClear;
 
     /// <summary>

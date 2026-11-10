@@ -29,6 +29,8 @@ public sealed class DiagnosticBundleOptions
 
     public bool IncludeSettings { get; init; } = true;
 
+    public bool IncludeFirstSeenPrograms { get; init; } = true;
+
     public string? UiLogDirectory { get; init; }
 
     public string? ServiceLogDirectory { get; init; }
@@ -38,6 +40,8 @@ public sealed class DiagnosticBundleOptions
     public string? RulesSnapshotPath { get; init; }
 
     public string? SettingsPath { get; init; }
+
+    public string? FirstSeenProgramsPath { get; init; }
 }
 
 /// <summary>诊断包生成结果。路径和大小只用于界面提示。</summary>
@@ -135,6 +139,11 @@ public static class DiagnosticBundle
         if (options.IncludeConnections)
         {
             AddConnections(zip, warnings, counts);
+        }
+
+        if (options.IncludeFirstSeenPrograms)
+        {
+            AddFirstSeenPrograms(zip, options, warnings, counts);
         }
 
         if (options.IncludeServiceSnapshots)
@@ -279,11 +288,39 @@ public static class DiagnosticBundle
         }
     }
 
-    private static void AddServiceSnapshots(
+    private static void AddFirstSeenPrograms(
         ZipArchive zip,
+        DiagnosticBundleOptions options,
         List<string> warnings,
         Dictionary<string, int> counts)
     {
+        try
+        {
+            var store = new FirstSeenProgramStore(options.FirstSeenProgramsPath);
+            var records = store.Snapshot();
+
+            counts["firstSeenPrograms"] = records.Count;
+
+            AddText(
+                zip,
+                "data/new-programs.csv",
+                DiagnosticCsv.FromObjects("new-programs", records));
+
+            AddText(
+                zip,
+                "data/raw/new-programs.json",
+                JsonSerializer.Serialize(records, JsonOptions));
+        }
+        catch (Exception ex)
+        {
+            warnings.Add($"新程序联网提醒记录读取失败：{ex.Message}");
+        }
+    }
+
+    private static void AddServiceSnapshots(
+        ZipArchive zip,
+        List<string> warnings,
+        Dictionary<string, int> counts)    {
         foreach (var (command, fileName) in ServiceSnapshots)
         {
             ServiceResponse? response = null;
@@ -521,6 +558,7 @@ public static class DiagnosticBundle
            "  - DNS 查询记录\r\n" +
            "  - 防火墙规则（本工具创建的规则）\r\n" +
            "  - 审计记录（CSV + 原始 .jsonl）\r\n" +
+           "  - 新程序联网提醒记录\r\n" +
            "  - 流量、网络检测 / IDS / 局域网 / IPv6 / 配置完整性事件\r\n" +
            "  - 界面与服务日志\r\n" +
            "  - 设置文件（只有开关和保留天数）\r\n\r\n" +
@@ -602,6 +640,7 @@ public static class DiagnosticBundle
         builder.AppendLine($"  auditFiles: {GetCount(counts, "audit")}");
         builder.AppendLine($"  auditEvents: {GetCount(counts, "auditEvents")}");
         builder.AppendLine($"  rulesFromService: {GetCount(counts, "rules.json")}");
+        builder.AppendLine($"  firstSeenPrograms: {GetCount(counts, "firstSeenPrograms")}");
         builder.AppendLine($"  dnsRecords: {GetCount(counts, "dns.json")}");
         builder.AppendLine($"  trafficRows: {GetCount(counts, "traffic.json")}");
         builder.AppendLine($"  networkAlerts: {GetCount(counts, "network-detection.json")}");

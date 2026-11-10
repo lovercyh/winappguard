@@ -21,6 +21,7 @@ public sealed partial class MainForm
     private ComboBox _idsRuleFilter = null!;
     private Button _idsRefreshButton = null!;
     private Button _idsAckButton = null!;
+    private Button _idsAckAllButton = null!;
     private Button _idsSuppressButton = null!;
     private Button _idsSettingsButton = null!;
     private Button _idsClearButton = null!;
@@ -117,6 +118,14 @@ public sealed partial class MainForm
         };
         _idsAckButton.Click += OnIdsAckClick;
 
+        _idsAckAllButton = new Button
+        {
+            Location = new Point(0, 56),
+            Width = 88,
+            Text = "全部已读",
+        };
+        _idsAckAllButton.Click += OnIdsAckAllClick;
+
         _idsSuppressButton = new Button
         {
             Location = new Point(586, 23),
@@ -143,8 +152,8 @@ public sealed partial class MainForm
 
         _idsSummaryLabel = new Label
         {
-            Location = new Point(0, 56),
-            Width = 1000,
+            Location = new Point(96, 58),
+            Width = 900,
             Height = 22,
             ForeColor = SystemColors.GrayText,
             AutoEllipsis = true,
@@ -177,6 +186,7 @@ public sealed partial class MainForm
             _idsRuleFilter,
             _idsRefreshButton,
             _idsAckButton,
+            _idsAckAllButton,
             _idsSuppressButton,
             _idsSettingsButton,
             _idsClearButton,
@@ -608,6 +618,8 @@ public sealed partial class MainForm
         _idsRefreshButton.Enabled = !_idsLoading;
         _idsAckButton.Enabled = available
                                 && selected is { Status: "new" };
+        _idsAckAllButton.Enabled = available
+                                  && _idsAlerts.Any(alert => alert.Status == "new");
         _idsSuppressButton.Enabled = available && selected is not null;
         _idsSettingsButton.Enabled = available;
         _idsClearButton.Enabled = available && _idsAlerts.Count > 0;
@@ -654,6 +666,43 @@ public sealed partial class MainForm
         catch (Exception ex)
         {
             ShowError("标记 IDS 告警为已读失败", ex, "Failed to mark an IDS alert as read");
+        }
+    }
+
+    /// <summary>5.8：一键把当前所有未读 IDS 告警标记为已读。</summary>
+    private void OnIdsAckAllClick(object? sender, EventArgs e)
+    {
+        if (!_idsAlerts.Any(alert => alert.Status == "new"))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = CallAlertService(
+                ServiceProtocol.Commands.AlertIdsAckAll,
+                new ServiceRequest(),
+                Localizer.T("全部标记 IDS 告警为已读"));
+
+            if (response is null)
+            {
+                return;
+            }
+
+            foreach (var alert in _idsAlerts)
+            {
+                if (alert.Status == "new")
+                {
+                    alert.Status = "ack";
+                }
+            }
+
+            _idsSignature = null;
+            RebuildIdsView();
+        }
+        catch (Exception ex)
+        {
+            ShowError("全部标记 IDS 告警为已读失败", ex, "Failed to mark all IDS alerts as read");
         }
     }
 

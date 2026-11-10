@@ -347,6 +347,7 @@ public partial class MainForm : Form
         SetupRulesGrid();
         SetupWhitelistGrid();
         InitializeAuditPage();
+        InitializeFirstSeenProgramsPage();
         InitializeDnsPage();
         InitializeTrafficPage();
         InitializeIdsPage();
@@ -566,6 +567,10 @@ public partial class MainForm : Form
         _auditTimer?.Stop();
         _auditTimer?.Dispose();
         _auditStore.Dispose();
+
+        // 5.8：新程序默认阻止是服务里的临时动态过滤器；界面退出时主动释放，
+        // 避免留下用户已经看不到入口的临时阻止。
+        ReleaseAllGuardedPrograms();
 
         // 记住窗口位置/大小与列宽，下次打开还是原样（自检模式不写，免得污染本机状态）。
         CaptureAndSaveUiState();
@@ -1575,6 +1580,7 @@ public partial class MainForm : Form
         var selectedKey = CaptureSelection();
         RebuildView();
         RebindGrid(selectedKey);
+        UpdateFirstSeenPrograms();
 
         // 4.6：回填路径后立即补签名检查；如果上一轮还在跑，等它结束再补。
         if (_isCheckingSignatures)
@@ -3005,6 +3011,7 @@ public partial class MainForm : Form
             // 用上面抓好的 selectedKey 重绑，绝对不能在这之后再重新抓一次。
             RebindGrid(selectedKey);
             UpdateSummary();
+            UpdateFirstSeenPrograms();
 
             // 列表已经显示出来了，签名在后台慢慢补。
             // 放最后调用是为了不让它拖慢"列表出现"这件事。
@@ -3684,32 +3691,50 @@ public partial class MainForm : Form
             return;
         }
 
+        var connectionCount = _connections.Count(c => PathsEqual(c.ProcessPath, item.ProcessPath));
+        BlockProgramWithConfirmation(item.ProcessPath, item.ProcessName, connectionCount);
+    }
+
+    /// <summary>
+    /// 阻止一个程序联网。连接页和新程序提醒页共用同一套确认与写规则逻辑。
+    /// </summary>
+    private void BlockProgramWithConfirmation(
+        string programPath,
+        string programName,
+        int connectionCount)
+    {
+        if (string.IsNullOrEmpty(programPath))
+        {
+            return;
+        }
+
         // 界面上按钮已经置灰了，这里再挡一次，好给出一句人话而不是让它静默无反应。
         // 真正的安全边界在 FirewallManager.ValidateProgramPath 里，不在这里。
-        if (ProtectedProcesses.IsProtected(item.ProcessPath, out var reason))
+        if (ProtectedProcesses.IsProtected(programPath, out var reason))
         {
             UiMessageBox.Show(this, reason, AppConstants.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        var connectionCount = _connections.Count(c => PathsEqual(c.ProcessPath, item.ProcessPath));
-        var ruleName = RuleNaming.BuildBlockRuleName(item.ProcessPath);
+        var ruleName = RuleNaming.BuildBlockRuleName(programPath);
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
             title: "阻止程序联网",
-            question: $"确定要阻止「{item.ProcessName}」联网吗？",
+            question: $"确定要阻止「{programName}」联网吗？",
             details: new[]
             {
-                new KeyValuePair<string, string>("程序名", item.ProcessName),
-                new KeyValuePair<string, string>("完整路径", item.ProcessPath),
+                new KeyValuePair<string, string>("程序名", programName),
+                new KeyValuePair<string, string>("完整路径", programPath),
                 new KeyValuePair<string, string>("当前连接", $"{connectionCount} 条"),
                 new KeyValuePair<string, string>("生效范围", "出站方向的 TCP 和 UDP 全部阻止"),
                 new KeyValuePair<string, string>("将创建规则", ruleName),
             },
             warnings: new[]
             {
-                $"确认后该程序会立刻无法联网；实测中它当前正在进行中的 {connectionCount} 条连接也会马上断开（浏览器会立刻掉线）。",
+                connectionCount > 0
+                    ? $"确认后该程序会立刻无法联网；实测中它当前正在进行中的 {connectionCount} 条连接也会马上断开（浏览器会立刻掉线）。"
+                    : "确认后该程序会立刻无法联网。",
                 "如果你发现它仍然能联网，重启该程序再试一次即可。",
                 "拦截按「可执行文件路径」生效：同一个程序换到别的目录运行不受影响，但同一目录下的所有实例会一起被拦掉。",
                 "阻止之后这个程序会从「联网连接」页消失（它连不上，自然没有连接）。" +
@@ -3730,7 +3755,7 @@ public partial class MainForm : Form
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
-                    Value = item.ProcessPath,
+                    Value = programPath,
                     Action = "block",
                     Expiry = chosenExpiry.Encode(),
                     Scope = RuleScope.Any.Encode(),
@@ -3743,8 +3768,8 @@ public partial class MainForm : Form
             }
 
             LocalLog.Operation(LocalLog.Pick(
-                $"阻止联网：{item.ProcessPath}（时长：{chosenExpiry.DescribeSchedule()}）",
-                $"Block network access: {item.ProcessPath} (duration: {DescribeScheduleEnglish(chosenExpiry)})."));
+                $"阻止联网：{programPath}（时长：{chosenExpiry.DescribeSchedule()}）",
+                $"Block network access: {programPath} (duration: {DescribeScheduleEnglish(chosenExpiry)})."));
 
             AfterRulesChanged();
         }

@@ -411,6 +411,37 @@ internal static class IdsHost
         };
     }
 
+    /// <summary>5.8：把当前所有未读 IDS 告警一次性标记为已读。</summary>
+    internal static ServiceResponse AckAll(ServiceRequest request)
+    {
+        var changed = 0;
+
+        lock (Gate)
+        {
+            foreach (var alert in _alerts)
+            {
+                if (!string.Equals(alert.Status, "new", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                alert.Status = "ack";
+                _state.AlertStatuses[alert.Id] = "ack";
+                changed++;
+            }
+        }
+
+        PersistState();
+
+        return new ServiceResponse
+        {
+            Id = request.Id,
+            Ok = true,
+            Affected = changed,
+            IdsStatus = GetStatus(),
+        };
+    }
+
     internal static ServiceResponse Suppress(ServiceRequest request)
     {
         var dto = request.IdsSuppression;

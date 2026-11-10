@@ -163,6 +163,9 @@ internal sealed class ControlServer : IDisposable
         // 5.0：网络被动检测（Suricata + ET Open），只告警，不自动拦截。
         NetworkDetectionHost.Start();
 
+        // 5.8：新程序默认阻止用的临时 WFP 会话（只在功能开启时由界面调用）。
+        NewProgramGuardHost.Start();
+
         if (_protectedMode is not null)
         {
             ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
@@ -205,6 +208,8 @@ internal sealed class ControlServer : IDisposable
 
         // 5.0：先停检测，再停抓包/网络宿主。
         NetworkDetectionHost.Stop();
+
+        NewProgramGuardHost.Stop();
 
         TrafficCaptureHost.Stop();
 
@@ -599,13 +604,21 @@ internal sealed class ControlServer : IDisposable
             // 5.2：告警元数据命令（无需提权；是否允许永久不再提醒由上面的守卫判断）。
             ServiceProtocol.Commands.AlertIdsAck => IdsHost.Ack(request),
 
+            ServiceProtocol.Commands.AlertIdsAckAll => IdsHost.AckAll(request),
+
             ServiceProtocol.Commands.AlertIdsSuppress => IdsHost.Suppress(request),
 
             ServiceProtocol.Commands.AlertIdsClear => IdsHost.Clear(request),
 
             ServiceProtocol.Commands.AlertNetworkAck => NetworkDetectionHost.Ack(request),
 
+            ServiceProtocol.Commands.AlertNetworkAckAll => NetworkDetectionHost.AckAll(request),
+
             ServiceProtocol.Commands.AlertNetworkClear => NetworkDetectionHost.Clear(request),
+
+            ServiceProtocol.Commands.GuardNewProgramBlock => NewProgramGuardHost.Block(request),
+
+            ServiceProtocol.Commands.GuardNewProgramRelease => NewProgramGuardHost.Release(request),
 
             // 4.0：反扫描；写命令（write.antiscan.*）已由上面的提权检查统一拦截。
             ServiceProtocol.Commands.QueryAntiScan => AntiScanHost.Query(request),

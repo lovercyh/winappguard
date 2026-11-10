@@ -36,6 +36,10 @@ public sealed partial class MainForm
         {
             ExportNetworkAlertsView();
         }
+        else if (_tabControl.SelectedTab == _tabFirstSeenPrograms)
+        {
+            ExportFirstSeenProgramsView();
+        }
         else if (_tabControl.SelectedTab == _tabTraffic)
         {
             ExportTrafficView();

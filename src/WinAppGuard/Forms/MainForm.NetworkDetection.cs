@@ -18,6 +18,7 @@ public sealed partial class MainForm
     private Label _ndStatusLabel = null!;
     private Button _ndRefreshButton = null!;
     private Button _ndAckButton = null!;
+    private Button _ndAckAllButton = null!;
     private Button _ndBlockButton = null!;
     private Button _ndReleaseButton = null!;
     private Button _ndClearButton = null!;
@@ -87,6 +88,9 @@ public sealed partial class MainForm
         _ndAckButton = new Button { Text = Localizer.T("标记已读"), Width = 96, Enabled = false };
         _ndAckButton.Click += OnNetworkAckClick;
 
+        _ndAckAllButton = new Button { Text = Localizer.T("全部已读"), Width = 88, Enabled = false };
+        _ndAckAllButton.Click += OnNetworkAckAllClick;
+
         _ndBlockButton = new Button { Text = Localizer.T("拦截…"), Width = 88, Enabled = false };
         _ndBlockButton.Click += OnNetworkBlockClick;
 
@@ -113,6 +117,7 @@ public sealed partial class MainForm
 
         actions.Controls.Add(_ndRefreshButton);
         actions.Controls.Add(_ndAckButton);
+        actions.Controls.Add(_ndAckAllButton);
         actions.Controls.Add(_ndBlockButton);
         actions.Controls.Add(_ndReleaseButton);
         actions.Controls.Add(_ndClearButton);
@@ -544,6 +549,7 @@ public sealed partial class MainForm
         var alert = SelectedNetworkAlert();
 
         _ndAckButton.Enabled = alert is { Status: "new" };
+        _ndAckAllButton.Enabled = _ndAlerts.Any(item => item.Status == "new");
         _ndBlockButton.Enabled = alert is not null;
         _ndReleaseButton.Enabled = _ndBlocks.SelectedIndex >= 0;
     }
@@ -574,6 +580,36 @@ public sealed partial class MainForm
 
         alert.Status = "ack";
         RefreshNetworkDetection();
+    }
+
+    /// <summary>5.8：一键把当前所有未读反网络攻击告警标记为已读。</summary>
+    private void OnNetworkAckAllClick(object? sender, EventArgs e)
+    {
+        if (!_ndAlerts.Any(alert => alert.Status == "new"))
+        {
+            return;
+        }
+
+        var response = CallAlertService(
+            ServiceProtocol.Commands.AlertNetworkAckAll,
+            new ServiceRequest(),
+            Localizer.T("全部标记反网络攻击告警为已读"));
+
+        if (response is null)
+        {
+            return;
+        }
+
+        foreach (var alert in _ndAlerts)
+        {
+            if (alert.Status == "new")
+            {
+                alert.Status = "ack";
+            }
+        }
+
+        _ndSignature = null;
+        RebuildNetworkDetection();
     }
 
     private void OnNetworkBlockClick(object? sender, EventArgs e)

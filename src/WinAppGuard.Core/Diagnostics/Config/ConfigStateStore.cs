@@ -1,58 +1,53 @@
-using System.Text;
 using System.Text.Json;
+using WinAppGuard.Core.Storage;
 
 namespace WinAppGuard.Core.Diagnostics.Config;
 
-/// <summary>4.5：`config/state.json` 的读写（原子替换，坏文件回退默认值）。</summary>
+/// <summary>
+/// 4.5：<c>config/state.json</c> 的读写。
+///
+/// 5.9 起统一走 <see cref="JsonStateFile{T}"/>：新格式带 <c>schema/data</c> 外壳，
+/// 旧的无外壳 JSON（camelCase）仍可直接读取；坏文件保留 <c>.corrupt-*</c>。
+/// </summary>
 public static class ConfigStateStore
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
+    private const int SchemaVersion = 1;
 
     public static ConfigState Load(string path)
+        => Load(path, out _, out _);
+
+    public static ConfigState Load(string path, out string? error)
+        => Load(path, out error, out _);
+
+    public static ConfigState Load(string path, out string? error, out bool migrated)
     {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return new ConfigState();
-            }
+        var state = CreateFile(path).Load(out error, out migrated);
 
-            var state = JsonSerializer.Deserialize<ConfigState>(
-                File.ReadAllText(path, Encoding.UTF8), Options) ?? new ConfigState();
-
-            state.Baseline = Normalize(state.Baseline);
-            state.Observed = Normalize(state.Observed);
-            return state;
-        }
-        catch (Exception)
+        if (state is null)
         {
             return new ConfigState();
         }
+
+        Normalize(state);
+        return state;
     }
 
     public static void Save(string path, ConfigState state)
-    {
-        var directory = Path.GetDirectoryName(path);
+        => CreateFile(path).Save(state);
 
-        if (!string.IsNullOrEmpty(directory))
+    private static JsonStateFile<ConfigState> CreateFile(string path)
+        => new(path, SchemaVersion)
         {
-            Directory.CreateDirectory(directory);
-        }
+            Migrate = JsonStateFile<ConfigState>.Deserialize,
+        };
 
-        var temporary = path + ".tmp";
-        File.WriteAllText(
-            temporary,
-            JsonSerializer.Serialize(state, Options),
-            new UTF8Encoding(false));
-
-        File.Move(temporary, path, overwrite: true);
+    private static void Normalize(ConfigState state)
+    {
+        state.Baseline = NormalizeEntries(state.Baseline);
+        state.Observed = NormalizeEntries(state.Observed);
     }
 
-    private static List<ConfigEntry> Normalize(List<ConfigEntry>? entries)
+    private static List<ConfigEntry> NormalizeEntries(List<ConfigEntry>? entries)
         => (entries ?? new List<ConfigEntry>())
             .Where(entry => entry is not null && ConfigKinds.IsKnown(entry.Kind))
             .GroupBy(ConfigIntegrityAnalyzer.KeyOf, StringComparer.Ordinal)

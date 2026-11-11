@@ -1,80 +1,74 @@
-using System.Text;
 using System.Text.Json;
+using WinAppGuard.Core.Storage;
 
 namespace WinAppGuard.Core.Diagnostics.Lan;
 
-/// <summary>4.4：`ipv6/state.json` 的读写（原子替换，坏文件回退默认值）。</summary>
+/// <summary>
+/// 4.4：<c>ipv6/state.json</c> 的读写。
+///
+/// 5.9 起统一走 <see cref="JsonStateFile{T}"/>：新格式带 <c>schema/data</c> 外壳，
+/// 旧的无外壳 JSON（camelCase）仍可直接读取；坏文件保留 <c>.corrupt-*</c>。
+/// </summary>
 public static class Ipv6StateStore
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
+    private const int SchemaVersion = 1;
 
     public static Ipv6State Load(string path)
+        => Load(path, out _, out _);
+
+    public static Ipv6State Load(string path, out string? error)
+        => Load(path, out error, out _);
+
+    public static Ipv6State Load(string path, out string? error, out bool migrated)
     {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return new Ipv6State();
-            }
+        var state = CreateFile(path).Load(out error, out migrated);
 
-            var state = JsonSerializer.Deserialize<Ipv6State>(
-                File.ReadAllText(path, Encoding.UTF8), Options) ?? new Ipv6State();
-
-            state.Routers = (state.Routers ?? new List<Ipv6Router>())
-                .Where(item => !string.IsNullOrWhiteSpace(item.LinkLocal))
-                .GroupBy(item => item.LinkLocal, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList();
-
-            state.DhcpServers = (state.DhcpServers ?? new List<Ipv6DhcpServer>())
-                .Where(item => !string.IsNullOrWhiteSpace(item.ServerId))
-                .GroupBy(item => item.ServerId, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList();
-
-            state.Neighbors = (state.Neighbors ?? new List<Ipv6Neighbor>())
-                .Where(item => !string.IsNullOrWhiteSpace(item.Address))
-                .GroupBy(item => item.Address, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList();
-
-            state.TrustedRouters = (state.TrustedRouters ?? new List<string>())
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            state.TrustedDhcpServers = (state.TrustedDhcpServers ?? new List<string>())
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            return state;
-        }
-        catch (Exception)
+        if (state is null)
         {
             return new Ipv6State();
         }
+
+        Normalize(state);
+        return state;
     }
 
     public static void Save(string path, Ipv6State state)
-    {
-        var directory = Path.GetDirectoryName(path);
+        => CreateFile(path).Save(state);
 
-        if (!string.IsNullOrEmpty(directory))
+    private static JsonStateFile<Ipv6State> CreateFile(string path)
+        => new(path, SchemaVersion)
         {
-            Directory.CreateDirectory(directory);
-        }
+            Migrate = JsonStateFile<Ipv6State>.Deserialize,
+        };
 
-        var temporary = path + ".tmp";
-        File.WriteAllText(
-            temporary,
-            JsonSerializer.Serialize(state, Options),
-            new UTF8Encoding(false));
+    private static void Normalize(Ipv6State state)
+    {
+        state.Routers = (state.Routers ?? new List<Ipv6Router>())
+            .Where(item => !string.IsNullOrWhiteSpace(item.LinkLocal))
+            .GroupBy(item => item.LinkLocal, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
 
-        File.Move(temporary, path, overwrite: true);
+        state.DhcpServers = (state.DhcpServers ?? new List<Ipv6DhcpServer>())
+            .Where(item => !string.IsNullOrWhiteSpace(item.ServerId))
+            .GroupBy(item => item.ServerId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        state.Neighbors = (state.Neighbors ?? new List<Ipv6Neighbor>())
+            .Where(item => !string.IsNullOrWhiteSpace(item.Address))
+            .GroupBy(item => item.Address, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        state.TrustedRouters = (state.TrustedRouters ?? new List<string>())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        state.TrustedDhcpServers = (state.TrustedDhcpServers ?? new List<string>())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 }

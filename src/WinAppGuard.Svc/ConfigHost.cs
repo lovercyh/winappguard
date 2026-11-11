@@ -37,7 +37,34 @@ internal static class ConfigHost
 
     internal static void Start()
     {
-        var state = ConfigStateStore.Load(ServicePaths.ConfigStateFile);
+        var state = ConfigStateStore.Load(
+            ServicePaths.ConfigStateFile, out var stateError, out var stateMigrated);
+
+        if (stateError is not null)
+        {
+            ServiceLog.Warning(
+                "WAG-CONFIG-011",
+                $"Failed to load config integrity state; defaults are used: {stateError}");
+        }
+
+        if (stateMigrated)
+        {
+            try
+            {
+                ConfigStateStore.Save(ServicePaths.ConfigStateFile, state);
+                ServiceLog.Operation(
+                    "WAG-CONFIG-012",
+                    "Config integrity state migrated to the schema envelope.");
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning(
+                    "WAG-CONFIG-011",
+                    "Config integrity state was read from the legacy format but could not be rewritten.",
+                    ex);
+            }
+        }
+
         var analyzer = new ConfigIntegrityAnalyzer();
         analyzer.Load(state.BaselineUtc, state.Baseline, state.Observed);
 

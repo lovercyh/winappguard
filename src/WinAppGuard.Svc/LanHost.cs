@@ -71,7 +71,34 @@ internal static class LanHost
 
     internal static void Start()
     {
-        LanState state = LanStateStore.Load(ServicePaths.LanStateFile);
+        LanState state = LanStateStore.Load(
+            ServicePaths.LanStateFile, out var lanStateError, out var lanStateMigrated);
+
+        if (lanStateError is not null)
+        {
+            ServiceLog.Warning(
+                "WAG-LAN-040",
+                $"Failed to load LAN state; defaults are used: {lanStateError}");
+        }
+
+        if (lanStateMigrated)
+        {
+            try
+            {
+                LanStateStore.Save(ServicePaths.LanStateFile, state);
+                ServiceLog.Operation(
+                    "WAG-LAN-041",
+                    "LAN state migrated to the schema envelope.");
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning(
+                    "WAG-LAN-040",
+                    "LAN state was read from the legacy format but could not be rewritten.",
+                    ex);
+            }
+        }
+
         var analyzer = new LanAnalyzer(state, DateTime.UtcNow);
         var eventStore = new LanEventStore(ServicePaths.LanDirectory);
 
@@ -97,7 +124,34 @@ internal static class LanHost
         dnsAnalyzer.UpdateConfiguredServers(LanEnvironment.GetDnsHints());
 
         // 4.4：IPv6 邻接安全，独立状态/事件目录，复用同一个 Npcap 会话。
-        var ipv6State = Ipv6StateStore.Load(ServicePaths.Ipv6StateFile);
+        var ipv6State = Ipv6StateStore.Load(
+            ServicePaths.Ipv6StateFile, out var ipv6StateError, out var ipv6StateMigrated);
+
+        if (ipv6StateError is not null)
+        {
+            ServiceLog.Warning(
+                "WAG-LAN-042",
+                $"Failed to load IPv6 state; defaults are used: {ipv6StateError}");
+        }
+
+        if (ipv6StateMigrated)
+        {
+            try
+            {
+                Ipv6StateStore.Save(ServicePaths.Ipv6StateFile, ipv6State);
+                ServiceLog.Operation(
+                    "WAG-LAN-043",
+                    "IPv6 state migrated to the schema envelope.");
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning(
+                    "WAG-LAN-042",
+                    "IPv6 state was read from the legacy format but could not be rewritten.",
+                    ex);
+            }
+        }
+
         var ipv6Analyzer = new Ipv6Analyzer(ipv6State, DateTime.UtcNow);
         var ipv6EventStore = new LanEventStore(ServicePaths.Ipv6Directory);
         ipv6Analyzer.EventObserved = item => OnEvent(item);

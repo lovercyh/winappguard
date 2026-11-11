@@ -133,6 +133,76 @@ public sealed class JsonlEventLog<T> where T : class
         }
     }
 
+    /// <summary>
+    /// 按谓词删除事件，返回删除条数。坏行原样保留，避免误删无法解析的记录。
+    /// </summary>
+    public int RemoveWhere(Func<T, bool> predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+
+        lock (_gate)
+        {
+            var removed = 0;
+
+            foreach (var file in EnumerateFiles().ToList())
+            {
+                var kept = new List<string>();
+                var changed = false;
+
+                foreach (var line in ReadLines(file))
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                    {
+                        changed = true;
+                        continue;
+                    }
+
+                    try
+                    {
+                        var item = JsonSerializer.Deserialize<T>(line, JsonOptions);
+
+                        if (item is not null && predicate(item))
+                        {
+                            removed++;
+                            changed = true;
+                            continue;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // 解析不了的行保留，避免误删。
+                    }
+
+                    kept.Add(line);
+                }
+
+                if (!changed)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (kept.Count == 0)
+                    {
+                        File.Delete(file);
+                        continue;
+                    }
+
+                    var temporary = file + ".tmp";
+                    File.WriteAllLines(temporary, kept, new UTF8Encoding(false));
+                    File.Move(temporary, file, overwrite: true);
+                }
+                catch (Exception)
+                {
+                    // 删不掉不影响功能。
+                }
+            }
+
+            return removed;
+        }
+    }
+
     public int Prune(DateTime? nowUtc = null)
         => Prune(nowUtc, retentionDays: null);
 

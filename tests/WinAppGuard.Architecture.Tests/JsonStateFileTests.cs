@@ -115,6 +115,30 @@ public sealed class JsonStateFileTests
     }
 
     [Fact]
+    public void LegacyNonObjectUsesMigration()
+    {
+        var path = TempPath();
+        var file = new JsonStateFile<TestState>(path, schemaVersion: 1)
+        {
+            Migrate = root => new TestState { Value = root.GetArrayLength() },
+        };
+
+        try
+        {
+            File.WriteAllText(path, "[1,2,3,4]");
+            var loaded = file.Load(out var error, out var migrated);
+
+            Assert.Null(error);
+            Assert.True(migrated);
+            Assert.Equal(4, loaded!.Value);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void CorruptFileIsBackedUp()
     {
         var path = TempPath();

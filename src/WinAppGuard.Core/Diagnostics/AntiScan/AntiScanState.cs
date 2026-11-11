@@ -1,6 +1,6 @@
 using System.Net;
-using System.Text;
 using System.Text.Json;
+using WinAppGuard.Core.Storage;
 
 namespace WinAppGuard.Core.Diagnostics.AntiScan;
 
@@ -24,93 +24,78 @@ public sealed class AntiScanState
     public List<AntiScanBlock> Blocks { get; set; } = new();
 }
 
-/// <summary>4.0：反扫描状态文件的原子读写；坏文件回退默认值。</summary>
+/// <summary>
+/// 4.0：反扫描状态文件。
+///
+/// 5.9 起统一走 <see cref="JsonStateFile{T}"/>：新格式带 <c>schema/data</c> 外壳，
+/// 旧的无外壳 JSON 仍可直接读取；坏文件保留 <c>.corrupt-*</c>。
+/// </summary>
 public static class AntiScanStateFile
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-    };
+    private const int SchemaVersion = 1;
 
     public static AntiScanState Load(string path)
+        => Load(path, out _, out _);
+
+    public static AntiScanState Load(string path, out string? error)
+        => Load(path, out error, out _);
+
+    public static AntiScanState Load(string path, out string? error, out bool migrated)
     {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return new AntiScanState();
-            }
+        var state = CreateFile(path).Load(out error, out migrated);
 
-            var state = JsonSerializer.Deserialize<AntiScanState>(
-                File.ReadAllText(path, Encoding.UTF8), Options);
-
-            if (state is null)
-            {
-                return new AntiScanState();
-            }
-
-            state.Settings ??= new AntiScanSettings();
-            state.Settings.BlockMinutes = Math.Clamp(state.Settings.BlockMinutes, 5, 60);
-
-            // 4.5：旧文件没有 Version 字段（反序列化为 0），把新协议开关补成默认开启；
-            // 用户改过之后 SaveState 会写入 Version=Current，之后不再覆盖。
-            if (state.Settings.Version < AntiScanSettingsVersion.Current)
-            {
-                state.Settings.DetectUdp = true;
-                state.Settings.DetectIcmp = true;
-                state.Settings.Version = AntiScanSettingsVersion.Current;
-            }
-
-            if (!string.Equals(
-                    state.Settings.Sensitivity, "conservative", StringComparison.OrdinalIgnoreCase))
-            {
-                state.Settings.Sensitivity = "standard";
-            }
-            else
-            {
-                state.Settings.Sensitivity = "conservative";
-            }
-
-            state.Settings.Allowlist = (state.Settings.Allowlist ?? new List<string>())
-                .Where(IsValidAddress)
-                .Select(item => IPAddress.Parse(item.Trim()).ToString())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            state.Blocks = (state.Blocks ?? new List<AntiScanBlock>())
-                .Where(block => block is not null && IsValidAddress(block.Address))
-                .ToList();
-
-            foreach (var block in state.Blocks)
-            {
-                block.Address = IPAddress.Parse(block.Address.Trim()).ToString();
-                block.Reason ??= string.Empty;
-            }
-
-            return state;
-        }
-        catch (Exception)
+        if (state is null)
         {
             return new AntiScanState();
         }
+
+        Normalize(state);
+        return state;
     }
 
     public static void Save(string path, AntiScanState state)
-    {
-        var directory = Path.GetDirectoryName(path);
+        => CreateFile(path).Save(state);
 
-        if (!string.IsNullOrEmpty(directory))
+    private static JsonStateFile<AntiScanState> CreateFile(string path)
+        => new(path, SchemaVersion)
         {
-            Directory.CreateDirectory(directory);
+            Migrate = JsonStateFile<AntiScanState>.Deserialize,
+        };
+
+    private static void Normalize(AntiScanState state)
+    {
+        state.Settings ??= new AntiScanSettings();
+        state.Settings.BlockMinutes = Math.Clamp(state.Settings.BlockMinutes, 5, 60);
+
+        // 4.5：旧文件没有 Version 字段（反序列化为 0），把新协议开关补成默认开启；
+        // 用户改过之后 SaveState 会写入 Version=Current，之后不再覆盖。
+        if (state.Settings.Version < AntiScanSettingsVersion.Current)
+        {
+            state.Settings.DetectUdp = true;
+            state.Settings.DetectIcmp = true;
+            state.Settings.Version = AntiScanSettingsVersion.Current;
         }
 
-        var temporary = path + ".tmp";
-        File.WriteAllText(
-            temporary,
-            JsonSerializer.Serialize(state, Options),
-            new UTF8Encoding(false));
+        state.Settings.Sensitivity = string.Equals(
+            state.Settings.Sensitivity, "conservative", StringComparison.OrdinalIgnoreCase)
+            ? "conservative"
+            : "standard";
 
-        File.Move(temporary, path, overwrite: true);
+        state.Settings.Allowlist = (state.Settings.Allowlist ?? new List<string>())
+            .Where(IsValidAddress)
+            .Select(item => IPAddress.Parse(item.Trim()).ToString())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        state.Blocks = (state.Blocks ?? new List<AntiScanBlock>())
+            .Where(block => block is not null && IsValidAddress(block.Address))
+            .ToList();
+
+        foreach (var block in state.Blocks)
+        {
+            block.Address = IPAddress.Parse(block.Address.Trim()).ToString();
+            block.Reason ??= string.Empty;
+        }
     }
 
     private static bool IsValidAddress(string? value)

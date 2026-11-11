@@ -54,7 +54,7 @@ public static class IdsStateFile
         => new(path, SchemaVersion)
         {
             // 目前只有 schema 1；保留入口，后续加字段时按 data 元素迁移。
-            Migrate = data => data.Deserialize<IdsState>(),
+            Migrate = JsonStateFile<IdsState>.Deserialize,
         };
 
     private static void Normalize(IdsState state)

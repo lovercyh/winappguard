@@ -64,7 +64,34 @@ internal static class AntiScanHost
     {
         lock (Gate)
         {
-            _state = AntiScanStateFile.Load(ServicePaths.AntiScanStateFile);
+            _state = AntiScanStateFile.Load(
+                ServicePaths.AntiScanStateFile, out var stateError, out var stateMigrated);
+
+            if (stateError is not null)
+            {
+                ServiceLog.Warning(
+                    "WAG-ANTISCAN-019",
+                    $"Failed to load anti-scan state; defaults are used: {stateError}");
+            }
+
+            if (stateMigrated)
+            {
+                try
+                {
+                    AntiScanStateFile.Save(ServicePaths.AntiScanStateFile, _state);
+                    ServiceLog.Operation(
+                        "WAG-ANTISCAN-020",
+                        "Anti-scan state migrated to the schema envelope.");
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Warning(
+                        "WAG-ANTISCAN-019",
+                        "Anti-scan state was read from the legacy format but could not be rewritten.",
+                        ex);
+                }
+            }
+
             _started = true;
             _events = new List<AntiScanEventDto>();
             _lastEventUtc = null;

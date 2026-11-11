@@ -1,8 +1,14 @@
-using System.Text;
 using System.Text.Json;
+using WinAppGuard.Core.Storage;
 using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
+
+/// <summary>5.9：FirstSeen 记录的新状态外壳；旧文件是顶层数组。</summary>
+public sealed class FirstSeenProgramState
+{
+    public List<FirstSeenProgramRecord> Records { get; set; } = new();
+}
 
 /// <summary>
 /// 5.8：「新程序联网提醒」的本地记录。
@@ -333,36 +339,28 @@ public sealed class FirstSeenProgramStore
 
     private void Load()
     {
-        try
+        var state = CreateFile().Load(out var error, out var migrated);
+        LastError = error;
+
+        if (state is null)
         {
-            if (!File.Exists(FilePath))
-            {
-                return;
-            }
-
-            var json = File.ReadAllText(FilePath, Encoding.UTF8);
-            var records = JsonSerializer.Deserialize<List<FirstSeenProgramRecord>>(json);
-
-            if (records is null)
-            {
-                return;
-            }
-
-            foreach (var record in records)
-            {
-                if (string.IsNullOrWhiteSpace(record.Path))
-                {
-                    continue;
-                }
-
-                record.Path = record.Path.Trim();
-                _records[record.Path] = record;
-            }
+            return;
         }
-        catch (Exception ex)
+
+        foreach (var record in state.Records ?? new List<FirstSeenProgramRecord>())
         {
-            LastError = ex.Message;
-            _records.Clear();
+            if (string.IsNullOrWhiteSpace(record.Path))
+            {
+                continue;
+            }
+
+            record.Path = record.Path.Trim();
+            _records[record.Path] = record;
+        }
+
+        if (migrated)
+        {
+            SaveLocked();
         }
     }
 
@@ -370,20 +368,12 @@ public sealed class FirstSeenProgramStore
     {
         try
         {
-            var directory = Path.GetDirectoryName(FilePath);
-
-            if (!string.IsNullOrEmpty(directory))
+            CreateFile().Save(new FirstSeenProgramState
             {
-                Directory.CreateDirectory(directory);
-            }
-
-            var json = JsonSerializer.Serialize(
-                _records.Values.OrderBy(record => record.FirstSeenUtc).ToList(),
-                new JsonSerializerOptions { WriteIndented = true });
-
-            var temporary = FilePath + ".tmp";
-            File.WriteAllText(temporary, json, new UTF8Encoding(false));
-            File.Move(temporary, FilePath, overwrite: true);
+                Records = _records.Values
+                    .OrderBy(record => record.FirstSeenUtc)
+                    .ToList(),
+            });
 
             _lastSaveUtc = DateTime.UtcNow;
             LastError = null;
@@ -394,4 +384,18 @@ public sealed class FirstSeenProgramStore
             LastError = ex.Message;
         }
     }
+
+    private JsonStateFile<FirstSeenProgramState> CreateFile()
+        => new(FilePath, schemaVersion: 1)
+        {
+            // 5.8 及更早：顶层是记录数组；5.9：schema/data 外壳。
+            Migrate = root => root.ValueKind == JsonValueKind.Array
+                ? new FirstSeenProgramState
+                {
+                    Records = root.Deserialize<List<FirstSeenProgramRecord>>(
+                                  JsonStateFile<FirstSeenProgramState>.JsonOptions)
+                              ?? new List<FirstSeenProgramRecord>(),
+                }
+                : JsonStateFile<FirstSeenProgramState>.Deserialize(root),
+        };
 }

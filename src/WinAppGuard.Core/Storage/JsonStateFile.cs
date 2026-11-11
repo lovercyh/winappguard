@@ -24,12 +24,15 @@ namespace WinAppGuard.Core.Storage;
 /// </summary>
 public sealed class JsonStateFile<T> where T : class, new()
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    public static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
+
+    /// <summary>迁移函数可复用的反序列化：与状态文件相同的 camelCase/大小写不敏感选项。</summary>
+    public static T? Deserialize(JsonElement element) => element.Deserialize<T>(JsonOptions);
 
     public JsonStateFile(string path, int schemaVersion)
     {
@@ -74,6 +77,19 @@ public sealed class JsonStateFile<T> where T : class, new()
 
             if (root.ValueKind != JsonValueKind.Object)
             {
+                // 旧格式可能不是对象（例如 FirstSeen 旧文件是顶层数组）。
+                // 有迁移函数时先交给它；迁移不了才按损坏处理。
+                if (Migrate is not null)
+                {
+                    var converted = Migrate(root);
+
+                    if (converted is not null)
+                    {
+                        migrated = true;
+                        return converted;
+                    }
+                }
+
                 error = "状态文件顶层不是对象。";
                 BackupCorruptFile();
                 return null;

@@ -43,11 +43,40 @@ internal static class NetworkDetectionHost
     {
         lock (Gate)
         {
-            _state = NetworkDetectionStateFile.Load(ServicePaths.NetworkDetectionStateFile);
-            _store = new NetworkAlertStore(ServicePaths.NetworkDetectionDirectory);
+            _state = NetworkDetectionStateFile.Load(
+                ServicePaths.NetworkDetectionStateFile, out var stateError, out var stateMigrated);
+
+            if (stateError is not null)
+            {
+                ServiceLog.Warning(
+                    "WAG-ND-020",
+                    $"Failed to load network detection state; defaults are used: {stateError}");
+            }
+
+            _store = new NetworkAlertStore(
+                ServicePaths.NetworkDetectionDirectory, _state.Settings.RetentionDays);
             _alerts = new List<NetworkAlert>();
             LastAlertUtc.Clear();
             _lastError = null;
+
+            if (stateMigrated)
+            {
+                try
+                {
+                    NetworkDetectionStateFile.Save(
+                        ServicePaths.NetworkDetectionStateFile, _state);
+                    ServiceLog.Operation(
+                        "WAG-ND-031",
+                        "Network detection state migrated to the schema envelope.");
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Warning(
+                        "WAG-ND-030",
+                        "Network detection state was read from the legacy format but could not be rewritten.",
+                        ex);
+                }
+            }
 
             try
             {

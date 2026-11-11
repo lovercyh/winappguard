@@ -72,6 +72,11 @@ internal static class Program
                 return StartServiceOnly();
             }
 
+            if (args.Contains("--register-apps", StringComparer.OrdinalIgnoreCase))
+            {
+                return RegisterAppsOnly();
+            }
+
             // 开发/发布验证用：把 Setup 末尾的内置载荷解出来（不安装、不改系统）。
             if (args.Contains("--extract-payload", StringComparer.OrdinalIgnoreCase))
             {
@@ -139,6 +144,7 @@ internal static class Program
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  同一所有者换一把新密钥（旧密钥删除）");
         Console.WriteLine("  WinAppGuardSetup.exe --reset-owner 把当前提权账户设为新所有者（换新密钥）");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service 只启动服务（顺带修正为「自动（不延迟）」）");
+        Console.WriteLine("  WinAppGuardSetup.exe --register-apps 只把已安装程序登记到 Windows「已安装的应用」");
         Console.WriteLine("  WinAppGuardSetup.exe --uninstall   完整卸载（停止/删除服务 + 删除全部规则与数据）");
         Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard（密钥始终删除）");
         Console.WriteLine();
@@ -160,6 +166,7 @@ internal static class Program
         Console.WriteLine("  WinAppGuardSetup.exe --rotate-key  issue a new key for the same owner (old key deleted)");
         Console.WriteLine("  WinAppGuardSetup.exe --reset-owner make the current elevated account the new owner (new key)");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service start the service only (also fixes Automatic (Delayed Start))");
+        Console.WriteLine("  WinAppGuardSetup.exe --register-apps add the installed app to Windows Settings → Installed apps");
         Console.WriteLine("  WinAppGuardSetup.exe --uninstall   full uninstall (stop/delete service + delete all rules and data)");
         Console.WriteLine("                       --keep-data  keep %ProgramData%\\WinAppGuard (the key is always deleted)");
         Console.WriteLine();
@@ -201,6 +208,9 @@ internal static class Program
         InstallSuricataAssets(payload);
         Bilingual.Say($"已复制到：{InstallDirectory}", $"Copied to: {InstallDirectory}");
         ReportPathRegistration();
+
+        // 5.9.1：文件和卸载器就绪后立刻登记，后面的服务/自检失败也不会完全不显示。
+        TryRegisterInWindowsApps();
 
         // 快捷方式尽早创建：即使服务启动失败，用户也找得到界面。
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
@@ -260,7 +270,6 @@ internal static class Program
         TryRecoverLegacyStrictMode();
 
         ReportNpcapProbe();
-        TryRegisterInWindowsApps();
 
         Bilingual.Say("服务已启动。", "Service started.");
         Console.WriteLine();
@@ -514,14 +523,24 @@ internal static class Program
     /// 4.1：装完/启动服务后做一次只读探测。
     /// 打不开网卡**只警告**：驱动异常不该让用户连防火墙都用不了。
     /// </summary>
-    private static void TryRegisterInWindowsApps()
+    private static bool TryRegisterInWindowsApps()
     {
         try
         {
             UninstallRegistration.Register(InstallDirectory);
+
+            if (!UninstallRegistration.IsRegistered())
+            {
+                Bilingual.Fail(
+                    "写入「已安装的应用」注册项后回读失败；请确认当前账户有管理员权限。",
+                    "The Installed apps entry could not be read back after writing; make sure the current account is elevated.");
+                return false;
+            }
+
             Bilingual.Say(
                 "已注册到 Windows「设置 → 应用 → 已安装的应用」。",
                 "Registered in Windows Settings → Apps → Installed apps.");
+            return true;
         }
         catch (Exception ex)
         {
@@ -529,7 +548,25 @@ internal static class Program
             Bilingual.Fail(
                 $"写入「已安装的应用」注册项失败（不影响使用）：{ex.Message}",
                 $"Failed to add the Installed apps entry (the app still works): {ex.Message}");
+            return false;
         }
+    }
+
+    /// <summary>只补写 Windows「已安装的应用」登记，不复制文件、不重启服务。</summary>
+    private static int RegisterAppsOnly()
+    {
+        var ui = Path.Combine(InstallDirectory, UiExeName);
+        var uninstaller = Path.Combine(InstallDirectory, UninstallerExeName);
+
+        if (!File.Exists(ui) || !File.Exists(uninstaller))
+        {
+            Bilingual.Fail(
+                $"未找到已安装的界面或卸载程序：{InstallDirectory}",
+                $"The installed UI or uninstaller was not found: {InstallDirectory}");
+            return 1;
+        }
+
+        return TryRegisterInWindowsApps() ? 0 : 1;
     }
 
     private static void ReportNpcapProbe()
@@ -576,6 +613,9 @@ internal static class Program
         CopyPayload(payload);
         InstallSuricataAssets(payload);
         ReportPathRegistration();
+
+        // 5.9.1：文件和卸载器就绪后立刻登记；修复/升级也走同一处。
+        TryRegisterInWindowsApps();
         ShellShortcut.CreateDesktopShortcut(Path.Combine(InstallDirectory, UiExeName));
 
         if (!ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
@@ -634,7 +674,6 @@ internal static class Program
         }
 
         ReportNpcapProbe();
-        TryRegisterInWindowsApps();
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
             ? Bilingual.One("修复完成，服务正在运行。", "Repair completed; the service is running.")

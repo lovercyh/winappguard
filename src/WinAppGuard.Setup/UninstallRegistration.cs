@@ -53,6 +53,23 @@ internal static class UninstallRegistration
         }
     }
 
+    internal static bool IsRegistered()
+    {
+        try
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(
+                RegistryHive.LocalMachine, RegistryView.Registry64);
+            using var key = baseKey.OpenSubKey(KeyPath, writable: false);
+
+            return key?.GetValue("DisplayName") is string name
+                   && string.Equals(name, "WinAppGuard", StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     internal static void Unregister()
     {
         try

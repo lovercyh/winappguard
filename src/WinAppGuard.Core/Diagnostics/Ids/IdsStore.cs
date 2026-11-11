@@ -1,5 +1,5 @@
-using System.Text;
 using System.Text.Json;
+using WinAppGuard.Core.Storage;
 
 namespace WinAppGuard.Core.Diagnostics.Ids;
 
@@ -15,135 +15,118 @@ public sealed class IdsState
         new(StringComparer.Ordinal);
 }
 
-/// <summary>3.7：状态文件的原子读写；坏文件按默认值处理，不影响服务启动。</summary>
+/// <summary>
+/// 3.7：IDS 状态文件。
+///
+/// 5.9 起统一走 <see cref="JsonStateFile{T}"/>：
+///   - 新格式带 <c>schema/data</c> 外壳，原子写入；
+///   - 旧的无外壳 JSON 仍可直接读取；
+///   - 坏文件改名为 <c>.corrupt-*</c>，不再静默覆盖；
+///   - 读取旧格式时由调用方立即重写一次，完成“读旧写新”。
+/// </summary>
 public static class IdsStateFile
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = true,
-    };
+    private const int SchemaVersion = 1;
 
     public static IdsState Load(string path)
+        => Load(path, out _, out _);
+
+    public static IdsState Load(string path, out string? error)
+        => Load(path, out error, out _);
+
+    public static IdsState Load(string path, out string? error, out bool migrated)
     {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return new IdsState();
-            }
+        var state = CreateFile(path).Load(out error, out migrated);
 
-            var state = JsonSerializer.Deserialize<IdsState>(
-                File.ReadAllText(path, Encoding.UTF8), Options);
-
-            if (state is null)
-            {
-                return new IdsState();
-            }
-
-            state.Settings ??= new IdsSettings();
-            state.Suppressions ??= new List<IdsSuppression>();
-            state.AlertStatuses ??= new Dictionary<string, string>(StringComparer.Ordinal);
-
-            state.Settings.RetentionDays = Math.Clamp(state.Settings.RetentionDays, 1, 365);
-
-            if (!string.Equals(
-                    state.Settings.Sensitivity, "conservative", StringComparison.OrdinalIgnoreCase))
-            {
-                state.Settings.Sensitivity = "standard";
-            }
-            else
-            {
-                state.Settings.Sensitivity = "conservative";
-            }
-
-            // 坏 state 文件里可能有 null 项；丢掉，避免之后抑制匹配时 NRE。
-            state.Suppressions = state.Suppressions
-                .Where(item => item is not null)
-                .ToList();
-
-            foreach (var suppression in state.Suppressions)
-            {
-                if (string.IsNullOrWhiteSpace(suppression.Id))
-                {
-                    suppression.Id = Guid.NewGuid().ToString("N");
-                }
-
-                if (string.IsNullOrWhiteSpace(suppression.RuleId))
-                {
-                    suppression.RuleId = "*";
-                }
-            }
-
-            state.AlertStatuses = new Dictionary<string, string>(
-                state.AlertStatuses, StringComparer.Ordinal);
-
-            return state;
-        }
-        catch (Exception)
+        if (state is null)
         {
             return new IdsState();
         }
+
+        Normalize(state);
+        return state;
     }
 
     public static void Save(string path, IdsState state)
-    {
-        var directory = Path.GetDirectoryName(path);
+        => CreateFile(path).Save(state);
 
-        if (!string.IsNullOrEmpty(directory))
+    private static JsonStateFile<IdsState> CreateFile(string path)
+        => new(path, SchemaVersion)
         {
-            Directory.CreateDirectory(directory);
+            // 目前只有 schema 1；保留入口，后续加字段时按 data 元素迁移。
+            Migrate = data => data.Deserialize<IdsState>(),
+        };
+
+    private static void Normalize(IdsState state)
+    {
+        state.Settings ??= new IdsSettings();
+        state.Suppressions ??= new List<IdsSuppression>();
+        state.AlertStatuses ??= new Dictionary<string, string>(StringComparer.Ordinal);
+
+        state.Settings.RetentionDays = Math.Clamp(state.Settings.RetentionDays, 1, 365);
+
+        state.Settings.Sensitivity = string.Equals(
+            state.Settings.Sensitivity, "conservative", StringComparison.OrdinalIgnoreCase)
+            ? "conservative"
+            : "standard";
+
+        // 坏 state 文件里可能有 null 项；丢掉，避免之后抑制匹配时 NRE。
+        state.Suppressions = state.Suppressions
+            .Where(item => item is not null)
+            .ToList();
+
+        foreach (var suppression in state.Suppressions)
+        {
+            if (string.IsNullOrWhiteSpace(suppression.Id))
+            {
+                suppression.Id = Guid.NewGuid().ToString("N");
+            }
+
+            if (string.IsNullOrWhiteSpace(suppression.RuleId))
+            {
+                suppression.RuleId = "*";
+            }
         }
 
-        var temporary = path + ".tmp";
-        File.WriteAllText(
-            temporary,
-            JsonSerializer.Serialize(state, Options),
-            new UTF8Encoding(false));
-
-        File.Move(temporary, path, overwrite: true);
+        state.AlertStatuses = new Dictionary<string, string>(
+            state.AlertStatuses, StringComparer.Ordinal);
     }
 }
 
 /// <summary>
-/// 3.7：告警追加日志（单文件 JSONL）。
+/// 3.7：告警追加日志。
 ///
-/// 告警很少，按天切文件收益不大；单文件 + 读取时按保留期过滤即可。
-/// 追加写只加一行，不重写历史；坏行在读取时跳过。
+/// 5.9 起统一走 <see cref="JsonlEventLog{T}"/>：
+///   - 新记录写入按天分段、按大小轮转的 <c>alerts-yyyyMMdd-NN.jsonl</c>；
+///   - 旧版单文件 <c>alerts.jsonl</c> 仍会一起读取；
+///   - 旧文件和新分段文件都会按告警时间裁剪，过期分片整文件清理；
+///   - 坏行跳过，读取时按 id 去重、按保留期过滤。
 /// </summary>
 public sealed class IdsAlertStore
 {
-    private static readonly JsonSerializerOptions Options = new();
+    private const long MaxBytesPerFile = 4 * 1024 * 1024;
 
     private readonly object _gate = new();
-    private readonly string _alertsFile;
+    private readonly JsonlEventLog<IdsAlert> _log;
 
-    public IdsAlertStore(string directory)
+    public IdsAlertStore(string directory, int retentionDays = 30)
     {
         Directory = directory;
-        _alertsFile = Path.Combine(directory, "alerts.jsonl");
-
-        try
-        {
-            System.IO.Directory.CreateDirectory(directory);
-        }
-        catch (Exception)
-        {
-            // 建不了目录时后续写入会失败，由调用方记录日志。
-        }
+        _log = new JsonlEventLog<IdsAlert>(
+            directory,
+            "alerts",
+            retentionDays,
+            MaxBytesPerFile,
+            alert => alert.TimeUtc);
     }
 
     public string Directory { get; }
 
     public void Append(IdsAlert alert)
     {
-        var line = JsonSerializer.Serialize(alert, Options);
-
         lock (_gate)
         {
-            File.AppendAllText(
-                _alertsFile,
-                line + Environment.NewLine,
-                new UTF8Encoding(false));
+            _log.Append(alert);
         }
     }
 
@@ -151,41 +134,22 @@ public sealed class IdsAlertStore
     {
         lock (_gate)
         {
-            if (!File.Exists(_alertsFile))
-            {
-                return new List<IdsAlert>();
-            }
-
             var cutoff = DateTime.UtcNow.AddDays(-Math.Clamp(retentionDays, 1, 365));
             var alerts = new List<IdsAlert>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var line in File.ReadLines(_alertsFile, Encoding.UTF8))
+            foreach (var alert in _log.ReadAll())
             {
-                if (string.IsNullOrWhiteSpace(line))
+                Normalize(alert);
+
+                if (alert.TimeUtc < cutoff
+                    || string.IsNullOrEmpty(alert.Id)
+                    || !seen.Add(alert.Id))
                 {
                     continue;
                 }
 
-                try
-                {
-                    var alert = JsonSerializer.Deserialize<IdsAlert>(line, Options);
-
-                    if (alert is null
-                        || alert.TimeUtc < cutoff
-                        || string.IsNullOrEmpty(alert.Id)
-                        || !seen.Add(alert.Id))
-                    {
-                        continue;
-                    }
-
-                    Normalize(alert);
-                    alerts.Add(alert);
-                }
-                catch (Exception)
-                {
-                    // 半行/坏行：跳过，不影响其他告警。
-                }
+                alerts.Add(alert);
             }
 
             return alerts
@@ -199,17 +163,23 @@ public sealed class IdsAlertStore
     {
         lock (_gate)
         {
-            try
-            {
-                if (File.Exists(_alertsFile))
-                {
-                    File.Delete(_alertsFile);
-                }
-            }
-            catch (Exception)
-            {
-                // 删除失败由宿主记录；界面会显示未清空。
-            }
+            _log.Clear();
+        }
+    }
+
+    /// <summary>
+    /// 按保留期清理，返回删除/裁剪掉的记录数。
+    /// 旧版单文件按时间逐条裁剪；新分段文件按日期整文件删除。
+    /// </summary>
+    public int Prune(int retentionDays)
+    {
+        lock (_gate)
+        {
+            var before = _log.ReadAll().Count;
+            _log.Prune(DateTime.UtcNow, retentionDays);
+            var after = _log.ReadAll().Count;
+
+            return Math.Max(0, before - after);
         }
     }
 
@@ -225,73 +195,5 @@ public sealed class IdsAlertStore
         alert.Evidence ??= string.Empty;
         alert.Status = string.IsNullOrEmpty(alert.Status) ? "new" : alert.Status;
         alert.DedupKey ??= string.Empty;
-    }
-
-    /// <summary>
-    /// 3.7：按保留期重写告警文件，避免文件无限增长。
-    /// 返回删掉的条数；坏行会一并丢弃。
-    /// </summary>
-    public int Prune(int retentionDays)
-    {
-        lock (_gate)
-        {
-            if (!File.Exists(_alertsFile))
-            {
-                return 0;
-            }
-
-            var cutoff = DateTime.UtcNow.AddDays(-Math.Clamp(retentionDays, 1, 365));
-            var kept = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var removed = 0;
-
-            try
-            {
-                foreach (var line in File.ReadLines(_alertsFile, Encoding.UTF8))
-                {
-                    if (string.IsNullOrWhiteSpace(line))
-                    {
-                        removed++;
-                        continue;
-                    }
-
-                    try
-                    {
-                        var alert = JsonSerializer.Deserialize<IdsAlert>(line, Options);
-
-                        if (alert is null
-                            || alert.TimeUtc < cutoff
-                            || string.IsNullOrEmpty(alert.Id)
-                            || !seen.Add(alert.Id))
-                        {
-                            removed++;
-                            continue;
-                        }
-
-                        kept.Add(line);
-                    }
-                    catch (Exception)
-                    {
-                        removed++;
-                    }
-                }
-
-                if (removed == 0)
-                {
-                    return 0;
-                }
-
-                var temporary = _alertsFile + ".tmp";
-                File.WriteAllLines(temporary, kept, new UTF8Encoding(false));
-                File.Move(temporary, _alertsFile, overwrite: true);
-
-                return removed;
-            }
-            catch (Exception)
-            {
-                // 重写失败不致命：读取时仍会按保留期过滤。
-                return 0;
-            }
-        }
     }
 }

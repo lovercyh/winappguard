@@ -14593,7 +14593,7 @@ internal static class Program
                 summary.Text.Contains("IDS 已开启", StringComparison.Ordinal)
                 && summary.Text.Contains("只检测、不阻断", StringComparison.Ordinal)
                 && summary.Text.Contains("flow 12", StringComparison.Ordinal)
-                && summary.Text.Contains("未确认 3", StringComparison.Ordinal));
+                && summary.Text.Contains("未读 3", StringComparison.Ordinal));
 
             search.Text = "evil.example";
             Application.DoEvents();

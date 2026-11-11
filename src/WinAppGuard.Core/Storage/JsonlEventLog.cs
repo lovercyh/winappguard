@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using WinAppGuard.Core.Features;
 
 namespace WinAppGuard.Core.Storage;
 
@@ -9,8 +8,16 @@ namespace WinAppGuard.Core.Storage;
 ///
 /// 文件格式保持 JSONL（一行一条），按天分段、按大小轮转、按保留期清理。
 /// 坏行跳过，不让一条损坏记录拖垮整个列表。
+///
+/// 兼容旧版本的单文件 <c>{prefix}.jsonl</c>：
+///   - 读取时和新分段文件一起读；
+///   - 新记录只写入 <c>{prefix}-yyyyMMdd-NN.jsonl</c>；
+///   - 提供 <c>timestampSelector</c> 时，旧文件也会按保留期裁剪。
+///
+/// 不要求事件继承 <c>FeatureEvent</c>：IDS 等旧 DTO 已有自己的
+/// 字段和 JSON 形状，迁移时优先保证旧数据可读。
 /// </summary>
-public sealed class JsonlEventLog<T> where T : FeatureEvent
+public sealed class JsonlEventLog<T> where T : class
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -20,12 +27,14 @@ public sealed class JsonlEventLog<T> where T : FeatureEvent
     };
 
     private readonly object _gate = new();
+    private readonly Func<T, DateTime>? _timestampSelector;
 
     public JsonlEventLog(
         string directory,
         string prefix,
         int retentionDays,
-        long maxBytesPerFile)
+        long maxBytesPerFile,
+        Func<T, DateTime>? timestampSelector = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -41,6 +50,7 @@ public sealed class JsonlEventLog<T> where T : FeatureEvent
         Prefix = prefix;
         RetentionDays = Math.Max(1, retentionDays);
         MaxBytesPerFile = Math.Max(1, maxBytesPerFile);
+        _timestampSelector = timestampSelector;
     }
 
     public string DirectoryPath { get; }
@@ -78,6 +88,15 @@ public sealed class JsonlEventLog<T> where T : FeatureEvent
         }
     }
 
+    /// <summary>按文件顺序读取全部事件；坏行跳过。</summary>
+    public IReadOnlyList<T> ReadAll()
+    {
+        lock (_gate)
+        {
+            return ReadAllCore();
+        }
+    }
+
     public IReadOnlyList<T> ReadRecent(int limit, DateTime? nowUtc = null)
     {
         if (limit <= 0)
@@ -87,49 +106,41 @@ public sealed class JsonlEventLog<T> where T : FeatureEvent
 
         lock (_gate)
         {
-            if (!Directory.Exists(DirectoryPath))
-            {
-                return Array.Empty<T>();
-            }
-
-            var files = EnumerateFiles()
-                .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            var values = new List<T>();
-
-            foreach (var file in files)
-            {
-                foreach (var line in ReadLines(file))
-                {
-                    if (string.IsNullOrWhiteSpace(line))
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        var item = JsonSerializer.Deserialize<T>(line, JsonOptions);
-
-                        if (item is not null)
-                        {
-                            values.Add(item);
-                        }
-                    }
-                    catch (Exception)
-                    {
-                        // 单行损坏跳过，保留其余记录。
-                    }
-                }
-            }
+            var values = ReadAllCore();
 
             return values.Count <= limit
                 ? values
-                : values.GetRange(values.Count - limit, limit);
+                : values.Skip(values.Count - limit).ToList();
+        }
+    }
+
+    /// <summary>删除全部事件文件（含旧版单文件）。</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            foreach (var file in EnumerateFiles().ToList())
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (Exception)
+                {
+                    // 删不掉就留到下一次清理。
+                }
+            }
         }
     }
 
     public int Prune(DateTime? nowUtc = null)
+        => Prune(nowUtc, retentionDays: null);
+
+    /// <summary>
+    /// 按保留期清理。过期的分段文件按文件名日期整文件删除；
+    /// 其余文件（含旧版单文件）在提供 <c>timestampSelector</c> 时逐条裁剪。
+    /// </summary>
+    public int Prune(DateTime? nowUtc, int? retentionDays)
     {
         lock (_gate)
         {
@@ -138,44 +149,112 @@ public sealed class JsonlEventLog<T> where T : FeatureEvent
                 return 0;
             }
 
+            var days = Math.Max(1, retentionDays ?? RetentionDays);
             var now = nowUtc ?? DateTime.UtcNow;
-            var cutoff = now.Date.AddDays(-(RetentionDays - 1));
+            var cutoffDate = now.Date.AddDays(-(days - 1));
             var deleted = 0;
 
-            foreach (var file in EnumerateFiles())
+            foreach (var file in EnumerateFiles().ToList())
             {
-                var date = TryParseDate(file);
+                if (!IsLegacyFile(file))
+                {
+                    var date = TryParseDate(file);
 
-                if (date is null || date.Value.Date >= cutoff)
-                {
-                    continue;
+                    if (date is not null && date.Value.Date < cutoffDate)
+                    {
+                        try
+                        {
+                            File.Delete(file);
+                            deleted++;
+                        }
+                        catch (Exception)
+                        {
+                            // 删不掉就留到下一次清理。
+                        }
+
+                        continue;
+                    }
                 }
 
-                try
-                {
-                    File.Delete(file);
-                    deleted++;
-                }
-                catch (Exception)
-                {
-                    // 删不掉就留到下一次清理。
-                }
+                PruneFileByTimestamp(file, now.AddDays(-days));
             }
 
             return deleted;
         }
     }
 
+    private IReadOnlyList<T> ReadAllCore()
+    {
+        if (!Directory.Exists(DirectoryPath))
+        {
+            return Array.Empty<T>();
+        }
+
+        var values = new List<T>();
+
+        foreach (var file in EnumerateFiles()
+                     .OrderBy(file => file, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var line in ReadLines(file))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var item = JsonSerializer.Deserialize<T>(line, JsonOptions);
+
+                    if (item is not null)
+                    {
+                        values.Add(item);
+                    }
+                }
+                catch (Exception)
+                {
+                    // 单行损坏跳过，保留其余记录。
+                }
+            }
+        }
+
+        return values;
+    }
+
     private IEnumerable<string> EnumerateFiles()
-        => Directory.EnumerateFiles(
-            DirectoryPath,
-            Prefix + "-*.jsonl",
-            SearchOption.TopDirectoryOnly);
+    {
+        if (!Directory.Exists(DirectoryPath))
+        {
+            yield break;
+        }
+
+        var legacy = Path.Combine(DirectoryPath, Prefix + ".jsonl");
+
+        if (File.Exists(legacy))
+        {
+            yield return legacy;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(
+                     DirectoryPath,
+                     Prefix + "-*.jsonl",
+                     SearchOption.TopDirectoryOnly))
+        {
+            yield return file;
+        }
+    }
+
+    private bool IsLegacyFile(string file)
+        => string.Equals(
+            Path.GetFileName(file),
+            Prefix + ".jsonl",
+            StringComparison.OrdinalIgnoreCase);
 
     private string GetOrCreateWritableFile(DateTime nowUtc)
     {
         var date = nowUtc.ToLocalTime().ToString("yyyyMMdd");
         var files = EnumerateFiles()
+            .Where(file => !IsLegacyFile(file))
             .Where(file => Path.GetFileName(file).StartsWith(
                 $"{Prefix}-{date}-", StringComparison.OrdinalIgnoreCase))
             .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
@@ -195,6 +274,65 @@ public sealed class JsonlEventLog<T> where T : FeatureEvent
         }
 
         return Path.Combine(DirectoryPath, $"{Prefix}-{date}-00.jsonl");
+    }
+
+    private void PruneFileByTimestamp(string file, DateTime cutoff)
+    {
+        if (_timestampSelector is null || !File.Exists(file))
+        {
+            return;
+        }
+
+        var kept = new List<string>();
+        var changed = false;
+
+        foreach (var line in ReadLines(file))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                changed = true;
+                continue;
+            }
+
+            try
+            {
+                var item = JsonSerializer.Deserialize<T>(line, JsonOptions);
+
+                if (item is null || _timestampSelector(item) < cutoff)
+                {
+                    changed = true;
+                    continue;
+                }
+
+                kept.Add(line);
+            }
+            catch (Exception)
+            {
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        try
+        {
+            if (kept.Count == 0)
+            {
+                File.Delete(file);
+                return;
+            }
+
+            var temporary = file + ".tmp";
+            File.WriteAllLines(temporary, kept, new UTF8Encoding(false));
+            File.Move(temporary, file, overwrite: true);
+        }
+        catch (Exception)
+        {
+            // 裁剪失败不致命：读取时仍会按保留期过滤。
+        }
     }
 
     private static List<string> ReadLines(string file)

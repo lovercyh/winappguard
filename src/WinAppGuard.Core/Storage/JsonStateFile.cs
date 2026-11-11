@@ -50,8 +50,16 @@ public sealed class JsonStateFile<T> where T : class, new()
     public Func<JsonElement, T?>? Migrate { get; init; }
 
     public T? Load(out string? error)
+        => Load(out error, out _);
+
+    /// <summary>
+    /// 读取状态。<paramref name="migrated"/> 为 true 表示文件是旧格式或旧 schema，
+    /// 调用方应尽快 <see cref="Save"/> 一次，完成“读旧写新”。
+    /// </summary>
+    public T? Load(out string? error, out bool migrated)
     {
         error = null;
+        migrated = false;
 
         if (!File.Exists(Path))
         {
@@ -83,15 +91,16 @@ public sealed class JsonStateFile<T> where T : class, new()
                         return null;
                     }
 
-                    var migrated = Migrate(data);
+                    var converted = Migrate(data);
 
-                    if (migrated is null)
+                    if (converted is null)
                     {
                         error = $"状态文件 schema={schema} 无法迁移到 {SchemaVersion}。";
                         return null;
                     }
 
-                    return migrated;
+                    migrated = true;
+                    return converted;
                 }
 
                 var value = data.Deserialize<T>(JsonOptions);
@@ -113,6 +122,10 @@ public sealed class JsonStateFile<T> where T : class, new()
             if (legacy is null)
             {
                 error = "状态文件是旧格式，且无法迁移。";
+            }
+            else
+            {
+                migrated = true;
             }
 
             return legacy;

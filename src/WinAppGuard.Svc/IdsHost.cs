@@ -58,9 +58,37 @@ internal static class IdsHost
     {
         lock (Gate)
         {
-            _state = IdsStateFile.Load(ServicePaths.IdsStateFile);
-            _store = new IdsAlertStore(ServicePaths.IdsDirectory);
+            _state = IdsStateFile.Load(
+                ServicePaths.IdsStateFile, out var stateError, out var stateMigrated);
+
+            if (stateError is not null)
+            {
+                ServiceLog.Warning(
+                    "WAG-IDS-004",
+                    $"Failed to load IDS state; defaults are used: {stateError}");
+            }
+
+            _store = new IdsAlertStore(
+                ServicePaths.IdsDirectory, _state.Settings.RetentionDays);
             _analyzer.Clear();
+
+            if (stateMigrated)
+            {
+                try
+                {
+                    IdsStateFile.Save(ServicePaths.IdsStateFile, _state);
+                    ServiceLog.Operation(
+                        "WAG-IDS-011",
+                        "IDS state migrated to the schema envelope.");
+                }
+                catch (Exception ex)
+                {
+                    ServiceLog.Warning(
+                        "WAG-IDS-004",
+                        "IDS state was read from the legacy format but could not be rewritten.",
+                        ex);
+                }
+            }
 
             try
             {

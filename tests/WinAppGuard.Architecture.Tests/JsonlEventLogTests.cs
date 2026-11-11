@@ -1,3 +1,4 @@
+using System.Text.Json;
 using WinAppGuard.Core.Features;
 using WinAppGuard.Core.Storage;
 
@@ -93,6 +94,98 @@ public sealed class JsonlEventLogTests
 
             Assert.Equal(1, deleted);
             Assert.False(File.Exists(oldFile));
+        }
+        finally
+        {
+            Cleanup(directory);
+        }
+    }
+
+    [Fact]
+    public void LegacySingleFileIsReadable()
+    {
+        var directory = TempDirectory();
+        var now = new DateTime(2026, 11, 11, 12, 0, 0, DateTimeKind.Utc);
+        var log = new JsonlEventLog<TestEvent>(
+            directory, "test", retentionDays: 7, maxBytesPerFile: 1024 * 1024,
+            timestampSelector: item => item.TimeUtc);
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, "test.jsonl"),
+                JsonSerializer.Serialize(new TestEvent { Name = "legacy", TimeUtc = now }) + "\n");
+
+            var values = log.ReadAll();
+
+            Assert.Single(values);
+            Assert.Equal("legacy", values[0].Name);
+        }
+        finally
+        {
+            Cleanup(directory);
+        }
+    }
+
+    [Fact]
+    public void LegacySingleFileIsPrunedByTimestamp()
+    {
+        var directory = TempDirectory();
+        var now = new DateTime(2026, 11, 11, 12, 0, 0, DateTimeKind.Utc);
+        var log = new JsonlEventLog<TestEvent>(
+            directory, "test", retentionDays: 7, maxBytesPerFile: 1024 * 1024,
+            timestampSelector: item => item.TimeUtc);
+        var legacy = Path.Combine(directory, "test.jsonl");
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllLines(
+                legacy,
+                new[]
+                {
+                    JsonSerializer.Serialize(new TestEvent
+                    {
+                        Name = "old",
+                        TimeUtc = now.AddDays(-30),
+                    }),
+                    JsonSerializer.Serialize(new TestEvent
+                    {
+                        Name = "fresh",
+                        TimeUtc = now.AddHours(-1),
+                    }),
+                });
+
+            _ = log.Prune(now, retentionDays: 7);
+
+            var lines = File.ReadAllLines(legacy);
+
+            Assert.Single(lines);
+            Assert.Contains("fresh", lines[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(directory);
+        }
+    }
+
+    [Fact]
+    public void ClearRemovesLegacyAndSegmentedFiles()
+    {
+        var directory = TempDirectory();
+        var log = new JsonlEventLog<TestEvent>(
+            directory, "test", retentionDays: 7, maxBytesPerFile: 1024 * 1024);
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "test.jsonl"), string.Empty);
+            log.Append(new TestEvent { Name = "a" });
+
+            log.Clear();
+
+            Assert.Empty(Directory.GetFiles(directory, "test*.jsonl"));
         }
         finally
         {

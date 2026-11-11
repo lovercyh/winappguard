@@ -50,12 +50,34 @@ public sealed class JsonStateFileTests
         try
         {
             File.WriteAllText(path, "{\"value\":7,\"text\":\"legacy\"}");
-            var loaded = file.Load(out var error);
+            var loaded = file.Load(out var error, out var migrated);
 
             Assert.Null(error);
             Assert.NotNull(loaded);
             Assert.Equal(7, loaded!.Value);
             Assert.Equal("legacy", loaded.Text);
+            Assert.True(migrated);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void EnvelopeFormatDoesNotReportMigration()
+    {
+        var path = TempPath();
+        var file = new JsonStateFile<TestState>(path, schemaVersion: 2);
+
+        try
+        {
+            file.Save(new TestState { Value = 1 });
+            var loaded = file.Load(out var error, out var migrated);
+
+            Assert.Null(error);
+            Assert.NotNull(loaded);
+            Assert.False(migrated);
         }
         finally
         {

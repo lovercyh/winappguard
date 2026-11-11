@@ -260,6 +260,7 @@ internal static class Program
         TryRecoverLegacyStrictMode();
 
         ReportNpcapProbe();
+        TryRegisterInWindowsApps();
 
         Bilingual.Say("服务已启动。", "Service started.");
         Console.WriteLine();
@@ -513,6 +514,24 @@ internal static class Program
     /// 4.1：装完/启动服务后做一次只读探测。
     /// 打不开网卡**只警告**：驱动异常不该让用户连防火墙都用不了。
     /// </summary>
+    private static void TryRegisterInWindowsApps()
+    {
+        try
+        {
+            UninstallRegistration.Register(InstallDirectory);
+            Bilingual.Say(
+                "已注册到 Windows「设置 → 应用 → 已安装的应用」。",
+                "Registered in Windows Settings → Apps → Installed apps.");
+        }
+        catch (Exception ex)
+        {
+            // 注册失败不让安装/修复失败；用户仍可从安装目录运行卸载程序。
+            Bilingual.Fail(
+                $"写入「已安装的应用」注册项失败（不影响使用）：{ex.Message}",
+                $"Failed to add the Installed apps entry (the app still works): {ex.Message}");
+        }
+    }
+
     private static void ReportNpcapProbe()
     {
         if (_withoutNpcap)
@@ -615,6 +634,7 @@ internal static class Program
         }
 
         ReportNpcapProbe();
+        TryRegisterInWindowsApps();
 
         Console.WriteLine(ServiceControl.IsRunning(ServiceProtocol.ServiceName)
             ? Bilingual.One("修复完成，服务正在运行。", "Repair completed; the service is running.")
@@ -1416,6 +1436,11 @@ internal static class Program
                     $"卸载完成，但无法从系统 PATH 移除安装目录：{pathError}。可手动删除 {InstallDirectory}。",
                     $"Uninstall completed, but failed to remove the install folder from the system PATH: {pathError}. Remove {InstallDirectory} manually.");
             }
+        }
+
+        if (serviceRemoved && installDeleted)
+        {
+            UninstallRegistration.Unregister();
         }
 
         Console.WriteLine();

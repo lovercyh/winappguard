@@ -495,35 +495,12 @@ internal sealed class ControlServer : IDisposable
         }
 
         // 3.0-b 起写命令会用 "write." 前缀，必须提权；v1 的只读命令允许任何交互用户。
-        if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase) && !elevated)
-        {
-            ServiceLog.Warning("WAG-AUTH-005", $"Rejected write operation: pid={clientPid} is not elevated.");
+        // 5.9：统一由 CommandPolicyTable 判定，不再在这里散落三套规则。
+        var denied = CommandPolicyGuard.Check(request, elevated, clientPid);
 
-            return new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = false,
-                Error = "修改规则需要管理员权限（请从界面操作，会弹出 UAC）。",
-            };
-        }
-
-        // 5.2：alert.* 只改告警元数据，不碰 WFP / 设置，因此允许所有者用户免提权执行。
-        if (ServiceProtocol.IsAlertCommand(request.Command))
+        if (denied is not null)
         {
-            ServiceLog.Operation(
-                "WAG-ALERT-001",
-                $"Alert command: {request.Command} (pid={clientPid}, elevated={elevated}).");
-        }
-
-        // 但“永久不再提醒”会长期改变检测可见性，仍然要求管理员同意。
-        if (ServiceProtocol.IsPermanentAlertSuppression(request) && !elevated)
-        {
-            return new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = false,
-                Error = "永久不再提醒需要管理员权限。",
-            };
+            return denied;
         }
 
         // 3.5：服务以 SYSTEM 运行，能读到界面读不到的提权/受保护进程路径。

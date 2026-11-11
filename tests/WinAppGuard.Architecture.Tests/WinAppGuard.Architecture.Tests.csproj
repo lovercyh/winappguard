@@ -20,6 +20,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
     <ProjectReference Include="..\..\src\WinAppGuard.Core\WinAppGuard.Core.csproj" />
+    <ProjectReference Include="..\..\src\WinAppGuard.Svc\WinAppGuard.Svc.csproj" />
   </ItemGroup>
 
 </Project>

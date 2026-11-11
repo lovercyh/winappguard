@@ -54,21 +54,24 @@ public static class CommandPolicyTable
         => string.Equals(command, ServiceProtocol.Commands.GuardNewProgramBlock, StringComparison.Ordinal)
            || string.Equals(command, ServiceProtocol.Commands.GuardNewProgramRelease, StringComparison.Ordinal);
 
+    /// <summary>5.9：协议声明的全部命令。路由和测试都从这里取，避免各自反射。</summary>
+    public static IReadOnlyList<string> DeclaredCommands()
+        => typeof(ServiceProtocol.Commands)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => (string?)field.GetRawConstantValue())
+            .Where(command => !string.IsNullOrWhiteSpace(command))
+            .Select(command => command!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(command => command, StringComparer.Ordinal)
+            .ToList();
+
     private static IReadOnlyDictionary<string, CommandPolicy> Build()
     {
         var policies = new Dictionary<string, CommandPolicy>(StringComparer.Ordinal);
 
-        foreach (var field in typeof(ServiceProtocol.Commands)
-                     .GetFields(BindingFlags.Public | BindingFlags.Static)
-                     .Where(field => field.IsLiteral && field.FieldType == typeof(string)))
+        foreach (var command in DeclaredCommands())
         {
-            var command = (string?)field.GetRawConstantValue();
-
-            if (string.IsNullOrWhiteSpace(command))
-            {
-                continue;
-            }
-
             policies[command] = Classify(command);
         }
 

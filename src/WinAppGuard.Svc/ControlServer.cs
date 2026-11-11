@@ -32,6 +32,8 @@ internal sealed class ControlServer : IDisposable
     private readonly CancellationTokenSource _cancellation = new();
     private Thread? _thread;
     private bool _loggedReady;
+    // 5.9：命令路由在 Start 里创建并校验；校验失败时不创建控制管道（失败关闭）。
+    private static CommandRouter? _router;
     // 服务进程里只有一个 ControlServer；BuildStatus 被 RuleHandlers 静态调用，
     // 所以这两项用 static，保证状态命令和规则命令看到同一份配置。
     private static ProtectedModeConfig? _protectedMode;
@@ -42,6 +44,24 @@ internal sealed class ControlServer : IDisposable
 
     internal void Start()
     {
+        // 5.9：先校验命令目录。每条命令必须恰好一个 Handler、策略显式；
+        // 失败时不创建控制管道，避免线上出现“有的命令没人处理”。
+        try
+        {
+            _router = ServiceCatalog.CreateRouter();
+            ServiceLog.Info(
+                "WAG-IPC-013",
+                $"Command catalog validated: {_router.Handlers.Count} commands, "
+                + $"{_router.Handlers.Select(handler => handler.Module).Distinct(StringComparer.Ordinal).Count()} modules.");
+        }
+        catch (Exception ex)
+        {
+            _router = null;
+            ServiceLog.Error(
+                "WAG-IPC-014",
+                "Command catalog validation failed; the control pipe will not be created.", ex);
+        }
+
         // 3.1：启动时加载受保护模式配置。缺失/损坏就**不创建控制管道**（失败关闭），
         // 但 WFP / 审计仍然工作；由 Setup --repair 重建配置。
         try
@@ -102,7 +122,7 @@ internal sealed class ControlServer : IDisposable
         // 不等 15 秒后的定时器。
         Rules.CheckTamper();
 
-        if (_protectedMode is not null)
+        if (_protectedMode is not null && _router is not null)
         {
             _thread = new Thread(Loop)
             {
@@ -403,13 +423,10 @@ internal sealed class ControlServer : IDisposable
         TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
     }
 
-    /// <summary>3.6：清空流量计数并返回新的统计起点（4.1 起为 Npcap 精确计数）。</summary>
-    private static ServiceResponse ClearTraffic(ServiceRequest request) => TrafficCaptureHost.Clear(request);
-
     /// <summary>
     /// 3.5：批量 PID → 路径。只返回当前仍存在且服务能打开的进程。
     /// </summary>
-    private static ServiceResponse ResolveProcessPaths(ServiceRequest request)
+    internal static ServiceResponse ResolveProcessPaths(ServiceRequest request)
     {
         var paths = new List<ProcessPathDto>();
         var pids = (request.Pids ?? new List<int>())
@@ -472,30 +489,9 @@ internal sealed class ControlServer : IDisposable
             };
         }
 
-        // 规则命令统一交给 RuleHandlers；写命令的提权检查在下面先做。
-        var isRuleCommand = request.Command == ServiceProtocol.Commands.ListRules
-            || request.Command == ServiceProtocol.Commands.FilterMap
-            || request.Command == ServiceProtocol.Commands.AllowTargets
-            || request.Command == ServiceProtocol.Commands.ImportGroups
-            || request.Command.StartsWith("write.rules.", StringComparison.OrdinalIgnoreCase)
-            || request.Command.StartsWith("write.strict.", StringComparison.OrdinalIgnoreCase)
-            || request.Command.StartsWith("write.audit.", StringComparison.OrdinalIgnoreCase);
-
-        // 鉴权探针：不做任何事，只回答"当前客户端有没有提权"。
-        if (string.Equals(request.Command, ServiceProtocol.Commands.AuthCheck, StringComparison.Ordinal))
-        {
-            ServiceLog.Info("WAG-AUTH-004", $"Auth probe: pid={clientPid}, elevated={elevated}.");
-
-            return new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = elevated,
-                Error = elevated ? null : "当前客户端未提权。",
-            };
-        }
-
         // 3.0-b 起写命令会用 "write." 前缀，必须提权；v1 的只读命令允许任何交互用户。
         // 5.9：统一由 CommandPolicyTable 判定，不再在这里散落三套规则。
+        // 鉴权探针也走同一张策略表（Read），由 Handler 返回当前提权状态。
         var denied = CommandPolicyGuard.Check(request, elevated, clientPid);
 
         if (denied is not null)
@@ -503,164 +499,23 @@ internal sealed class ControlServer : IDisposable
             return denied;
         }
 
-        // 3.5：服务以 SYSTEM 运行，能读到界面读不到的提权/受保护进程路径。
-        if (string.Equals(
-                request.Command, ServiceProtocol.Commands.QueryProcessPaths,
-                StringComparison.Ordinal))
+        var router = _router;
+
+        if (router is null)
         {
-            return ResolveProcessPaths(request);
-        }
-
-        return request.Command switch
-        {
-            ServiceProtocol.Commands.Ping => new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = true,
-                Status = BuildStatus(),
-            },
-
-            ServiceProtocol.Commands.Status => new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = true,
-                Status = BuildStatus(),
-            },
-
-            // 3.5：流量快照是只读数据，不碰 WFP，也不要求提权。
-            // 4.1：数据源换成 Npcap 精确计数（ETW 不再参与）。
-            ServiceProtocol.Commands.QueryTraffic => TrafficCaptureHost.Query(request),
-
-            // 3.6：清空流量计数（write. 前缀，提权检查在上面统一做）。
-            ServiceProtocol.Commands.ClearTraffic => ClearTraffic(request),
-
-            // 4.1：暂停 / 继续精确流量统计（只对本次运行有效）。
-            ServiceProtocol.Commands.ConfigureTraffic => TrafficCaptureHost.Configure(request),
-
-            // 3.5：DNS 记录同样是只读；清空是 write.dns.clear（提权检查在上面统一做）。
-            ServiceProtocol.Commands.QueryDns => new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = true,
-                DnsRecords = DnsHost.Snapshot(500),
-            },
-
-            ServiceProtocol.Commands.ClearDns => new ServiceResponse
-            {
-                Id = request.Id,
-                Ok = true,
-                Affected = DnsHost.Clear(),
-            },
-
-            // 3.7：IDS 只读查询；写命令（write.ids.*）已由上面的提权检查统一拦截。
-            // 5.0：网络被动检测；写命令统一走 write.* 的授权检查。
-            ServiceProtocol.Commands.QueryNetworkDetection => NetworkDetectionHost.Query(request),
-
-            ServiceProtocol.Commands.NetworkDetectionConfigure => NetworkDetectionHost.Configure(request),
-
-            ServiceProtocol.Commands.NetworkDetectionAck => NetworkDetectionHost.Ack(request),
-
-            ServiceProtocol.Commands.NetworkDetectionClear => NetworkDetectionHost.Clear(request),
-
-            ServiceProtocol.Commands.NetworkDetectionBlock => NetworkDetectionHost.Block(request),
-
-            ServiceProtocol.Commands.NetworkDetectionRelease => NetworkDetectionHost.Release(request),
-
-            ServiceProtocol.Commands.NetworkDetectionReleaseAll => NetworkDetectionHost.Release(request),
-
-            ServiceProtocol.Commands.QueryIdsAlerts => IdsHost.QueryAlerts(request),
-
-            ServiceProtocol.Commands.IdsConfigure => IdsHost.Configure(request),
-
-            ServiceProtocol.Commands.IdsAck => IdsHost.Ack(request),
-
-            ServiceProtocol.Commands.IdsSuppress => IdsHost.Suppress(request),
-
-            ServiceProtocol.Commands.IdsClear => IdsHost.Clear(request),
-
-            // 5.2：告警元数据命令（无需提权；是否允许永久不再提醒由上面的守卫判断）。
-            ServiceProtocol.Commands.AlertIdsAck => IdsHost.Ack(request),
-
-            ServiceProtocol.Commands.AlertIdsAckAll => IdsHost.AckAll(request),
-
-            ServiceProtocol.Commands.AlertIdsSuppress => IdsHost.Suppress(request),
-
-            ServiceProtocol.Commands.AlertIdsClear => IdsHost.Clear(request),
-
-            ServiceProtocol.Commands.AlertNetworkAck => NetworkDetectionHost.Ack(request),
-
-            ServiceProtocol.Commands.AlertNetworkAckAll => NetworkDetectionHost.AckAll(request),
-
-            ServiceProtocol.Commands.AlertNetworkClear => NetworkDetectionHost.Clear(request),
-
-            ServiceProtocol.Commands.GuardNewProgramBlock => NewProgramGuardHost.Block(request),
-
-            ServiceProtocol.Commands.GuardNewProgramRelease => NewProgramGuardHost.Release(request),
-
-            // 4.0：反扫描；写命令（write.antiscan.*）已由上面的提权检查统一拦截。
-            ServiceProtocol.Commands.QueryAntiScan => AntiScanHost.Query(request),
-
-            ServiceProtocol.Commands.ConfigureAntiScan => AntiScanHost.Configure(request),
-
-            ServiceProtocol.Commands.ReleaseAntiScanBlock => AntiScanHost.Release(request),
-
-            ServiceProtocol.Commands.ClearAntiScan => AntiScanHost.Clear(request),
-
-            // 4.2：局域网；写命令（write.lan.*）已由上面的提权检查统一拦截。
-            ServiceProtocol.Commands.QueryLan => LanHost.Query(request),
-
-            ServiceProtocol.Commands.ConfigureLan => LanHost.Configure(request),
-
-            ServiceProtocol.Commands.ClearLan => LanHost.Clear(request),
-
-            ServiceProtocol.Commands.TrustLan => LanHost.Trust(request),
-
-            ServiceProtocol.Commands.BlockLanDhcp => LanHost.Block(request),
-
-            ServiceProtocol.Commands.ResetLanBaseline => LanHost.ResetBaseline(request),
-
-            // 4.3：DNS 安全。
-            ServiceProtocol.Commands.QueryDnsSecurity => LanHost.QueryDns(request),
-
-            ServiceProtocol.Commands.ClearDnsSecurity => LanHost.ClearDns(request),
-
-            ServiceProtocol.Commands.TrustDnsServer => LanHost.TrustDns(request),
-
-            // 4.4：IPv6 邻接安全。
-            ServiceProtocol.Commands.QueryIpv6Security => LanHost.QueryIpv6(request),
-
-            ServiceProtocol.Commands.ClearIpv6Security => LanHost.ClearIpv6(request),
-
-            ServiceProtocol.Commands.TrustIpv6 => LanHost.TrustIpv6(request),
-
-            ServiceProtocol.Commands.BlockIpv6 => LanHost.BlockIpv6(request),
-
-            ServiceProtocol.Commands.ResetIpv6Baseline => LanHost.ResetIpv6Baseline(request),
-
-            // 4.5：本机配置完整性。
-            ServiceProtocol.Commands.QueryConfigIntegrity => ConfigHost.Query(request),
-
-            ServiceProtocol.Commands.ClearConfigIntegrity => ConfigHost.Clear(request),
-
-            ServiceProtocol.Commands.RebaselineConfigIntegrity => ConfigHost.Rebaseline(request),
-
-            // 4.5：局域网名称解析。
-            ServiceProtocol.Commands.QueryNameResolution => LanHost.Query(request),
-
-            ServiceProtocol.Commands.ClearNameResolution => LanHost.ClearName(request),
-
-            ServiceProtocol.Commands.BlockNameSource => LanHost.BlockName(request),
-
-            _ when isRuleCommand => Rules.Handle(request),
-
-            _ => new ServiceResponse
+            return new ServiceResponse
             {
                 Id = request.Id,
                 Ok = false,
-                Error = $"未知命令：{request.Command}",
-            },
-        };
+                Error = "服务命令目录未通过启动校验，控制管道不可用。",
+            };
+        }
+
+        return router.Dispatch(new CommandContext(request, elevated, clientPid));
     }
+
+    /// <summary>5.9：规则命令统一交给 RuleHandlers（与启动迁移、定时任务共用同一实例）。</summary>
+    internal static ServiceResponse HandleRuleCommand(ServiceRequest request) => Rules.Handle(request);
 
     internal static ServiceStatus BuildStatus()
     {

@@ -1,4 +1,3 @@
-using System.Reflection;
 using WinAppGuard.Contracts;
 
 namespace WinAppGuard.Architecture.Tests;
@@ -66,12 +65,5 @@ public sealed class CommandPolicyTests
     }
 
     private static IReadOnlyList<string> DeclaredCommands()
-        => typeof(ServiceProtocol.Commands)
-            .GetFields(BindingFlags.Public | BindingFlags.Static)
-            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
-            .Select(field => (string?)field.GetRawConstantValue())
-            .Where(command => !string.IsNullOrWhiteSpace(command))
-            .Select(command => command!)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        => CommandPolicyTable.DeclaredCommands();
 }

@@ -25,6 +25,13 @@
     <ProjectReference Include="..\WinAppGuard.Contracts\WinAppGuard.Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 5.9：架构测试直接校验服务端命令目录（不启动服务、不碰 WFP）。 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>WinAppGuard.Architecture.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <!-- 与产品一致：Release 下自包含单文件，安装时不需要目标机装 .NET。 -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

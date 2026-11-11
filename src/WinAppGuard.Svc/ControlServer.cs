@@ -34,6 +34,7 @@ internal sealed class ControlServer : IDisposable
     private bool _loggedReady;
     // 5.9：命令路由在 Start 里创建并校验；校验失败时不创建控制管道（失败关闭）。
     private static CommandRouter? _router;
+    private ModuleHost? _modules;
     // 服务进程里只有一个 ControlServer；BuildStatus 被 RuleHandlers 静态调用，
     // 所以这两项用 static，保证状态命令和规则命令看到同一份配置。
     private static ProtectedModeConfig? _protectedMode;
@@ -122,17 +123,15 @@ internal sealed class ControlServer : IDisposable
         // 不等 15 秒后的定时器。
         Rules.CheckTamper();
 
-        if (_protectedMode is not null && _router is not null)
-        {
-            _thread = new Thread(Loop)
-            {
-                IsBackground = true,
-                Name = "ipc-server",
-            };
+        // 5.9：按模块启动。rules 先启动定时清理，检测 Host 按依赖顺序启动，
+        // 控制管道最后启动；单个模块失败不阻止其它模块。
+        _modules = new ModuleHost(ServiceModules.Create(this));
+        _modules.StartAll();
+    }
 
-            _thread.Start();
-        }
-
+    /// <summary>5.9：规则相关定时器（到期清理、篡改检测、临时锁网）。</summary>
+    internal void StartRuleServices()
+    {
         // 到期清理归服务：界面关掉、没人点刷新时也要准时解除临时阻断。
         _expiryTimer = new System.Threading.Timer(
             _ => Rules.PurgeExpiredQuietly(),
@@ -154,43 +153,51 @@ internal sealed class ControlServer : IDisposable
             state: null,
             dueTime: TimeSpan.FromSeconds(1),
             period: TimeSpan.FromSeconds(1));
-
-        // 审计采集随服务启动（设置里关着就不开）。
-        ServiceLog.Info("WAG-AUDIT-002", "Startup: starting audit capture.");
-        AuditHost.StartIfEnabled();
-
-        // 3.5：网络 ETW 会话仍在，但 4.1 起只为 IDS 提供 flow（不再算流量）。
-        TrafficHost.Start();
-
-        // 4.1：精确流量统计走独立的 Npcap 会话。
-        TrafficCaptureHost.Start();
-
-        // 3.5：DNS 采集（ETW 实时会话；失败由看门狗重试）。
-        DnsHost.Start();
-
-        // 3.7：IDS 只消费上面两个 ETW 会话的回调，不新开会话。
-        IdsHost.Start();
-
-        // 4.0：反扫描使用 Npcap（用户安装），与上面两个 ETW 会话无关。
-        AntiScanHost.Start();
-
-        // 4.2：ARP / DHCP 检测（独立的第三份 Npcap 会话）。
-        LanHost.Start();
-
-        // 4.5：本机配置完整性（只读文件/注册表，不依赖 Npcap）。
-        ConfigHost.Start();
-
-        // 5.0：网络被动检测（Suricata + ET Open），只告警，不自动拦截。
-        NetworkDetectionHost.Start();
-
-        // 5.8：新程序默认阻止用的临时 WFP 会话（只在功能开启时由界面调用）。
-        NewProgramGuardHost.Start();
-
-        if (_protectedMode is not null)
-        {
-            ServiceLog.Info("WAG-IPC-001", $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
-        }
     }
+
+    internal void StopRuleServices()
+    {
+        _expiryTimer?.Dispose();
+        _expiryTimer = null;
+        _tamperTimer?.Dispose();
+        _tamperTimer = null;
+        _lockdownTimer?.Dispose();
+        _lockdownTimer = null;
+    }
+
+    /// <summary>5.9：控制管道是最后一个模块，确保依赖模块先就绪。</summary>
+    internal void StartControlPlane()
+    {
+        if (_protectedMode is null || _router is null)
+        {
+            throw new InvalidOperationException(
+                "受保护模式或命令目录不可用，控制管道已禁用。");
+        }
+
+        _thread = new Thread(Loop)
+        {
+            IsBackground = true,
+            Name = "ipc-server",
+        };
+
+        _thread.Start();
+
+        ServiceLog.Info(
+            "WAG-IPC-001",
+            $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
+    }
+
+    internal void StopControlPlane()
+    {
+        _thread?.Join(3000);
+        _thread = null;
+    }
+
+    internal static string RulesHealth()
+        => $"tamperRebuilt={Rules.TamperRebuiltCount}, expiredPurged={Rules.ExpiredPurgedCount}";
+
+    internal string ControlPlaneHealth()
+        => _thread is { IsAlive: true } ? "listening" : "not listening";
 
     internal void Stop()
     {
@@ -203,42 +210,14 @@ internal sealed class ControlServer : IDisposable
             return;
         }
 
-        _expiryTimer?.Dispose();
-        _expiryTimer = null;
-        _tamperTimer?.Dispose();
-        _tamperTimer = null;
-        _lockdownTimer?.Dispose();
-        _lockdownTimer = null;
-
         // 严格模式会话随服务一起撤销：停服务 = 立即恢复联网。
+        // 放在模块停止之前，避免等检测模块收尾后才恢复。
         LockdownHost.Shutdown();
         StrictModeHost.Shutdown();
 
-        // 审计采集也停掉（记录文件先刷盘再关闭）。
-        AuditHost.Stop();
-
-        // 3.7：先摘 IDS 回调，再停 ETW 会话。
-        IdsHost.Stop();
-
-        AntiScanHost.Stop();
-
-        LanHost.Stop();
-
-        ConfigHost.Stop();
-
-        // 5.0：先停检测，再停抓包/网络宿主。
-        NetworkDetectionHost.Stop();
-
-        NewProgramGuardHost.Stop();
-
-        TrafficCaptureHost.Stop();
-
-        TrafficHost.Stop();
-
-        DnsHost.Stop();
-
-        _thread?.Join(3000);
-        _thread = null;
+        var modules = _modules;
+        _modules = null;
+        modules?.Dispose();
     }
 
     public void Dispose()

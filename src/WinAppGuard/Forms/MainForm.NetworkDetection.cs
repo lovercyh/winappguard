@@ -26,13 +26,12 @@ public sealed partial class MainForm
     private CheckBox _ndAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _ndGrid = null!;
     private ListBox _ndBlocks = null!;
-    private System.Windows.Forms.Timer? _ndTimer;
 
     private List<NetworkAlertDto> _ndAlerts = new();
     private List<NetworkBlockDto> _ndBlockList = new();
     private NetworkDetectionSettingsDto _ndSettings = new();
     private NetworkDetectionStatusDto? _ndStatus;
-    private string? _ndSignature;
+    private EventTable<NdRow>? _ndTable;
     private bool _ndLoading;
     private string? _ndLastNotifiedId;
     private DateTime _ndLastNotifyUtc = DateTime.MinValue;
@@ -247,31 +246,11 @@ public sealed partial class MainForm
             }
         };
 
-        // 5.6：这一页原来没有自动刷新开关，定时器一直跑，
-        // 关掉别的页面的自动刷新后这里仍会每 3 秒重建表格、把滚动位置顶回顶部。
-        _ndTimer = new System.Windows.Forms.Timer(components!)
-        {
-            Interval = NetworkDetectionRefreshIntervalMs,
-            Enabled = _ndAutoRefreshCheckBox.Checked,
-        };
-
-        _ndTimer.Tick += (_, _) =>
-        {
-            // 只在用户真的看着这一页、且没关掉自动刷新时拉数据。
-            if (_ndAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabNetworkDetection)
-            {
-                RefreshNetworkDetection();
-            }
-        };
     }
 
     private void OnNetworkAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_ndTimer is not null)
-        {
-            _ndTimer.Enabled = _ndAutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_ndAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabNetworkDetection)
         {
             RefreshNetworkDetection();
@@ -314,7 +293,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryNetworkDetection },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -368,33 +347,17 @@ public sealed partial class MainForm
             })
             .ToList();
 
-        var signature = string.Join(
-            "|",
-            rows.Take(100).Select(row => $"{row.Id}/{row.StatusText}/{row.BlockStateText}"));
+        _ndTable ??= new EventTable<NdRow>(
+            _ndGrid,
+            row => $"{row.Id}/{row.StatusText}/{row.BlockStateText}",
+            row => row.Id);
 
-        if (!string.Equals(signature, _ndSignature, StringComparison.Ordinal))
-        {
-            // 5.6：重绑前记住滚动位置，重绑后放回去。
-            var firstDisplayedRow = CaptureFirstDisplayedRow(_ndGrid);
-            var selectedId = (_ndGrid.CurrentRow?.DataBoundItem as NdRow)?.Id;
-            _ndSignature = signature;
-            _ndGrid.DataSource = rows;
+        var firstDisplayedRow = 0;
 
-            if (selectedId is not null)
-            {
-                foreach (DataGridViewRow gridRow in _ndGrid.Rows)
-                {
-                    if (gridRow.DataBoundItem is NdRow row
-                        && string.Equals(row.Id, selectedId, StringComparison.Ordinal))
-                    {
-                        gridRow.Selected = true;
-                        break;
-                    }
-                }
-            }
-
-            RestoreFirstDisplayedRow(_ndGrid, firstDisplayedRow);
-        }
+        _ndTable.Bind(
+            rows,
+            beforeRebind: () => firstDisplayedRow = CaptureFirstDisplayedRow(_ndGrid),
+            afterRebind: () => RestoreFirstDisplayedRow(_ndGrid, firstDisplayedRow));
 
         var blocks = _ndBlockList
             .Select(block =>
@@ -608,7 +571,7 @@ public sealed partial class MainForm
             }
         }
 
-        _ndSignature = null;
+        _ndTable?.Invalidate();
         RebuildNetworkDetection();
     }
 
@@ -639,7 +602,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = ElevatedClient.TryRequest(
+        var response = Gateway.TryElevatedRequest(
             new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.NetworkDetectionBlock,
@@ -674,7 +637,7 @@ public sealed partial class MainForm
 
         var block = _ndBlockList[_ndBlocks.SelectedIndex];
 
-        var response = ElevatedClient.TryRequest(
+        var response = Gateway.TryElevatedRequest(
             new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.NetworkDetectionRelease,
@@ -715,7 +678,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = ElevatedClient.TryRequest(
+        var response = Gateway.TryElevatedRequest(
             new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.NetworkDetectionReleaseAll,
@@ -777,7 +740,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = ElevatedClient.TryRequest(
+        var response = Gateway.TryElevatedRequest(
             new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.NetworkDetectionConfigure,

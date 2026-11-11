@@ -25,7 +25,6 @@ public sealed partial class MainForm
     private CheckBox _dnsSecAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _dnsSecServerGrid = null!;
     private DataGridViewBuffered _dnsSecEventGrid = null!;
-    private System.Windows.Forms.Timer? _dnsSecTimer;
     private System.Windows.Forms.Timer? _dnsSecNotifyTimer;
 
     private List<DnsSecurityServerDto> _dnsSecServers = new();
@@ -171,19 +170,6 @@ public sealed partial class MainForm
         _tabDnsSecurity.Controls.Add(split);
         _tabDnsSecurity.Controls.Add(top);
 
-        _dnsSecTimer = new System.Windows.Forms.Timer
-        {
-            Interval = DnsSecurityRefreshIntervalMs,
-            Enabled = _dnsSecAutoRefreshCheckBox.Checked,
-        };
-        _dnsSecTimer.Tick += (_, _) =>
-        {
-            if (_dnsSecAutoRefreshCheckBox.Checked && IsProtectionTab(_tabDnsSecurity))
-            {
-                _ = RefreshDnsSecurityAsync();
-            }
-        };
-
         // 高危 DNS 事件与 IDS 共用托盘气泡通道，点击定位到 DNS 安全子标签。
         _dnsSecNotifyTimer = new System.Windows.Forms.Timer { Interval = DnsSecurityNotifyIntervalMs };
         _dnsSecNotifyTimer.Tick += (_, _) =>
@@ -307,7 +293,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryDnsSecurity },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -407,11 +393,7 @@ public sealed partial class MainForm
 
     private void OnDnsSecAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_dnsSecTimer is not null)
-        {
-            _dnsSecTimer.Enabled = _dnsSecAutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_dnsSecAutoRefreshCheckBox.Checked)
         {
             _ = RefreshDnsSecurityAsync();

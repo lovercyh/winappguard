@@ -24,7 +24,6 @@ public sealed partial class MainForm
     private Button _dnsClearButton = null!;
     private CheckBox _dnsAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _dnsGrid = null!;
-    private System.Windows.Forms.Timer? _dnsTimer;
 
     private List<DnsDto> _dnsRecords = new();
     private bool _dnsCollecting;
@@ -144,30 +143,11 @@ public sealed partial class MainForm
                 _ = RefreshDnsAsync();
             }
         };
-
-        _dnsTimer = new System.Windows.Forms.Timer
-        {
-            Interval = DnsRefreshIntervalMs,
-            Enabled = _dnsAutoRefreshCheckBox.Checked,
-        };
-
-        _dnsTimer.Tick += (_, _) =>
-        {
-            // 只在用户真的看着这一页、且没关掉自动刷新时拉数据。
-            if (_dnsAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabDns)
-            {
-                _ = RefreshDnsAsync();
-            }
-        };
     }
 
     private void OnDnsAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_dnsTimer is not null)
-        {
-            _dnsTimer.Enabled = _dnsAutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_dnsAutoRefreshCheckBox.Checked)
         {
             _ = RefreshDnsAsync();
@@ -237,7 +217,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryDns },
                 TimeSpan.FromSeconds(2),
                 out _);

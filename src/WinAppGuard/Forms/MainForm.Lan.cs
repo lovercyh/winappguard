@@ -33,7 +33,6 @@ public sealed partial class MainForm
     private TabPage _lanIpv4Page = null!;
     private TabPage _lanIpv6Page = null!;
     private TabPage _lanNamePage = null!;
-    private System.Windows.Forms.Timer? _lanTimer;
 
     private List<LanEventDto> _lanEvents = new();
     private List<LanGatewayDto> _lanGateways = new();
@@ -43,9 +42,9 @@ public sealed partial class MainForm
     private LanSettingsDto _lanSettings = new();
     private bool _lanLoading;
     private bool _lanServiceAvailable = true;
-    private string? _lanGatewaySignature;
-    private string? _lanDhcpSignature;
-    private string? _lanEventSignature;
+    private BaselineTable<LanGatewayRow>? _lanGatewayTable;
+    private BlockTable<LanDhcpRow>? _lanDhcpTable;
+    private EventTable<LanEventRow>? _lanEventTable;
     private bool _lanBindingSettings;
 
     private void InitializeLanPage()
@@ -291,19 +290,6 @@ public sealed partial class MainForm
             }
         };
 
-        _lanTimer = new System.Windows.Forms.Timer
-        {
-            Interval = LanRefreshIntervalMs,
-            Enabled = _lanAutoRefreshCheckBox.Checked,
-        };
-        _lanTimer.Tick += (_, _) =>
-        {
-            if (_lanAutoRefreshCheckBox.Checked && IsLanIpv4Tab)
-            {
-                _ = RefreshLanAsync();
-            }
-        };
-
         UpdateLanButtons();
         UpdateLanSummary();
     }
@@ -416,7 +402,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryLan },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -478,33 +464,31 @@ public sealed partial class MainForm
     private void RebuildLanView()
     {
         var gatewayRows = _lanGateways.Select(item => new LanGatewayRow(item)).ToList();
-        var gatewaySignature = string.Join("|", gatewayRows.Select(row => $"{row.Adapter}/{row.Ip}/{row.Mac}/{row.Trusted}"));
 
-        if (!string.Equals(gatewaySignature, _lanGatewaySignature, StringComparison.Ordinal))
-        {
-            _lanGatewaySignature = gatewaySignature;
-            _lanGatewayGrid.DataSource = gatewayRows;
-        }
+        _lanGatewayTable ??= new BaselineTable<LanGatewayRow>(
+            _lanGatewayGrid,
+            row => $"{row.Adapter}/{row.Ip}/{row.Mac}/{row.Trusted}",
+            row => $"{row.Adapter}/{row.Ip}");
+
+        _lanGatewayTable.Bind(gatewayRows);
 
         var dhcpRows = _lanServers.Select(item => new LanDhcpRow(item, _lanBlocks)).ToList();
-        var dhcpSignature = string.Join(
-            "|",
-            dhcpRows.Select(row => $"{row.ServerIp}/{row.Mac}/{row.LeaseText}/{row.Blocked}"));
 
-        if (!string.Equals(dhcpSignature, _lanDhcpSignature, StringComparison.Ordinal))
-        {
-            _lanDhcpSignature = dhcpSignature;
-            _lanDhcpGrid.DataSource = dhcpRows;
-        }
+        _lanDhcpTable ??= new BlockTable<LanDhcpRow>(
+            _lanDhcpGrid,
+            row => $"{row.ServerIp}/{row.Mac}/{row.LeaseText}/{row.Blocked}",
+            row => row.ServerIp);
+
+        _lanDhcpTable.Bind(dhcpRows);
 
         var eventRows = _lanEvents.Select(item => new LanEventRow(item)).ToList();
-        var eventSignature = string.Join("|", eventRows.Take(100).Select(row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}"));
 
-        if (!string.Equals(eventSignature, _lanEventSignature, StringComparison.Ordinal))
-        {
-            _lanEventSignature = eventSignature;
-            _lanEventGrid.DataSource = eventRows;
-        }
+        _lanEventTable ??= new EventTable<LanEventRow>(
+            _lanEventGrid,
+            row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}",
+            row => row.Id);
+
+        _lanEventTable.Bind(eventRows);
 
         UpdateLanSummary();
         UpdateLanButtons();
@@ -574,11 +558,7 @@ public sealed partial class MainForm
 
     private void OnLanAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_lanTimer is not null)
-        {
-            _lanTimer.Enabled = _lanAutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_lanAutoRefreshCheckBox.Checked)
         {
             _ = RefreshLanAsync();
@@ -847,9 +827,9 @@ public sealed partial class MainForm
 
     private void _lanSignatureReset()
     {
-        _lanGatewaySignature = null;
-        _lanDhcpSignature = null;
-        _lanEventSignature = null;
+        _lanGatewayTable?.Invalidate();
+        _lanDhcpTable?.Invalidate();
+        _lanEventTable?.Invalidate();
     }
 
     private sealed class LanGatewayRow

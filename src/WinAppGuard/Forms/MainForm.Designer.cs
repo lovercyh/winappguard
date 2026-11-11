@@ -149,13 +149,10 @@ partial class MainForm
     private ToolStripStatusLabel _summaryLabel = null!;
     private ToolStripStatusLabel _versionLabel = null!;
 
-    private System.Windows.Forms.Timer _autoRefreshTimer = null!;
-
     /// <summary>
     /// 检查「临时阻断」是否到期的独立定时器。
     ///
-    /// 刻意**不**复用上面那个自动刷新定时器：自动刷新的开关用户可以关掉，
-    /// 复用的话关掉开关的用户就永远等不到临时阻断自动解除。
+    /// 刻意不复用页面刷新调度器：页面刷新可以关掉，临时阻断到期不能依赖它。
     /// </summary>
     private System.Windows.Forms.Timer _expiryTimer = null!;
     private ToolTip _toolTip = null!;
@@ -175,6 +172,9 @@ partial class MainForm
     {
         if (disposing)
         {
+            // 5.9：先停统一页面刷新调度器，避免窗体释放后仍有 Tick 引用控件。
+            _uiScheduler?.Dispose();
+
             // 先停掉归属查询的后台调度，再释放控件。
             // Dispose 不等待正在飞的查询 —— 那会让退出卡住；
             // 后台线程是线程池线程，不会阻止进程退出。
@@ -295,7 +295,6 @@ partial class MainForm
         _statusRulesLabel = new ToolStripStatusLabel();
         _summaryLabel = new ToolStripStatusLabel();
         _versionLabel = new ToolStripStatusLabel();
-        _autoRefreshTimer = new System.Windows.Forms.Timer(components);
         _expiryTimer = new System.Windows.Forms.Timer(components);
         _toolTip = new ToolTip(components);
         _trayIcon = new NotifyIcon(components);
@@ -1358,9 +1357,8 @@ partial class MainForm
         _versionLabel.Size = new Size(60, 17);
         _versionLabel.Text = "版本 v0.0.0";
 
-        // ---------- 自动刷新定时器 ----------
+        // ---------- 临时阻断到期定时器 ----------
         // 间隔在 MainForm 构造函数中统一设置，避免同一个数值出现在两个文件里。
-        _autoRefreshTimer.Tick += OnAutoRefreshTick;
         _expiryTimer.Tick += OnExpiryTimerTick;
 
         // ---------- 系统托盘 ----------

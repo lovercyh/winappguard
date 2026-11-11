@@ -24,7 +24,6 @@ public sealed partial class MainForm
     private CheckBox _trafficAutoRefreshCheckBox = null!;
     private TrafficChart _trafficChart = null!;
     private DataGridViewBuffered _trafficGrid = null!;
-    private System.Windows.Forms.Timer? _trafficTimer;
 
     private List<TrafficDto> _trafficRecords = new();
     private TrafficSeriesDto? _trafficSeries;
@@ -32,7 +31,7 @@ public sealed partial class MainForm
     private DateTime? _trafficStartedUtc;
     private bool _trafficLoading;
     private bool _trafficServiceAvailable = true;
-    private string? _trafficSignature;
+    private EventTable<TrafficRow>? _trafficTable;
 
     private TrafficSortColumn _trafficSort = TrafficSortColumn.Total;
     private bool _trafficSortAscending;
@@ -214,21 +213,6 @@ public sealed partial class MainForm
             }
         };
 
-        _trafficTimer = new System.Windows.Forms.Timer
-        {
-            Interval = TrafficRefreshIntervalMs,
-            Enabled = _trafficAutoRefreshCheckBox.Checked,
-        };
-
-        _trafficTimer.Tick += (_, _) =>
-        {
-            // 只在用户真的看着这一页、并且没关掉自动刷新时拉数据。
-            if (_trafficAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabTraffic)
-            {
-                _ = RefreshTrafficAsync();
-            }
-        };
-
 
         UpdateTrafficSortGlyphs();
         UpdateTrafficButtons();
@@ -324,7 +308,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -378,31 +362,12 @@ public sealed partial class MainForm
             .ToList();
 
         // 数据没变就不重绑，避免每秒把选中/滚动冲掉。
-        var signature = string.Join(
-            "|",
-            list.Take(100).Select(row =>
-                $"{row.Key}/{row.BytesIn}/{row.BytesOut}/{row.RateIn}/{row.RateOut}/{row.LastSeenUtc.Ticks}"));
+        _trafficTable ??= new EventTable<TrafficRow>(
+            _trafficGrid,
+            row => $"{row.Key}/{row.BytesIn}/{row.BytesOut}/{row.RateIn}/{row.RateOut}/{row.LastSeenUtc.Ticks}",
+            row => row.Key);
 
-        if (!string.Equals(signature, _trafficSignature, StringComparison.Ordinal))
-        {
-            var selectedKey = (_trafficGrid.CurrentRow?.DataBoundItem as TrafficRow)?.Key;
-
-            _trafficSignature = signature;
-            _trafficGrid.DataSource = list;
-
-            if (selectedKey is not null)
-            {
-                foreach (DataGridViewRow gridRow in _trafficGrid.Rows)
-                {
-                    if (gridRow.DataBoundItem is TrafficRow row
-                        && string.Equals(row.Key, selectedKey, StringComparison.Ordinal))
-                    {
-                        gridRow.Selected = true;
-                        break;
-                    }
-                }
-            }
-        }
+        _trafficTable.Bind(list);
 
         UpdateTrafficSortGlyphs();
         UpdateTrafficSummary(list.Count);
@@ -642,12 +607,7 @@ public sealed partial class MainForm
 
     private void OnTrafficAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_trafficTimer is not null)
-        {
-            _trafficTimer.Enabled = _trafficAutoRefreshCheckBox.Checked;
-        }
-
-        // 勾上时立刻刷新一次，不用再等 3 秒。
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_trafficAutoRefreshCheckBox.Checked)
         {
             _ = RefreshTrafficAsync();
@@ -673,7 +633,7 @@ public sealed partial class MainForm
             _trafficStatus = response.TrafficStatus ?? _trafficStatus;
             _trafficSeries = response.TrafficSeries ?? _trafficSeries;
             _trafficRecords = response.Traffic ?? _trafficRecords;
-            _trafficSignature = null;
+            _trafficTable?.Invalidate();
 
             _trafficChart.SetSeries(
                 _trafficSeries?.BytesIn ?? new List<long>(),
@@ -731,7 +691,7 @@ public sealed partial class MainForm
             _trafficSeries = response.TrafficSeries;
             _trafficStatus = response.TrafficStatus ?? _trafficStatus;
             _trafficStartedUtc = response.TrafficStartedUtc ?? DateTime.UtcNow;
-            _trafficSignature = null;
+            _trafficTable?.Invalidate();
             _trafficGrid.DataSource = new List<TrafficRow>();
             _trafficChart.SetSeries(Array.Empty<long>(), Array.Empty<long>());
             RebuildTrafficView();

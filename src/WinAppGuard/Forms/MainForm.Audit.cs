@@ -30,7 +30,6 @@ public sealed partial class MainForm
     private Button _auditClearButton = null!;
     private DataGridViewBuffered _auditGrid = null!;
     private ContextMenuStrip? _auditMenu;
-    private System.Windows.Forms.Timer? _auditTimer;
     private bool _auditCollecting;
     private bool _loadingAuditSettings;
 
@@ -284,20 +283,6 @@ public sealed partial class MainForm
             }
         };
 
-        _auditTimer = new System.Windows.Forms.Timer
-        {
-            Interval = AuditRefreshIntervalMs,
-            Enabled = _auditAutoRefreshCheckBox.Checked,
-        };
-
-        _auditTimer.Tick += (_, _) =>
-        {
-            if (_auditAutoRefreshCheckBox.Checked && _tabControl.SelectedTab == _tabAudit)
-            {
-                RefreshAudit();
-            }
-        };
-
         _loadingAuditSettings = true;
         _auditEnabledCheck.Checked = _settings.AuditEnabled;
         _auditDomainCheck.Checked = _settings.AuditDomainLookupEnabled;
@@ -312,11 +297,7 @@ public sealed partial class MainForm
 
     private void OnAuditAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_auditTimer is not null)
-        {
-            _auditTimer.Enabled = _auditAutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_auditAutoRefreshCheckBox.Checked)
         {
             RefreshAudit();
@@ -1082,7 +1063,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.FilterMap },
                 TimeSpan.FromSeconds(2),
                 out _);

@@ -23,15 +23,14 @@ public sealed partial class MainForm
     private CheckBox _configAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _configItemGrid = null!;
     private DataGridViewBuffered _configEventGrid = null!;
-    private System.Windows.Forms.Timer? _configTimer;
 
     private List<ConfigItemDto> _configItems = new();
     private List<LanEventDto> _configEvents = new();
     private ConfigIntegrityStatusDto? _configStatus;
     private bool _configLoading;
     private bool _configServiceAvailable = true;
-    private string? _configItemSignature;
-    private string? _configEventSignature;
+    private BaselineTable<ConfigItemRow>? _configItemTable;
+    private EventTable<LanEventRow>? _configEventTable;
 
     private void InitializeConfigIntegrityPage()
     {
@@ -156,19 +155,6 @@ public sealed partial class MainForm
         _tabConfig.Controls.Add(split);
         _tabConfig.Controls.Add(top);
 
-        _configTimer = new System.Windows.Forms.Timer
-        {
-            Interval = ConfigRefreshIntervalMs,
-            Enabled = _configAutoRefreshCheckBox.Checked,
-        };
-        _configTimer.Tick += (_, _) =>
-        {
-            if (_configAutoRefreshCheckBox.Checked && IsProtectionTab(_tabConfig))
-            {
-                _ = RefreshConfigAsync();
-            }
-        };
-
         UpdateConfigButtons();
         UpdateConfigSummary();
     }
@@ -229,7 +215,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryConfigIntegrity },
                 TimeSpan.FromSeconds(3),
                 out _);
@@ -255,27 +241,22 @@ public sealed partial class MainForm
     private void RebuildConfigView()
     {
         var itemRows = _configItems.Select(item => new ConfigItemRow(item)).ToList();
-        var itemSignature = string.Join(
-            "|",
-            itemRows.Select(row =>
-                $"{row.Kind}/{row.Scope}/{row.Current}/{row.Baseline}/{row.Changed}"));
 
-        if (!string.Equals(itemSignature, _configItemSignature, StringComparison.Ordinal))
-        {
-            _configItemSignature = itemSignature;
-            _configItemGrid.DataSource = itemRows;
-        }
+        _configItemTable ??= new BaselineTable<ConfigItemRow>(
+            _configItemGrid,
+            row => $"{row.Kind}/{row.Scope}/{row.Current}/{row.Baseline}/{row.Changed}",
+            row => $"{row.Kind}/{row.Scope}");
+
+        _configItemTable.Bind(itemRows);
 
         var eventRows = _configEvents.Select(item => new LanEventRow(item)).ToList();
-        var eventSignature = string.Join(
-            "|",
-            eventRows.Take(100).Select(row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}"));
 
-        if (!string.Equals(eventSignature, _configEventSignature, StringComparison.Ordinal))
-        {
-            _configEventSignature = eventSignature;
-            _configEventGrid.DataSource = eventRows;
-        }
+        _configEventTable ??= new EventTable<LanEventRow>(
+            _configEventGrid,
+            row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}",
+            row => row.Id);
+
+        _configEventTable.Bind(eventRows);
 
         UpdateConfigSummary();
         UpdateConfigButtons();
@@ -325,11 +306,7 @@ public sealed partial class MainForm
 
     private void OnConfigAutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_configTimer is not null)
-        {
-            _configTimer.Enabled = _configAutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_configAutoRefreshCheckBox.Checked)
         {
             _ = RefreshConfigAsync();
@@ -437,8 +414,8 @@ public sealed partial class MainForm
 
     private void ApplyConfigResponse(ServiceResponse response)
     {
-        _configItemSignature = null;
-        _configEventSignature = null;
+        _configItemTable?.Invalidate();
+        _configEventTable?.Invalidate();
         _configStatus = response.ConfigIntegrityStatus ?? _configStatus;
         _configItems = response.ConfigItems ?? _configItems;
         _configEvents = response.ConfigIntegrityEvents ?? _configEvents;

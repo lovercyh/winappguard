@@ -27,7 +27,6 @@ public sealed partial class MainForm
     private Button _idsClearButton = null!;
     private Label _idsSummaryLabel = null!;
     private DataGridViewBuffered _idsGrid = null!;
-    private System.Windows.Forms.Timer? _idsTimer;
     private System.Windows.Forms.Timer? _idsNotifyTimer;
 
     private List<IdsAlertDto> _idsAlerts = new();
@@ -37,7 +36,7 @@ public sealed partial class MainForm
 
     private bool _idsLoading;
     private bool _idsServiceAvailable = true;
-    private string? _idsSignature;
+    private EventTable<IdsRow>? _idsTable;
     private string? _idsLastNotifiedId;
     private DateTime _idsLastNotifyUtc = DateTime.MinValue;
     private bool _idsBalloonPending;
@@ -235,16 +234,6 @@ public sealed partial class MainForm
             }
         };
 
-        _idsTimer = new System.Windows.Forms.Timer { Interval = IdsRefreshIntervalMs };
-        _idsTimer.Tick += (_, _) =>
-        {
-            if (IsProtectionTab(_tabIds))
-            {
-                _ = RefreshIdsAsync();
-            }
-        };
-        _idsTimer.Start();
-
         // 托盘提示：只在用户没看着 IDS 页时每 30 秒查一次，高危才提示。
         _idsNotifyTimer = new System.Windows.Forms.Timer { Interval = IdsNotifyIntervalMs };
         _idsNotifyTimer.Tick += (_, _) =>
@@ -355,7 +344,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -445,30 +434,12 @@ public sealed partial class MainForm
             .Select(ToIdsRow)
             .ToList();
 
-        var signature = string.Join(
-            "|",
-            rows.Take(100).Select(row => $"{row.Id}/{row.Status}"));
+        _idsTable ??= new EventTable<IdsRow>(
+            _idsGrid,
+            row => $"{row.Id}/{row.Status}",
+            row => row.Id);
 
-        if (!string.Equals(signature, _idsSignature, StringComparison.Ordinal))
-        {
-            var selectedId = (_idsGrid.CurrentRow?.DataBoundItem as IdsRow)?.Id;
-
-            _idsSignature = signature;
-            _idsGrid.DataSource = rows;
-
-            if (selectedId is not null)
-            {
-                foreach (DataGridViewRow gridRow in _idsGrid.Rows)
-                {
-                    if (gridRow.DataBoundItem is IdsRow row
-                        && string.Equals(row.Id, selectedId, StringComparison.Ordinal))
-                    {
-                        gridRow.Selected = true;
-                        break;
-                    }
-                }
-            }
-        }
+        _idsTable.Bind(rows);
 
         UpdateIdsSummary();
         UpdateIdsButtons();
@@ -660,7 +631,7 @@ public sealed partial class MainForm
                 }
             }
 
-            _idsSignature = null;
+            _idsTable?.Invalidate();
             RebuildIdsView();
         }
         catch (Exception ex)
@@ -697,7 +668,7 @@ public sealed partial class MainForm
                 }
             }
 
-            _idsSignature = null;
+            _idsTable?.Invalidate();
             RebuildIdsView();
         }
         catch (Exception ex)
@@ -812,7 +783,7 @@ public sealed partial class MainForm
             _idsSettings = response.IdsSettings ?? updated;
             _idsStatus = response.IdsStatus ?? _idsStatus;
             _idsSuppressions = response.IdsSuppressions ?? _idsSuppressions;
-            _idsSignature = null;
+            _idsTable?.Invalidate();
             _ = RefreshIdsAsync();
 
             if (removed.Count > 0)
@@ -870,7 +841,7 @@ public sealed partial class MainForm
             }
 
             _idsAlerts = new List<IdsAlertDto>();
-            _idsSignature = null;
+            _idsTable?.Invalidate();
             _idsGrid.DataSource = new List<IdsRow>();
             RebuildIdsView();
 

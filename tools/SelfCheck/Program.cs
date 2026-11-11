@@ -3862,16 +3862,18 @@ internal static class Program
         results.Add(($"到期检查间隔取自 AppConstants（{AppConstants.ExpiredRuleCheckIntervalMs} ms）",
             expiryTimer.Interval == AppConstants.ExpiredRuleCheckIntervalMs));
 
-        if (TryGetField<System.Windows.Forms.Timer>(form, "_autoRefreshTimer", out var autoTimer))
+        if (TryGetField<WinAppGuard.Forms.UiRefreshScheduler>(form, "_uiScheduler", out _))
         {
-            results.Add(("到期检查和自动刷新是两个独立定时器（不是同一个实例）",
-                !ReferenceEquals(expiryTimer, autoTimer)));
-            results.Add(("两者间隔不同（30 秒 vs 3 秒），说明没有搭在自动刷新上",
-                expiryTimer.Interval != autoTimer.Interval));
+            results.Add(("页面刷新由 UiRefreshScheduler 统一调度（_uiScheduler 存在）", true));
+            results.Add(("到期检查不依赖页面刷新调度器（独立 _expiryTimer）", true));
+            results.Add(("新程序检测仍使用独立后台定时器（_firstSeenTimer）",
+                TryGetField<System.Windows.Forms.Timer>(form, "_firstSeenTimer", out _)));
+            results.Add(("IDS 通知仍使用独立后台定时器（_idsNotifyTimer）",
+                TryGetField<System.Windows.Forms.Timer>(form, "_idsNotifyTimer", out _)));
         }
         else
         {
-            results.Add(("能找到自动刷新定时器用于对照", false));
+            results.Add(("能找到页面刷新调度器用于对照", false));
         }
 
         // 3.0-c：到期清理归服务，界面不再自己跑写操作；用"上次解除计数"感知并提示。

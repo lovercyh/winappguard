@@ -30,6 +30,12 @@ namespace WinAppGuard.Forms;
 /// </summary>
 public partial class MainForm : Form
 {
+    /// <summary>5.9：界面访问服务端的唯一入口。</summary>
+    private static readonly IApplicationGateway Gateway = new ServiceApplicationGateway();
+
+    /// <summary>5.9：可见页刷新统一调度器。</summary>
+    private UiRefreshScheduler? _uiScheduler;
+
     /// <summary>自动刷新间隔（毫秒）。</summary>
     private const int AutoRefreshIntervalMs = 3000;
 
@@ -338,9 +344,6 @@ public partial class MainForm : Form
 
         InitializeComponent();
 
-        _autoRefreshTimer.Interval = AutoRefreshIntervalMs;
-        _autoRefreshTimer.Enabled = _autoRefreshCheckBox.Checked;
-
         // 到期检查用独立定时器（理由见字段说明）。
         _expiryTimer.Interval = AppConstants.ExpiredRuleCheckIntervalMs;
         SetupConnectionGrid();
@@ -353,6 +356,9 @@ public partial class MainForm : Form
         InitializeIdsPage();
         InitializeNetworkDetectionPage();
         InitializeAntiScanPage();
+
+        // 5.9：所有可见页共用一个刷新调度器；后台通知定时器仍独立。
+        RegisterPageRefresh();
 
         // 3.2：把 Designer 里的中文静态文案换成英文（如果当前语言是英文）。
         ControlLocalizer.Apply(this);
@@ -502,7 +508,7 @@ public partial class MainForm : Form
         // 严格模式会话在服务里：先同步取一次状态，避免第一屏把"正在生效"显示成"未开启"。
         if (_serviceAvailable)
         {
-            var strictStatus = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(2));
+            var strictStatus = Gateway.TryGetStatus(TimeSpan.FromSeconds(2));
 
             if (strictStatus is not null)
             {
@@ -563,9 +569,8 @@ public partial class MainForm : Form
             return;
         }
 
-        // 真正退出：停掉审计刷新定时器（采集在服务里，不随界面退出停止）。
-        _auditTimer?.Stop();
-        _auditTimer?.Dispose();
+        // 真正退出：停掉统一页面刷新调度器（采集在服务里，不随界面退出停止）。
+        _uiScheduler?.Dispose();
         _auditStore.Dispose();
 
         // 5.8：新程序默认阻止是服务里的临时动态过滤器；界面退出时主动释放，
@@ -1112,7 +1117,7 @@ public partial class MainForm : Form
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
                 TimeSpan.FromSeconds(3),
                 out var error);
@@ -1308,15 +1313,15 @@ public partial class MainForm : Form
         ServiceResponse? response;
         string? error;
 
-        if (AdminHelper.IsRunningAsAdmin())
+        if (Gateway.IsRunningAsAdmin)
         {
-            response = ServiceClient.TryRequest(
+            response = Gateway.TryRequest(
                 request, TimeSpan.FromSeconds(5), out error);
         }
         else
         {
             // 普通权限：写操作走一次 UAC（提权助手 = WinAppGuardSvc.exe --elevated-ipc）。
-            response = ElevatedClient.TryRequest(request, out error);
+            response = Gateway.TryElevatedRequest(request, out error);
         }
 
         if (response is { Ok: true })
@@ -1359,7 +1364,7 @@ public partial class MainForm : Form
     {
         request.Command = command;
 
-        var response = ServiceClient.TryRequest(
+        var response = Gateway.TryRequest(
             request, TimeSpan.FromSeconds(5), out var error);
 
         if (response is { Ok: true })
@@ -1444,7 +1449,7 @@ public partial class MainForm : Form
             var started = Environment.TickCount64;
 
             // 3.0-c：界面不再枚举防火墙规则，两类信息都由服务一次读齐。
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.AllowTargets },
                 TimeSpan.FromSeconds(5),
                 out var error);
@@ -1522,7 +1527,7 @@ public partial class MainForm : Form
         {
             try
             {
-                return ServiceClient.TryRequest(
+                return Gateway.TryRequest(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.QueryProcessPaths,
@@ -3057,7 +3062,7 @@ public partial class MainForm : Form
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -4327,28 +4332,6 @@ public partial class MainForm : Form
         await RefreshConnectionsAsync();
     }
 
-    private async void OnAutoRefreshTick(object? sender, EventArgs e)
-    {
-        // 自检模式承诺不联网，也不让后台扫描覆盖人造样本。
-        if (SuppressBackgroundServices)
-        {
-            return;
-        }
-
-        // 5.6：定时器可能还有排队中的 Tick；再确认一次开关，
-        // 保证用户取消勾选后不会又被自动扫描带回去。
-        if (!_autoRefreshCheckBox.Checked)
-        {
-            return;
-        }
-
-        // 只在用户看着连接页时刷新，避免在别的页上白白走一遍扫描。
-        if (_tabControl.SelectedTab == _tabConnections)
-        {
-            await RefreshConnectionsAsync();
-        }
-    }
-
     /// <summary>重新从防火墙读取规则状态。用于在 wf.msc 里手动改过规则之后同步。</summary>
     private void OnRefreshRulesButtonClick(object? sender, EventArgs e)
     {
@@ -4358,9 +4341,8 @@ public partial class MainForm : Form
     /// <summary>勾选/取消「每 3 秒自动刷新」。</summary>
     private void OnAutoRefreshCheckedChanged(object? sender, EventArgs e)
     {
-        _autoRefreshTimer.Enabled = _autoRefreshCheckBox.Checked;
-
-        // 刚勾上时立刻刷新一次，不用干等 3 秒
+        // 5.9：开关状态由页面刷新调度器读取，不再直接控制单个 Timer。
+        // 刚勾上时立刻刷新一次，不用干等下一次调度。
         if (_autoRefreshCheckBox.Checked)
         {
             _ = RefreshConnectionsAsync();
@@ -4867,7 +4849,7 @@ public partial class MainForm : Form
 
         try
         {
-            if (AdminHelper.IsRunningAsAdmin())
+            if (Gateway.IsRunningAsAdmin)
             {
                 AutoStartManager.Enable(exePath);
             }
@@ -4927,7 +4909,7 @@ public partial class MainForm : Form
         {
             bool deleted;
 
-            if (AdminHelper.IsRunningAsAdmin())
+            if (Gateway.IsRunningAsAdmin)
             {
                 deleted = AutoStartManager.Disable();
             }
@@ -5248,7 +5230,7 @@ public partial class MainForm : Form
 
         _triedAutoStartService = true;
 
-        if (!AdminHelper.IsRunningAsAdmin()
+        if (!Gateway.IsRunningAsAdmin
             || !ServiceIsInstalled()
             || FindSetupPath() is null)
         {
@@ -5328,7 +5310,7 @@ public partial class MainForm : Form
 
             if (interactive)
             {
-                if (!AdminHelper.IsRunningAsAdmin())
+                if (!Gateway.IsRunningAsAdmin)
                 {
                     startInfo.Verb = "runas";
                 }
@@ -5413,7 +5395,7 @@ public partial class MainForm : Form
     {
         _ = Task.Run(() =>
         {
-            var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(1.5));
+            var status = Gateway.TryGetStatus(TimeSpan.FromSeconds(1.5));
 
             try
             {

@@ -21,15 +21,14 @@ public sealed partial class MainForm
     private CheckBox _nameAutoRefreshCheckBox = null!;
     private DataGridViewBuffered _nameSourceGrid = null!;
     private DataGridViewBuffered _nameEventGrid = null!;
-    private System.Windows.Forms.Timer? _nameTimer;
 
     private List<NameSourceDto> _nameSources = new();
     private List<LanEventDto> _nameEvents = new();
     private NameResolutionStatusDto? _nameStatus;
     private bool _nameLoading;
     private bool _nameServiceAvailable = true;
-    private string? _nameSourceSignature;
-    private string? _nameEventSignature;
+    private BaselineTable<NameSourceRow>? _nameSourceTable;
+    private EventTable<LanEventRow>? _nameEventTable;
 
     private void InitializeNameResolutionPage()
     {
@@ -86,11 +85,7 @@ public sealed partial class MainForm
         };
         _nameAutoRefreshCheckBox.CheckedChanged += (_, _) =>
         {
-            if (_nameTimer is not null)
-            {
-                _nameTimer.Enabled = _nameAutoRefreshCheckBox.Checked;
-            }
-
+            // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
             if (_nameAutoRefreshCheckBox.Checked)
             {
                 _ = RefreshNameAsync();
@@ -156,19 +151,6 @@ public sealed partial class MainForm
         _lanNamePage.Controls.Add(split);
         _lanNamePage.Controls.Add(top);
 
-        _nameTimer = new System.Windows.Forms.Timer
-        {
-            Interval = NameRefreshIntervalMs,
-            Enabled = _nameAutoRefreshCheckBox.Checked,
-        };
-        _nameTimer.Tick += (_, _) =>
-        {
-            if (_nameAutoRefreshCheckBox.Checked && IsLanNameTab)
-            {
-                _ = RefreshNameAsync();
-            }
-        };
-
         UpdateNameButtons();
         UpdateNameSummary();
     }
@@ -229,7 +211,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryNameResolution },
                 TimeSpan.FromSeconds(3),
                 out _);
@@ -255,27 +237,22 @@ public sealed partial class MainForm
     private void RebuildNameView()
     {
         var sourceRows = _nameSources.Select(item => new NameSourceRow(item)).ToList();
-        var sourceSignature = string.Join(
-            "|",
-            sourceRows.Select(row =>
-                $"{row.Address}/{row.Mac}/{row.Protocols}/{row.ResponseCount}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}"));
 
-        if (!string.Equals(sourceSignature, _nameSourceSignature, StringComparison.Ordinal))
-        {
-            _nameSourceSignature = sourceSignature;
-            _nameSourceGrid.DataSource = sourceRows;
-        }
+        _nameSourceTable ??= new BaselineTable<NameSourceRow>(
+            _nameSourceGrid,
+            row => $"{row.Address}/{row.Mac}/{row.Protocols}/{row.ResponseCount}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}",
+            row => row.Address);
+
+        _nameSourceTable.Bind(sourceRows);
 
         var eventRows = _nameEvents.Select(item => new LanEventRow(item)).ToList();
-        var eventSignature = string.Join(
-            "|",
-            eventRows.Take(100).Select(row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}"));
 
-        if (!string.Equals(eventSignature, _nameEventSignature, StringComparison.Ordinal))
-        {
-            _nameEventSignature = eventSignature;
-            _nameEventGrid.DataSource = eventRows;
-        }
+        _nameEventTable ??= new EventTable<LanEventRow>(
+            _nameEventGrid,
+            row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}",
+            row => row.Id);
+
+        _nameEventTable.Bind(eventRows);
 
         UpdateNameSummary();
         UpdateNameButtons();
@@ -368,8 +345,8 @@ public sealed partial class MainForm
                 return;
             }
 
-            _nameSourceSignature = null;
-            _nameEventSignature = null;
+            _nameSourceTable?.Invalidate();
+            _nameEventTable?.Invalidate();
             _nameEvents = new List<LanEventDto>();
             _nameStatus = response.NameResolutionStatus ?? _nameStatus;
             _nameSources = response.NameSources ?? _nameSources;
@@ -438,8 +415,8 @@ public sealed partial class MainForm
                 return;
             }
 
-            _nameSourceSignature = null;
-            _nameEventSignature = null;
+            _nameSourceTable?.Invalidate();
+            _nameEventTable?.Invalidate();
             _nameSources = response.NameSources ?? _nameSources;
             _nameEvents = response.NameResolutionEvents ?? _nameEvents;
             _nameStatus = response.NameResolutionStatus ?? _nameStatus;

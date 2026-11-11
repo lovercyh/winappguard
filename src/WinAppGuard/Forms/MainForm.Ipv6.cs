@@ -31,7 +31,6 @@ public sealed partial class MainForm
     private DataGridViewBuffered _ipv6DhcpGrid = null!;
     private DataGridViewBuffered _ipv6NeighborGrid = null!;
     private DataGridViewBuffered _ipv6EventGrid = null!;
-    private System.Windows.Forms.Timer? _ipv6Timer;
     private System.Windows.Forms.Timer? _ipv6NotifyTimer;
 
     private List<Ipv6RouterDto> _ipv6Routers = new();
@@ -41,10 +40,10 @@ public sealed partial class MainForm
     private Ipv6SecurityStatusDto? _ipv6Status;
     private bool _ipv6Loading;
     private bool _ipv6ServiceAvailable = true;
-    private string? _ipv6RouterSignature;
-    private string? _ipv6DhcpSignature;
-    private string? _ipv6NeighborSignature;
-    private string? _ipv6EventSignature;
+    private BaselineTable<Ipv6RouterRow>? _ipv6RouterTable;
+    private BlockTable<Ipv6DhcpRow>? _ipv6DhcpTable;
+    private BaselineTable<Ipv6NeighborRow>? _ipv6NeighborTable;
+    private EventTable<LanEventRow>? _ipv6EventTable;
     private string? _ipv6LastNotifiedId;
     private DateTime _ipv6LastNotifyUtc = DateTime.MinValue;
     private bool _ipv6BalloonPending;
@@ -252,19 +251,6 @@ public sealed partial class MainForm
         _lanIpv6Page.Controls.Add(split);
         _lanIpv6Page.Controls.Add(top);
 
-        _ipv6Timer = new System.Windows.Forms.Timer
-        {
-            Interval = Ipv6RefreshIntervalMs,
-            Enabled = _ipv6AutoRefreshCheckBox.Checked,
-        };
-        _ipv6Timer.Tick += (_, _) =>
-        {
-            if (_ipv6AutoRefreshCheckBox.Checked && IsLanIpv6Tab)
-            {
-                _ = RefreshIpv6Async();
-            }
-        };
-
         _ipv6NotifyTimer = new System.Windows.Forms.Timer { Interval = Ipv6NotifyIntervalMs };
         _ipv6NotifyTimer.Tick += (_, _) =>
         {
@@ -349,7 +335,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryIpv6Security },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -379,50 +365,40 @@ public sealed partial class MainForm
     private void RebuildIpv6View()
     {
         var routerRows = _ipv6Routers.Select(item => new Ipv6RouterRow(item)).ToList();
-        var routerSignature = string.Join(
-            "|",
-            routerRows.Select(row =>
-                $"{row.LinkLocal}/{row.Mac}/{row.Prefixes}/{row.Trusted}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}"));
 
-        if (!string.Equals(routerSignature, _ipv6RouterSignature, StringComparison.Ordinal))
-        {
-            _ipv6RouterSignature = routerSignature;
-            _ipv6RouterGrid.DataSource = routerRows;
-        }
+        _ipv6RouterTable ??= new BaselineTable<Ipv6RouterRow>(
+            _ipv6RouterGrid,
+            row => $"{row.LinkLocal}/{row.Mac}/{row.Prefixes}/{row.Trusted}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}",
+            row => row.LinkLocal);
+
+        _ipv6RouterTable.Bind(routerRows);
 
         var dhcpRows = _ipv6DhcpServers.Select(item => new Ipv6DhcpRow(item)).ToList();
-        var dhcpSignature = string.Join(
-            "|",
-            dhcpRows.Select(row =>
-                $"{row.ServerId}/{row.Address}/{row.Trusted}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}"));
 
-        if (!string.Equals(dhcpSignature, _ipv6DhcpSignature, StringComparison.Ordinal))
-        {
-            _ipv6DhcpSignature = dhcpSignature;
-            _ipv6DhcpGrid.DataSource = dhcpRows;
-        }
+        _ipv6DhcpTable ??= new BlockTable<Ipv6DhcpRow>(
+            _ipv6DhcpGrid,
+            row => $"{row.ServerId}/{row.Address}/{row.Trusted}/{row.Blocked}/{row.BlockExpiresUtc?.Ticks}",
+            row => row.ServerId);
+
+        _ipv6DhcpTable.Bind(dhcpRows);
 
         var neighborRows = _ipv6Neighbors.Select(item => new Ipv6NeighborRow(item)).ToList();
-        var neighborSignature = string.Join(
-            "|",
-            neighborRows.Select(row => $"{row.Address}/{row.Mac}"));
 
-        if (!string.Equals(neighborSignature, _ipv6NeighborSignature, StringComparison.Ordinal))
-        {
-            _ipv6NeighborSignature = neighborSignature;
-            _ipv6NeighborGrid.DataSource = neighborRows;
-        }
+        _ipv6NeighborTable ??= new BaselineTable<Ipv6NeighborRow>(
+            _ipv6NeighborGrid,
+            row => $"{row.Address}/{row.Mac}",
+            row => row.Address);
+
+        _ipv6NeighborTable.Bind(neighborRows);
 
         var eventRows = _ipv6Events.Select(item => new LanEventRow(item)).ToList();
-        var eventSignature = string.Join(
-            "|",
-            eventRows.Take(100).Select(row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}"));
 
-        if (!string.Equals(eventSignature, _ipv6EventSignature, StringComparison.Ordinal))
-        {
-            _ipv6EventSignature = eventSignature;
-            _ipv6EventGrid.DataSource = eventRows;
-        }
+        _ipv6EventTable ??= new EventTable<LanEventRow>(
+            _ipv6EventGrid,
+            row => $"{row.Id}/{row.Kind}/{row.TimeUtc.Ticks}",
+            row => row.Id);
+
+        _ipv6EventTable.Bind(eventRows);
 
         UpdateIpv6Summary();
         UpdateIpv6Buttons();
@@ -497,11 +473,7 @@ public sealed partial class MainForm
 
     private void OnIpv6AutoRefreshChanged(object? sender, EventArgs e)
     {
-        if (_ipv6Timer is not null)
-        {
-            _ipv6Timer.Enabled = _ipv6AutoRefreshCheckBox.Checked;
-        }
-
+        // 5.9：调度器读取复选框状态；这里只负责勾选后立刻刷新一次。
         if (_ipv6AutoRefreshCheckBox.Checked)
         {
             _ = RefreshIpv6Async();
@@ -547,10 +519,10 @@ public sealed partial class MainForm
                 return;
             }
 
-            _ipv6RouterSignature = null;
-            _ipv6DhcpSignature = null;
-            _ipv6NeighborSignature = null;
-            _ipv6EventSignature = null;
+            _ipv6RouterTable?.Invalidate();
+            _ipv6DhcpTable?.Invalidate();
+            _ipv6NeighborTable?.Invalidate();
+            _ipv6EventTable?.Invalidate();
             _ipv6Events = new List<LanEventDto>();
             _ipv6Status = response.Ipv6SecurityStatus ?? _ipv6Status;
             RebuildIpv6View();
@@ -603,10 +575,10 @@ public sealed partial class MainForm
                 return;
             }
 
-            _ipv6RouterSignature = null;
-            _ipv6DhcpSignature = null;
-            _ipv6NeighborSignature = null;
-            _ipv6EventSignature = null;
+            _ipv6RouterTable?.Invalidate();
+            _ipv6DhcpTable?.Invalidate();
+            _ipv6NeighborTable?.Invalidate();
+            _ipv6EventTable?.Invalidate();
             _ipv6Routers = new List<Ipv6RouterDto>();
             _ipv6DhcpServers = new List<Ipv6DhcpServerDto>();
             _ipv6Neighbors = new List<Ipv6NeighborDto>();
@@ -751,10 +723,10 @@ public sealed partial class MainForm
                 return;
             }
 
-            _ipv6RouterSignature = null;
-            _ipv6DhcpSignature = null;
-            _ipv6NeighborSignature = null;
-            _ipv6EventSignature = null;
+            _ipv6RouterTable?.Invalidate();
+            _ipv6DhcpTable?.Invalidate();
+            _ipv6NeighborTable?.Invalidate();
+            _ipv6EventTable?.Invalidate();
             _ipv6Routers = response.Ipv6Routers ?? _ipv6Routers;
             _ipv6DhcpServers = response.Ipv6DhcpServers ?? _ipv6DhcpServers;
             _ipv6Neighbors = response.Ipv6Neighbors ?? _ipv6Neighbors;
@@ -793,10 +765,10 @@ public sealed partial class MainForm
                 return;
             }
 
-            _ipv6RouterSignature = null;
-            _ipv6DhcpSignature = null;
-            _ipv6NeighborSignature = null;
-            _ipv6EventSignature = null;
+            _ipv6RouterTable?.Invalidate();
+            _ipv6DhcpTable?.Invalidate();
+            _ipv6NeighborTable?.Invalidate();
+            _ipv6EventTable?.Invalidate();
             _ipv6Routers = response.Ipv6Routers ?? _ipv6Routers;
             _ipv6DhcpServers = response.Ipv6DhcpServers ?? _ipv6DhcpServers;
             _ipv6Neighbors = response.Ipv6Neighbors ?? _ipv6Neighbors;

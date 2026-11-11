@@ -675,7 +675,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.GuardNewProgramBlock,
@@ -708,7 +708,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.GuardNewProgramRelease,

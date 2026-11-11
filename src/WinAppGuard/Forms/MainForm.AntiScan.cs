@@ -27,7 +27,6 @@ public sealed partial class MainForm
     private SplitContainer _antiSplit = null!;
     private DataGridViewBuffered _antiEventGrid = null!;
     private DataGridViewBuffered _antiBlockGrid = null!;
-    private System.Windows.Forms.Timer? _antiTimer;
 
     private List<AntiScanEventDto> _antiEvents = new();
     private List<AntiScanBlockDto> _antiBlocks = new();
@@ -35,8 +34,8 @@ public sealed partial class MainForm
     private AntiScanStatusDto? _antiStatus;
     private bool _antiLoading;
     private bool _antiServiceAvailable = true;
-    private string? _antiEventSignature;
-    private string? _antiBlockSignature;
+    private EventTable<AntiScanEventRow>? _antiEventTable;
+    private BlockTable<AntiScanBlockRow>? _antiBlockTable;
     private DateTime _npcapConnectingUntilUtc = DateTime.MinValue;
     private bool _npcapInstallerRunning;
 
@@ -208,7 +207,7 @@ public sealed partial class MainForm
             // 精确流量是独立的 Npcap 会话：同样清掉退避，装完驱动后不用等 30 秒。
             if (_trafficStatus?.Paused != true)
             {
-                var traffic = ServiceClient.TryRequest(
+                var traffic = Gateway.TryRequest(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.ConfigureTraffic,
@@ -660,16 +659,6 @@ public sealed partial class MainForm
             }
         };
 
-        _antiTimer = new System.Windows.Forms.Timer { Interval = AntiScanRefreshIntervalMs };
-        _antiTimer.Tick += (_, _) =>
-        {
-            if (IsProtectionTab(_tabScan))
-            {
-                _ = RefreshAntiScanAsync();
-            }
-        };
-        _antiTimer.Start();
-
         _antiSplit.Resize += (_, _) =>
         {
             if (_antiSplit.Height > 160)
@@ -778,7 +767,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = ServiceClient.TryRequest(
+            var response = Gateway.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryAntiScan },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -812,15 +801,12 @@ public sealed partial class MainForm
             .Select(item => new AntiScanEventRow(item))
             .ToList();
 
-        var eventSignature = string.Join(
-            "|",
-            events.Take(100).Select(row => $"{row.Id}/{row.Action}/{row.BlockedUntilUtc?.Ticks}"));
+        _antiEventTable ??= new EventTable<AntiScanEventRow>(
+            _antiEventGrid,
+            row => $"{row.Id}/{row.Action}/{row.BlockedUntilUtc?.Ticks}",
+            row => row.Id);
 
-        if (!string.Equals(eventSignature, _antiEventSignature, StringComparison.Ordinal))
-        {
-            _antiEventSignature = eventSignature;
-            _antiEventGrid.DataSource = events;
-        }
+        _antiEventTable.Bind(events);
 
         var blocks = _antiBlocks
             .Where(item => keyword.Length == 0
@@ -829,15 +815,12 @@ public sealed partial class MainForm
             .Select(item => new AntiScanBlockRow(item))
             .ToList();
 
-        var blockSignature = string.Join(
-            "|",
-            blocks.Take(100).Select(row => $"{row.Address}/{row.BlockedUntilUtc.Ticks}"));
+        _antiBlockTable ??= new BlockTable<AntiScanBlockRow>(
+            _antiBlockGrid,
+            row => $"{row.Address}/{row.BlockedUntilUtc.Ticks}",
+            row => row.Address);
 
-        if (!string.Equals(blockSignature, _antiBlockSignature, StringComparison.Ordinal))
-        {
-            _antiBlockSignature = blockSignature;
-            _antiBlockGrid.DataSource = blocks;
-        }
+        _antiBlockTable.Bind(blocks);
 
         UpdateAntiScanSummary();
         UpdateAntiScanButtons();
@@ -1140,8 +1123,8 @@ public sealed partial class MainForm
 
     private void ResetAntiScanSignatures()
     {
-        _antiEventSignature = null;
-        _antiBlockSignature = null;
+        _antiEventTable?.Invalidate();
+        _antiBlockTable?.Invalidate();
     }
 
     private const string AntiScanSeverityHigh = "high";

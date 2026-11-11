@@ -11,7 +11,7 @@
 WinAppGuard is a Windows firewall built on WFP. Instead of making you browse a program list, it shows the
 **TCP connections that are online right now** — start from “which program is online”, end at “blocked”.
 
-> **Current release: 5.8**
+> **Current release: 5.9**
 >
 > - Install/repair adds the install folder to the system PATH, so a new terminal can run `WinAppGuard` directly.
 > - Anti-network attack: Suricata 8.0.7 + ET Open, alerts only; you choose whether to apply a temporary WFP block.
@@ -208,6 +208,7 @@ deleted). To remove only WFP objects, run `WinAppGuard --recover` from an admini
 | [`docs/5.4-安装PATH.md`](docs/5.4-安装PATH.md) | Installer PATH behaviour and acceptance |
 | [`docs/5.7-数据出口与连接汇总.md`](docs/5.7-数据出口与连接汇总.md) | Connection summary, table export and diagnostic bundle |
 | [`docs/5.8-新程序联网提醒.md`](docs/5.8-新程序联网提醒.md) | New-program first-seen records, alerts and mark-all-read |
+| [`docs/5.9-架构统一.md`](docs/5.9-架构统一.md) | 5.9 architecture stages, compatibility constraints and test boundaries |
 | [`docs/测试用例.md`](docs/测试用例.md) | Test cases and measured results |
 
 More design documents: [`docs/`](docs/).

@@ -31,6 +31,10 @@ jobs:
       - name: 构建（Debug）
         run: dotnet build WinAppGuard.sln -c Debug --no-restore -warnaserror
 
+      # 5.9：纯逻辑架构测试（命令策略、状态文件、事件流、阻断注册表、基线）。
+      - name: 架构测试
+        run: dotnet test tests/WinAppGuard.Architecture.Tests/WinAppGuard.Architecture.Tests.csproj -c Debug --no-build --nologo
+
       # ⚠️ 这一步刻意**不加** --no-restore，也不能只靠上面那次 restore。
       #
       # 原因：WinAppGuard.csproj 里的 RuntimeIdentifier（win-x64）写在

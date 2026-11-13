@@ -59,11 +59,17 @@ internal sealed class ServiceSession : IDisposable
             }
         }
 
-        var payload = session.Send(request, timeout, out error);
+        var payload = session.Send(request, timeout, out error, out var retryable);
 
         if (payload is not null)
         {
             return payload;
+        }
+
+        // 只有传输层失败才重试；服务端已经给出业务响应时不能重放写命令。
+        if (!retryable)
+        {
+            return null;
         }
 
         // 连接可能已被服务端关闭：重连一次再试。
@@ -78,7 +84,7 @@ internal sealed class ServiceSession : IDisposable
         }
 
         _current = retry;
-        payload = retry.Send(request, timeout, out error);
+        payload = retry.Send(request, timeout, out error, out _);
 
         if (payload is null)
         {
@@ -164,13 +170,16 @@ internal sealed class ServiceSession : IDisposable
     private ResponsePayload? Send(
         ServiceRequest request,
         TimeSpan timeout,
-        out string? error)
+        out string? error,
+        out bool retryable)
     {
         error = null;
+        retryable = false;
 
         if (_pipe is null || _serverNonce is null)
         {
             error = "会话没有连接。";
+            retryable = true;
             return null;
         }
 
@@ -203,6 +212,7 @@ internal sealed class ServiceSession : IDisposable
             if (reply is null)
             {
                 error = "服务没有返回 v4 响应。";
+                retryable = true;
                 return null;
             }
 
@@ -246,6 +256,7 @@ internal sealed class ServiceSession : IDisposable
         catch (Exception ex)
         {
             error = $"{ex.GetType().Name}: {ex.Message}";
+            retryable = true;
             return null;
         }
     }

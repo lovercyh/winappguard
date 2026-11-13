@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 本文件记录所有值得注意的变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
@@ -14,30 +14,9 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
-## [5.10.2] - 2026-11-13
-
-> 修复 v3 客户端把正常服务误判为异常服务端的问题，并移除 v2 回退。
-
-### 已修正
-
-- 客户端不再打开 SYSTEM 服务进程令牌做身份校验；普通权限界面本来就没有这个权限。
-- 改为比较“管道服务端 PID”和“SCM 中 WinAppGuardSvc 的 PID”，两者一致才放行。
-- 移除 v2 回退：v3 有问题就修 v3，不再用 v2 掩盖。
-- 5.10.2 起界面只连接 `WinAppGuard.Control.v3`；旧 v2 服务需要先用 5.10.2 安装包修复/升级。
-
-## [5.10.1] - 2026-11-13
-
-> 修复 5.10.0 中界面误报“服务未运行”的问题。
-
-### 已修正
-
-- v3 客户端连接不存在时更快回退到 v2，避免界面状态探测超时。
-- 允许从 `dist` 运行的界面连接 `Program Files` 下的 v3 服务；安全边界仍要求服务端是 SYSTEM 且镜像名为 `WinAppGuardSvc.exe`。
-- 界面服务状态探测超时从 1.5 秒放宽到 2.5 秒。
-
 ## [5.10.0] - 2026-11-13
 
-> 协议 v3 与内部收口：v3 管道、握手、错误码、模块健康、规则读缓存和分层修正。
+> 协议 v3 与内部收口：v3 硬切、不再回退 v2；v3 客户端按 SCM 服务 PID 校验服务端身份。
 
 ### 新增 / 变更
 
@@ -48,23 +27,25 @@
   - 请求签名覆盖握手 nonce 与请求帧
   - 响应带 `errorCode`、`revision`、`data`
 - 新增 `status.modules`：12 个服务模块的状态、错误和重启次数。
+- 新增 `revision` / `revisionEpoch`；规则快照变化后单调递增。
 - UI 写命令改为异步网关调用，不再在 UI 线程等待 IPC；页面关闭时取消未完成请求。
-- 客户端校验管道对端：镜像路径必须在本安装目录，令牌必须是 SYSTEM。
+- v3 客户端不再回退 v2；5.10 界面只连接 v3，旧服务需要先用 5.10 安装包修复/升级。
+- 客户端校验服务端身份：
+  - 读取管道服务端 PID；
+  - 查询 SCM 中 `WinAppGuardSvc` 的 PID；
+  - 两者一致才放行，不要求普通用户打开 SYSTEM 进程令牌。
 - v3 会话限制每秒 50 个请求，超限返回 `RateLimited`。
-- 新增 `revision` 与 `revisionEpoch`；规则快照变化后单调递增。
 - 新增规则读缓存：规则列表不再每次重新枚举 WFP。
 - `CommandRouter` 移入服务层，Contracts 恢复纯契约。
 - `NameBlockRegistry` 改用统一 `ExpiringBlockRegistry`；IPv6 信任列表改用 `Baseline<string>`；页面调度器改用 `IClock`。
 - CLI JSON `schemaVersion` 升为 2。
 - 新增 `WinAppGuardSetup.exe --doctor`，检查协议版本、revision 和模块健康。
-- 旧 v2 服务在过渡期仍可由客户端回退连接；新服务只监听 v3。
 
 ### 说明
 
 - 磁盘数据格式不变；回滚到 5.9.2 只需替换二进制。
 - 仍保留 owner-only 管道 ACL 和写命令双闸。
-- 升级后请运行 `WinAppGuardSetup.exe --repair` 确保 UI/服务/CLI 同版本。
-
+- 升级后请运行 `WinAppGuardSetup.exe --repair`，确保界面、服务、CLI 都是 v3。
 ## [5.9.2] - 2026-11-11
 
 > 修复全新安装没有登记到 Windows「已安装的应用」的问题。

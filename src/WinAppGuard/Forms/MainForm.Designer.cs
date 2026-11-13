@@ -1411,7 +1411,7 @@ partial class MainForm
         // 这里用 Core.AppIcon 全限定名，是因为 Designer 文件不写 using，保持和自动生成代码一致的风格。
         _trayIcon.ContextMenuStrip = _trayMenu;
         _trayIcon.Icon = Core.AppIcon.Load(SystemInformation.SmallIconSize);
-        _trayIcon.Text = "WinAppGuard — 程序联网控制";
+        _trayIcon.Text = "WinAppGuard — 开源防火墙";
         _trayIcon.Visible = true;
         _trayIcon.DoubleClick += OnTrayShowClick;
 
@@ -1471,7 +1471,7 @@ partial class MainForm
         Name = "MainForm";
         KeyPreview = true;
         StartPosition = FormStartPosition.CenterScreen;
-        Text = "WinAppGuard — Windows 程序联网控制工具";
+        Text = "WinAppGuard — Windows 开源防火墙";
 
         _tabControl.ResumeLayout(false);
         _tabConnections.ResumeLayout(false);

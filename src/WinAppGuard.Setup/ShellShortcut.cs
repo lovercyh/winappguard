@@ -23,7 +23,7 @@ internal static class ShellShortcut
         {
             link.SetPath(targetPath);
             link.SetWorkingDirectory(Path.GetDirectoryName(targetPath) ?? string.Empty);
-            link.SetDescription("WinAppGuard —— 程序联网控制");
+            link.SetDescription("WinAppGuard —— 开源防火墙");
             link.SetIconLocation(targetPath, 0);
 
             ((IPersistFile)link).Save(DesktopShortcutPath, true);

@@ -22,7 +22,7 @@ public static class CliText
 
     private static string UsageZh { get; } = string.Join(Environment.NewLine, new[]
     {
-        "WinAppGuard —— Windows 程序联网控制工具（命令行模式）",
+        "WinAppGuard —— Windows 开源防火墙（命令行模式）",
         "",
         "  WinAppGuard.exe                              启动图形界面",
         "  WinAppGuard --version                    显示版本",

@@ -13,6 +13,9 @@ public static class ServiceProtocol
     /// <summary>管道名（不带 <c>\\.\pipe\</c> 前缀）。</summary>
     public const string PipeName = "WinAppGuard.Control.v4";
 
+    /// <summary>5.10/v3 的管道名。5.11 不再连接，只用于把“旧服务还在跑”说清楚。</summary>
+    public const string LegacyPipeName = "WinAppGuard.Control.v3";
+
     /// <summary>协议版本。5.11 起为 v4；不兼容的字段变化还必须继续 +1。</summary>
     public const int Version = 4;
 

@@ -104,7 +104,22 @@ internal sealed class ServiceSession : IDisposable
             using var cancellation = new CancellationTokenSource(timeout);
             _pipe = new NamedPipeClientStream(
                 ".", ServiceProtocol.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            _pipe.Connect((int)Math.Max(1, Math.Min(250, timeout.TotalMilliseconds)));
+
+            try
+            {
+                _pipe.Connect((int)Math.Max(1, Math.Min(250, timeout.TotalMilliseconds)));
+            }
+            catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
+            {
+                // v4 管道不存在时，区分“服务没装/没启动”和“旧版 v3 服务还在跑”。
+                // 后者是 5.11 硬切换后的常见现场：界面已经升级，服务还没有。
+                error = LegacyServicePresent()
+                    ? $"检测到旧版防护服务（{ServiceProtocol.LegacyPipeName}）。"
+                      + "当前界面是 5.11 / 协议 v4，请以管理员身份运行 "
+                      + "WinAppGuardSetup.exe --install 升级服务。"
+                    : $"{ex.GetType().Name}: {ex.Message}";
+                return false;
+            }
 
             if (!ServerIdentity.IsExpectedServer(
                     _pipe.SafePipeHandle.DangerousGetHandle(), out var identityError))
@@ -163,6 +178,22 @@ internal sealed class ServiceSession : IDisposable
         catch (Exception ex)
         {
             error = $"{ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>本机是否还有 5.10/v3 的控制管道（只读探测，不连接）。</summary>
+    private static bool LegacyServicePresent()
+    {
+        try
+        {
+            return Directory
+                .GetFiles(@"\\.\pipe\")
+                .Any(path => path.EndsWith(
+                    ServiceProtocol.LegacyPipeName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception)
+        {
             return false;
         }
     }

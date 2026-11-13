@@ -5430,7 +5430,7 @@ public partial class MainForm : Form
     {
         _ = Task.Run(() =>
         {
-            var status = Gateway.TryGetStatus(TimeSpan.FromSeconds(2.5));
+            var status = Gateway.TryGetStatus(TimeSpan.FromSeconds(2.5), out var statusError);
 
             try
             {
@@ -5441,7 +5441,7 @@ public partial class MainForm : Form
 
                 BeginInvoke(new Action(() =>
                 {
-                    UpdateServiceStatusLabel(status);
+                    UpdateServiceStatusLabel(status, statusError);
 
                     // 服务从"不通"变成"通"：自动把规则页从只读恢复成可编辑，
                     // 不需要用户手动点刷新（服务延迟启动时很常见）。
@@ -5450,6 +5450,7 @@ public partial class MainForm : Form
                         RefreshRulesFromFirewall();
                     }
                     else if (status is null
+                             && !IsLegacyServiceMismatch(statusError)
                              && ProtectedModeClient.CurrentStatus.State
                                 == ProtectedModeState.Ready)
                     {
@@ -5467,13 +5468,53 @@ public partial class MainForm : Form
         });
     }
 
+    /// <summary>5.11：机器上还跑着 5.10/v3 服务时的专用提示。</summary>
+    private static bool IsLegacyServiceMismatch(string? error)
+        => error is not null
+           && error.Contains(
+               ServiceProtocol.LegacyPipeName, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>更新服务状态标签（自检直接调用它验证两种状态）。</summary>
-    internal void UpdateServiceStatusLabel(ServiceStatus? status)
+    internal void UpdateServiceStatusLabel(ServiceStatus? status, string? error = null)
     {
         UpdateNpcapStatusLabel(status);
 
         if (status is null)
         {
+            // 5.11 硬切换后最常见现场：界面已升级到 v4，机器上还是 5.10/v3 服务。
+            // 这时服务明明在运行，不能再显示“未运行/点击启动”误导用户。
+            if (IsLegacyServiceMismatch(error))
+            {
+                const string mismatchReason = "防护服务版本不匹配（旧版 v3 仍在运行）";
+
+                _serviceStatusLabel.Text =
+                    Localizer.T("服务：旧版服务仍在运行（协议 v3）—— 需要升级");
+                _serviceStatusLabel.ForeColor = Color.FromArgb(180, 60, 0);
+                _serviceStatusLabel.IsLink = false;
+                _serviceStatusLabel.ToolTipText = Localizer.T(
+                    "检测到旧版防护服务（WinAppGuard.Control.v3），它仍在运行。\n"
+                    + "5.11 使用协议 v4，不能连接旧服务。\n"
+                    + "请以管理员身份运行 WinAppGuardSetup.exe --install 升级服务。");
+
+                _serviceAvailable = false;
+                _statusRulesLabel.Text = Localizer.T("防护服务版本不匹配（规则只读）");
+                MarkRulesReadOnly(mismatchReason);
+                UpdateRulesActionState();
+                UpdateWhitelistActionState();
+                UpdateActionState();
+
+                _strictModeEnabled = false;
+                _strictModePermittedCount = 0;
+                _dnsCollecting = false;
+                NotifyLockdownEndedByService();
+                RefreshStrictModeStatus();
+
+                _auditCollecting = false;
+                UpdateAuditControlsEnabled();
+                UpdateAuditStatusLabel();
+                return;
+            }
+
             // 3.1：先说明“为什么连不上”——不是所有者 / 密钥不可用 / 未初始化，
             // 而不是一律显示“服务未运行”，让用户去点启动。
             var protectedMode = ProtectedModeClient.CurrentStatus;

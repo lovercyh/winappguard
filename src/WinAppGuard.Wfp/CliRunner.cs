@@ -1658,13 +1658,14 @@ internal static class CliRunner
     private static int RunDoctor(CommandLineOptions options)
     {
         var checks = new List<DoctorCheck>();
-        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(5));
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(5), out var statusError);
 
         checks.Add(new DoctorCheck(
             "service",
             status is null ? "FAIL" : "OK",
             status is null
-                ? (Localizer.IsEnglish ? "Service is not responding." : "服务没有响应。")
+                ? statusError
+                  ?? (Localizer.IsEnglish ? "Service is not responding." : "服务没有响应。")
                 : (Localizer.IsEnglish ? "Service is running." : "服务正在运行。")));
 
         // 离线契约校验：每条命令都必须有明确的 v4 请求/响应载荷。

@@ -31,10 +31,15 @@ public static class ServiceClient
         => Volatile.Write(ref _signer, signer);
 
     public static ServiceStatus? TryGetStatus(TimeSpan timeout)
+        => TryGetStatus(timeout, out _);
+
+    /// <summary>读取状态；失败时通过 <paramref name="error"/> 说明为什么连不上。</summary>
+    public static ServiceStatus? TryGetStatus(TimeSpan timeout, out string? error)
     {
         var response = TryRequestAs<StatusView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.Status },
-            timeout);
+            timeout,
+            out error);
 
         return response is { Ok: true } ? response.Status : null;
     }

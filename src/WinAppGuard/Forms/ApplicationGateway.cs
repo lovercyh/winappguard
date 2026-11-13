@@ -44,6 +44,8 @@ internal interface IApplicationGateway
 
     ServiceStatus? TryGetStatus(TimeSpan timeout);
 
+    ServiceStatus? TryGetStatus(TimeSpan timeout, out string? error);
+
     QueryView? TryQuery(ServiceRequest request, TimeSpan timeout, out string? error);
 
     TrafficView? TryTraffic(ServiceRequest request, TimeSpan timeout, out string? error);
@@ -83,7 +85,10 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
         => ElevatedClient.TryRequest(request, out error);
 
     public ServiceStatus? TryGetStatus(TimeSpan timeout)
-        => ServiceClient.TryGetStatus(timeout);
+        => ServiceClient.TryGetStatus(timeout, out _);
+
+    public ServiceStatus? TryGetStatus(TimeSpan timeout, out string? error)
+        => ServiceClient.TryGetStatus(timeout, out error);
 
     public QueryView? TryQuery(
         ServiceRequest request, TimeSpan timeout, out string? error)

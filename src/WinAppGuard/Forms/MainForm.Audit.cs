@@ -361,7 +361,7 @@ public sealed partial class MainForm
         _auditClearButton.Enabled = _serviceAvailable;
     }
 
-    private void OnAuditEnabledChanged(object? sender, EventArgs e)
+    private async void OnAuditEnabledChanged(object? sender, EventArgs e)
     {
         if (_loadingAuditSettings)
         {
@@ -384,7 +384,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = CallService(
+        var response = await CallServiceAsync(
             ServiceProtocol.Commands.AuditConfigure,
             new ServiceRequest { AuditEnabled = desired },
             "修改记录设置");
@@ -457,7 +457,7 @@ public sealed partial class MainForm
     /// 为什么必须让服务重建：保留期是 <c>AuditService</c> 的构造参数；
     /// 不重建的话，界面显示"保留 1 天"、实际仍按 7 天清理 —— 那就是**假开关**。
     /// </summary>
-    private void OnAuditRetentionChanged(object? sender, EventArgs e)
+    private async void OnAuditRetentionChanged(object? sender, EventArgs e)
     {
         if (_loadingAuditSettings)
         {
@@ -483,7 +483,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = CallService(
+        var response = await CallServiceAsync(
             ServiceProtocol.Commands.AuditConfigure,
             new ServiceRequest { AuditRetentionDays = days },
             "修改记录保留期");
@@ -509,7 +509,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnAuditDomainChanged(object? sender, EventArgs e)
+    private async void OnAuditDomainChanged(object? sender, EventArgs e)
     {
         if (_loadingAuditSettings)
         {
@@ -530,7 +530,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = CallService(
+        var response = await CallServiceAsync(
             ServiceProtocol.Commands.AuditConfigure,
             new ServiceRequest { AuditDomainLookup = desired },
             "修改域名推测设置");
@@ -871,7 +871,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnAuditClearClick(object? sender, EventArgs e)
+    private async void OnAuditClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -896,7 +896,7 @@ public sealed partial class MainForm
 
         // 3.0-c：采集在服务里，删除也必须由服务做 ——
         // 它开着写入端时 Windows 不允许删除这些文件。
-        var response = CallService(
+        var response = await CallServiceAsync(
             ServiceProtocol.Commands.AuditClear,
             new ServiceRequest(),
             "清空记录");
@@ -993,7 +993,7 @@ public sealed partial class MainForm
     ///
     /// 必须在确认框里写清"拦的是 IP，不是网站"：同一个 IP 上的其它服务会一起被拦。
     /// </summary>
-    private void BlockIpWithConfirmation(string ipText)
+    private async void BlockIpWithConfirmation(string ipText)
     {
         if (!System.Net.IPAddress.TryParse(ipText, out var address))
         {
@@ -1032,7 +1032,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.AddIpRule,
                 new ServiceRequest { Value = normalized },
                 "封禁 IP");

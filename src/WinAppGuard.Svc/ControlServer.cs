@@ -410,9 +410,25 @@ internal sealed class ControlServer : IDisposable
         var expectedSeq = 1L;
         var sessionExpiresUtc = DateTime.UtcNow.AddMinutes(5);
         var nonceBytes = Encoding.UTF8.GetBytes(serverNonce);
+        var rateWindowStartUtc = DateTime.UtcNow;
+        var requestCountInWindow = 0;
 
         while (!serverToken.IsCancellationRequested)
         {
+            var now = DateTime.UtcNow;
+
+            if (now - rateWindowStartUtc >= TimeSpan.FromSeconds(1))
+            {
+                rateWindowStartUtc = now;
+                requestCountInWindow = 0;
+            }
+
+            if (++requestCountInWindow > 50)
+            {
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.RateLimited, "请求过于频繁。");
+                break;
+            }
+
             ProtocolMessage? frame;
 
             try

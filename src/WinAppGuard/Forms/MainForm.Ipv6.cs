@@ -480,7 +480,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnIpv6ClearClick(object? sender, EventArgs e)
+    private async void OnIpv6ClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -509,7 +509,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearIpv6Security,
                 new ServiceRequest(),
                 Localizer.T("清空 IPv6 邻接告警"));
@@ -536,7 +536,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnIpv6ResetBaselineClick(object? sender, EventArgs e)
+    private async void OnIpv6ResetBaselineClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -565,7 +565,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ResetIpv6Baseline,
                 new ServiceRequest(),
                 Localizer.T("重置 IPv6 基线"));
@@ -703,11 +703,11 @@ public sealed partial class MainForm
         ApplyIpv6Block("ra", row.LinkLocal, enabling);
     }
 
-    private void ApplyIpv6Block(string kind, string address, bool enabling)
+    private async void ApplyIpv6Block(string kind, string address, bool enabling)
     {
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.BlockIpv6,
                 new ServiceRequest
                 {
@@ -745,11 +745,11 @@ public sealed partial class MainForm
         }
     }
 
-    private void TrustIpv6(string kind, string value, string? mac, bool enabled)
+    private async void TrustIpv6(string kind, string value, string? mac, bool enabled)
     {
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.TrustIpv6,
                 new ServiceRequest
                 {

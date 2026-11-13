@@ -614,13 +614,13 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnTrafficPauseClick(object? sender, EventArgs e)
+    private async void OnTrafficPauseClick(object? sender, EventArgs e)
     {
         var paused = _trafficStatus?.Paused != true;
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ConfigureTraffic,
                 new ServiceRequest { TrafficPaused = paused },
                 Localizer.T(paused ? "暂停精确流量统计" : "继续精确流量统计"));
@@ -650,7 +650,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnTrafficClearClick(object? sender, EventArgs e)
+    private async void OnTrafficClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -677,7 +677,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearTraffic,
                 new ServiceRequest(),
                 "清空流量统计");

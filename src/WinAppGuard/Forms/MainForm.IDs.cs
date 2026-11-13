@@ -581,7 +581,7 @@ public sealed partial class MainForm
         _idsSummaryLabel.Text = text;
     }
 
-    private void UpdateIdsButtons()
+    private async void UpdateIdsButtons()
     {
         var selected = SelectedIdsRow();
         var available = !_idsLoading && _idsServiceAvailable;
@@ -601,7 +601,7 @@ public sealed partial class MainForm
 
     // ---------------- 操作 ----------------
 
-    private void OnIdsAckClick(object? sender, EventArgs e)
+    private async void OnIdsAckClick(object? sender, EventArgs e)
     {
         var row = SelectedIdsRow();
 
@@ -612,7 +612,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallAlertService(
+            var response = await CallAlertServiceAsync(
                 ServiceProtocol.Commands.AlertIdsAck,
                 new ServiceRequest { IdsAlertId = row.Id },
                 Localizer.T("标记 IDS 告警为已读"));
@@ -641,7 +641,7 @@ public sealed partial class MainForm
     }
 
     /// <summary>5.8：一键把当前所有未读 IDS 告警标记为已读。</summary>
-    private void OnIdsAckAllClick(object? sender, EventArgs e)
+    private async void OnIdsAckAllClick(object? sender, EventArgs e)
     {
         if (!_idsAlerts.Any(alert => alert.Status == "new"))
         {
@@ -650,7 +650,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallAlertService(
+            var response = await CallAlertServiceAsync(
                 ServiceProtocol.Commands.AlertIdsAckAll,
                 new ServiceRequest(),
                 Localizer.T("全部标记 IDS 告警为已读"));
@@ -677,7 +677,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnIdsSuppressClick(object? sender, EventArgs e)
+    private async void OnIdsSuppressClick(object? sender, EventArgs e)
     {
         var row = SelectedIdsRow();
 
@@ -717,11 +717,11 @@ public sealed partial class MainForm
             // 5.2：1 小时 / 24 小时只改告警可见性，免 UAC；
             // 永久不再提醒会长期改变检测可见性，仍然走提权路径。
             var response = permanent
-                ? CallService(
+                ? await CallServiceAsync(
                     ServiceProtocol.Commands.IdsSuppress,
                     request,
                     Localizer.T("设置永久不再提醒"))
-                : CallAlertService(
+                : await CallAlertServiceAsync(
                     ServiceProtocol.Commands.AlertIdsSuppress,
                     request,
                     Localizer.T("设置同类告警不再提醒"));
@@ -751,7 +751,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnIdsSettingsClick(object? sender, EventArgs e)
+    private async void OnIdsSettingsClick(object? sender, EventArgs e)
     {
         var current = _idsSettings ?? new IdsSettingsDto();
         var result = IdsSettingsForm.Ask(DialogOwner, current, _idsSuppressions);
@@ -766,7 +766,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.IdsConfigure,
                 new ServiceRequest
                 {
@@ -805,7 +805,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnIdsClearClick(object? sender, EventArgs e)
+    private async void OnIdsClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -830,7 +830,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallAlertService(
+            var response = await CallAlertServiceAsync(
                 ServiceProtocol.Commands.AlertIdsClear,
                 new ServiceRequest(),
                 Localizer.T("清空 IDS 告警"));

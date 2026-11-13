@@ -522,7 +522,7 @@ public sealed partial class MainForm
             ? _ndAlerts.FirstOrDefault(alert => string.Equals(alert.Id, row.Id, StringComparison.Ordinal))
             : null;
 
-    private void OnNetworkAckClick(object? sender, EventArgs e)
+    private async void OnNetworkAckClick(object? sender, EventArgs e)
     {
         var alert = SelectedNetworkAlert();
 
@@ -531,7 +531,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = CallAlertService(
+        var response = await CallAlertServiceAsync(
             ServiceProtocol.Commands.AlertNetworkAck,
             new ServiceRequest { NetworkAlertId = alert.Id },
             Localizer.T("标记反网络攻击告警为已读"));
@@ -546,14 +546,14 @@ public sealed partial class MainForm
     }
 
     /// <summary>5.8：一键把当前所有未读反网络攻击告警标记为已读。</summary>
-    private void OnNetworkAckAllClick(object? sender, EventArgs e)
+    private async void OnNetworkAckAllClick(object? sender, EventArgs e)
     {
         if (!_ndAlerts.Any(alert => alert.Status == "new"))
         {
             return;
         }
 
-        var response = CallAlertService(
+        var response = await CallAlertServiceAsync(
             ServiceProtocol.Commands.AlertNetworkAckAll,
             new ServiceRequest(),
             Localizer.T("全部标记反网络攻击告警为已读"));
@@ -700,7 +700,7 @@ public sealed partial class MainForm
         RefreshNetworkDetection();
     }
 
-    private void OnNetworkClearClick(object? sender, EventArgs e)
+    private async void OnNetworkClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             DialogOwner,
@@ -718,7 +718,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = CallAlertService(
+        var response = await CallAlertServiceAsync(
             ServiceProtocol.Commands.AlertNetworkClear,
             new ServiceRequest(),
             Localizer.T("清空反网络攻击告警"));

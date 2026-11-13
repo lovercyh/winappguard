@@ -589,11 +589,11 @@ public sealed partial class MainForm
             _lanBlockEnabledCheck.Checked);
     }
 
-    private void SaveLanSettings(int retentionDays, bool blockEnabled)
+    private async void SaveLanSettings(int retentionDays, bool blockEnabled)
     {
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ConfigureLan,
                 new ServiceRequest
                 {
@@ -622,7 +622,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnLanClearClick(object? sender, EventArgs e)
+    private async void OnLanClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -647,7 +647,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearLan,
                 new ServiceRequest(),
                 Localizer.T("清空局域网告警"));
@@ -670,7 +670,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnLanResetBaselineClick(object? sender, EventArgs e)
+    private async void OnLanResetBaselineClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -695,7 +695,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ResetLanBaseline,
                 new ServiceRequest(),
                 Localizer.T("重置局域网基线"));
@@ -738,11 +738,11 @@ public sealed partial class MainForm
         TrustLan("dhcp", row.ServerIp, Localizer.T("信任此 DHCP 服务器"));
     }
 
-    private void TrustLan(string kind, string value, string action)
+    private async void TrustLan(string kind, string value, string action)
     {
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.TrustLan,
                 new ServiceRequest { LanTrustKind = kind, LanTrustValue = value },
                 action);
@@ -765,7 +765,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnLanBlockDhcpClick(object? sender, EventArgs e)
+    private async void OnLanBlockDhcpClick(object? sender, EventArgs e)
     {
         if (_lanDhcpGrid.CurrentRow?.DataBoundItem is not LanDhcpRow row)
         {
@@ -801,7 +801,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.BlockLanDhcp,
                 new ServiceRequest { LanBlockServerIp = row.ServerIp, LanBlockEnabled = blocking },
                 Localizer.T(blocking ? "临时阻断 DHCP 服务器" : "解除 DHCP 阻断"));

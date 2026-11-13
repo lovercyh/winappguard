@@ -306,7 +306,7 @@ public sealed partial class MainForm
         _nameAutoRefreshCheckBox.Enabled = available;
     }
 
-    private void OnNameClearClick(object? sender, EventArgs e)
+    private async void OnNameClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -335,7 +335,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearNameResolution,
                 new ServiceRequest(),
                 Localizer.T("清空名称解析事件"));
@@ -361,7 +361,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnNameBlockClick(object? sender, EventArgs e)
+    private async void OnNameBlockClick(object? sender, EventArgs e)
     {
         if (_nameSourceGrid.CurrentRow?.DataBoundItem is not NameSourceRow row)
         {
@@ -400,7 +400,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.BlockNameSource,
                 new ServiceRequest
                 {

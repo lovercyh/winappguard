@@ -27,6 +27,9 @@
   - 请求签名覆盖握手 nonce 与请求帧
   - 响应带 `errorCode`、`revision`、`data`
 - 新增 `status.modules`：12 个服务模块的状态、错误和重启次数。
+- UI 写命令改为异步网关调用，不再在 UI 线程等待 IPC；页面关闭时取消未完成请求。
+- 客户端校验管道对端：镜像路径必须在本安装目录，令牌必须是 SYSTEM。
+- v3 会话限制每秒 50 个请求，超限返回 `RateLimited`。
 - 新增 `revision` 与 `revisionEpoch`；规则快照变化后单调递增。
 - 新增规则读缓存：规则列表不再每次重新枚举 WFP。
 - `CommandRouter` 移入服务层，Contracts 恢复纯契约。

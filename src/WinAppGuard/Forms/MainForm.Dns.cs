@@ -310,7 +310,7 @@ public sealed partial class MainForm
                 : Localizer.F("DNS 采集：运行中 · 显示 {0} / 共 {1} 条", shown, _dnsRecords.Count);
     }
 
-    private void OnDnsClearClick(object? sender, EventArgs e)
+    private async void OnDnsClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -335,7 +335,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearDns,
                 new ServiceRequest(),
                 "清空 DNS 记录");

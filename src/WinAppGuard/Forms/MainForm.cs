@@ -36,6 +36,9 @@ public partial class MainForm : Form
     /// <summary>5.9：可见页刷新统一调度器。</summary>
     private UiRefreshScheduler? _uiScheduler;
 
+    /// <summary>5.10：页面异步请求的生命周期取消源。</summary>
+    private readonly CancellationTokenSource _uiCancellation = new();
+
     /// <summary>自动刷新间隔（毫秒）。</summary>
     private const int AutoRefreshIntervalMs = 3000;
 
@@ -571,6 +574,8 @@ public partial class MainForm : Form
 
         // 真正退出：停掉统一页面刷新调度器（采集在服务里，不随界面退出停止）。
         _uiScheduler?.Dispose();
+        _uiCancellation.Cancel();
+        _uiCancellation.Dispose();
         _auditStore.Dispose();
 
         // 5.8：新程序默认阻止是服务里的临时动态过滤器；界面退出时主动释放，
@@ -1306,23 +1311,37 @@ public partial class MainForm : Form
     /// 发一条写命令；失败时弹出原因并返回 null。
     /// 统一在这里处理"服务没起 / 未提权 / 服务拒绝"，避免每个调用点各写一遍。
     /// </summary>
-    private ServiceResponse? CallService(string command, ServiceRequest request, string actionName)
+    private async Task<ServiceResponse?> CallServiceAsync(
+        string command, ServiceRequest request, string actionName)
     {
         request.Command = command;
 
-        ServiceResponse? response;
-        string? error;
+        GatewayResult result;
 
         if (Gateway.IsRunningAsAdmin)
         {
-            response = Gateway.TryRequest(
-                request, TimeSpan.FromSeconds(5), out error);
+            result = await Gateway.TryRequestAsync(
+                request, TimeSpan.FromSeconds(5), _uiCancellation.Token);
         }
         else
         {
             // 普通权限：写操作走一次 UAC（提权助手 = WinAppGuardSvc.exe --elevated-ipc）。
-            response = Gateway.TryElevatedRequest(request, out error);
+            result = await Gateway.TryElevatedRequestAsync(
+                request, _uiCancellation.Token);
         }
+
+        if (result.Cancelled)
+        {
+            return null;
+        }
+
+        if (IsDisposed || Disposing)
+        {
+            return null;
+        }
+
+        var response = result.Response;
+        var error = result.Error;
 
         if (response is { Ok: true })
         {
@@ -1359,13 +1378,26 @@ public partial class MainForm : Form
     /// 不碰 WFP、拦截和设置。服务端只对 <c>alert.*</c> 精确放行，
     /// 系统变更命令仍然必须提权。
     /// </summary>
-    private ServiceResponse? CallAlertService(
+    private async Task<ServiceResponse?> CallAlertServiceAsync(
         string command, ServiceRequest request, string actionName)
     {
         request.Command = command;
 
-        var response = Gateway.TryRequest(
-            request, TimeSpan.FromSeconds(5), out var error);
+        var result = await Gateway.TryRequestAsync(
+            request, TimeSpan.FromSeconds(5), _uiCancellation.Token);
+
+        if (result.Cancelled)
+        {
+            return null;
+        }
+
+        if (IsDisposed || Disposing)
+        {
+            return null;
+        }
+
+        var response = result.Response;
+        var error = result.Error;
 
         if (response is { Ok: true })
         {
@@ -2265,7 +2297,7 @@ public partial class MainForm : Form
     /// 为什么必须有这个入口：严格模式开启后，没进白名单的程序**连不上网**，
     /// 因此也不会出现在「联网连接」页里 —— 用户会被"想加白名单却找不到它"卡死。
     /// </summary>
-    private void OnWhitelistAddButtonClick(object? sender, EventArgs e)
+    private async void OnWhitelistAddButtonClick(object? sender, EventArgs e)
     {
         using var dialog = new OpenFileDialog
         {
@@ -2319,7 +2351,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -2345,7 +2377,7 @@ public partial class MainForm : Form
     }
 
     /// <summary>把选中的程序移出白名单（= 删除那条允许规则）。</summary>
-    private void OnWhitelistRemoveButtonClick(object? sender, EventArgs e)
+    private async void OnWhitelistRemoveButtonClick(object? sender, EventArgs e)
     {
         var rule = GetConfirmedWhitelistRule();
 
@@ -2386,7 +2418,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = rule.Name },
                 "移出白名单");
@@ -2406,7 +2438,7 @@ public partial class MainForm : Form
     }
 
     /// <summary>清空白名单（删除全部允许规则）。严格模式开启时会让这些程序立刻断网，必须写清楚。</summary>
-    private void OnWhitelistClearButtonClick(object? sender, EventArgs e)
+    private async void OnWhitelistClearButtonClick(object? sender, EventArgs e)
     {
         var rules = _whitelistRules;
 
@@ -2454,7 +2486,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearWhitelist,
                 new ServiceRequest(),
                 "清空白名单");
@@ -2484,7 +2516,7 @@ public partial class MainForm : Form
         => AssignGroupToRule(GetConfirmedWhitelistRule());
 
     /// <summary>给一条规则设置分组（空字符串 = 未分组）。</summary>
-    private void AssignGroupToRule(FirewallRuleItem? rule)
+    private async void AssignGroupToRule(FirewallRuleItem? rule)
     {
         if (rule is null)
         {
@@ -2505,7 +2537,7 @@ public partial class MainForm : Form
             return;
         }
 
-        var response = CallService(
+        var response = await CallServiceAsync(
             ServiceProtocol.Commands.SetGroup,
             new ServiceRequest { RuleName = rule.Name, Group = group },
             "修改分组");
@@ -2713,9 +2745,9 @@ public partial class MainForm : Form
     /// 真正创建导入的规则：**交给服务端**整份校验并落盘（3.0-b）。
     /// 界面只负责预览与确认，不再自己创建规则 —— 受保护程序、路径校验都在服务里。
     /// </summary>
-    private void ApplyImportedRules(FirewallAction scope, string json)
+    private async void ApplyImportedRules(FirewallAction scope, string json)
     {
-        var response = CallService(
+        var response = await CallServiceAsync(
             ServiceProtocol.Commands.ImportRules,
             new ServiceRequest
             {
@@ -3703,7 +3735,7 @@ public partial class MainForm : Form
     /// <summary>
     /// 阻止一个程序联网。连接页和新程序提醒页共用同一套确认与写规则逻辑。
     /// </summary>
-    private void BlockProgramWithConfirmation(
+    private async void BlockProgramWithConfirmation(
         string programPath,
         string programName,
         int connectionCount)
@@ -3756,7 +3788,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -3784,7 +3816,7 @@ public partial class MainForm : Form
         }
     }
 
-    private void OnAllowButtonClick(object? sender, EventArgs e)
+    private async void OnAllowButtonClick(object? sender, EventArgs e)
     {
         var item = GetConfirmedConnection();
         if (item is null || string.IsNullOrEmpty(item.ProcessPath))
@@ -3792,7 +3824,7 @@ public partial class MainForm : Form
             return;
         }
 
-        ConfirmAndAllowProgram(item.ProcessPath, item.ProcessName);
+        await ConfirmAndAllowProgram(item.ProcessPath, item.ProcessName);
     }
 
     /// <summary>「规则」页：允许选中的规则对应的程序联网。</summary>
@@ -3802,7 +3834,7 @@ public partial class MainForm : Form
     /// 为什么要有：有些程序只在后台悄悄联网，连接页不一定抓得到；
     /// 而且白名单页有「添加程序…」，两边对称才不会让人觉得"为什么那边能加、这边不能"。
     /// </summary>
-    private void OnRulesAddButtonClick(object? sender, EventArgs e)
+    private async void OnRulesAddButtonClick(object? sender, EventArgs e)
     {
         using var dialog = new OpenFileDialog
         {
@@ -3869,7 +3901,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -3901,7 +3933,7 @@ public partial class MainForm : Form
     /// 点一次「解除阻止」不应该顺手把程序踢出白名单。
     /// </summary>
     /// <returns>确实执行了删除返回 true；用户取消或无事可做返回 false。</returns>
-    private bool ConfirmAndAllowProgram(string programPath, string programName)
+    private async Task<bool> ConfirmAndAllowProgram(string programPath, string programName)
     {
         var rulesForProgram = _appGuardRules
             .Where(rule => rule.Action == FirewallAction.Block
@@ -3953,7 +3985,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.DeleteRulesForProgram,
                 new ServiceRequest { Value = programPath },
                 "允许联网");
@@ -4028,7 +4060,7 @@ public partial class MainForm : Form
     }
 
     /// <summary>把程序加入白名单 —— 为它建一条「允许出站」的防火墙规则。</summary>
-    private void AddToWhitelist(string programPath, string programName)
+    private async void AddToWhitelist(string programPath, string programName)
     {
         var ruleName = RuleNaming.BuildAllowRuleName(programPath);
 
@@ -4067,7 +4099,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -4098,7 +4130,7 @@ public partial class MainForm : Form
     /// 只会删以 AppGuard_Allow_ 开头、且属于这个程序的那一条：
     /// 别人的规则我们碰都不碰（<see cref="RuleEngine.DeleteRule"/> 只删本程序写进 WFP 的规则）。
     /// </summary>
-    private void RemoveFromWhitelist(string programPath, string programName)
+    private async void RemoveFromWhitelist(string programPath, string programName)
     {
         var ruleName = RuleNaming.BuildAllowRuleName(programPath);
 
@@ -4139,7 +4171,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = ruleName },
                 "移出白名单");
@@ -4161,7 +4193,7 @@ public partial class MainForm : Form
     }
 
     /// <summary>「规则」页：只删除选中的那一条规则。</summary>
-    private void OnRulesDeleteButtonClick(object? sender, EventArgs e)
+    private async void OnRulesDeleteButtonClick(object? sender, EventArgs e)
     {
         var rule = GetConfirmedRule();
         if (rule is null)
@@ -4201,7 +4233,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = rule.Name },
                 "删除规则");
@@ -4224,7 +4256,7 @@ public partial class MainForm : Form
     /// 托盘菜单：清空全部规则（黑名单 + 白名单一起删）。
     /// 这是不可撤销的批量操作，所以需要**连续确认两次**。
     /// </summary>
-    private void OnRulesDeleteAllButtonClick(object? sender, EventArgs e)
+    private async void OnRulesDeleteAllButtonClick(object? sender, EventArgs e)
     {
         // 黑名单页的「清空」只删**阻止**规则；白名单在另一页，各自管各自的。
         var rules = _rules;
@@ -4296,7 +4328,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearBlocklist,
                 new ServiceRequest(),
                 "清空黑名单");
@@ -5841,7 +5873,7 @@ public partial class MainForm : Form
     /// 只做**一次**确认：它有时限、可提前结束、服务停止也会恢复，
     /// 后果不像「永久阻止」那样重；但清单和自动恢复规则必须讲清楚。
     /// </summary>
-    private void StartLockdown(TimeSpan duration)
+    private async void StartLockdown(TimeSpan duration)
     {
         if (!_serviceAvailable)
         {
@@ -5901,7 +5933,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.StrictLockdown,
                 new ServiceRequest { LockdownSeconds = (int)duration.TotalSeconds },
                 "临时锁网");
@@ -5958,7 +5990,7 @@ public partial class MainForm : Form
     }
 
     /// <summary>关闭严格模式。这是"安全方向"的操作，所以只要一次确认。</summary>
-    private void DisableStrictMode()
+    private async void DisableStrictMode()
     {
         var wasLockdown = _lockdownActive;
 
@@ -5986,7 +6018,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.StrictDisable,
                 new ServiceRequest(),
                 "关闭严格模式");
@@ -6025,7 +6057,7 @@ public partial class MainForm : Form
     /// 而用户手上可能正开着浏览器、正连着 VPN。第一次讲清后果，
     /// 第二次把**会被影响的具体程序清单**摊开，让他有机会先去放行。
     /// </summary>
-    private void EnableStrictModeWithConfirmation()
+    private async void EnableStrictModeWithConfirmation()
     {
         // 先把"会影响哪些程序"算出来 —— 两次确认都要用。
         var affected = BuildProgramsThatWillLoseAccess();
@@ -6106,7 +6138,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.StrictEnable,
                 new ServiceRequest(),
                 "开启严格模式");

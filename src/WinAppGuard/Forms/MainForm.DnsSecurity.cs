@@ -400,7 +400,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnDnsSecClearClick(object? sender, EventArgs e)
+    private async void OnDnsSecClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -429,7 +429,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearDnsSecurity,
                 new ServiceRequest(),
                 Localizer.T("清空 DNS 安全告警"));
@@ -455,7 +455,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnDnsSecTrustClick(object? sender, EventArgs e)
+    private async void OnDnsSecTrustClick(object? sender, EventArgs e)
     {
         if (_dnsSecServerGrid.CurrentRow?.DataBoundItem is not DnsSecurityServerRow row)
         {
@@ -466,7 +466,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.TrustDnsServer,
                 new ServiceRequest { DnsTrustAddress = row.Address, DnsTrustEnabled = trust },
                 Localizer.T(trust ? "信任此 DNS 服务器" : "取消信任此 DNS 服务器"));
@@ -495,7 +495,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnDnsSecClearTrustClick(object? sender, EventArgs e)
+    private async void OnDnsSecClearTrustClick(object? sender, EventArgs e)
     {
         var trusted = _dnsSecServers
             .Where(item => item.Trusted)
@@ -539,7 +539,7 @@ public sealed partial class MainForm
 
             foreach (var address in trusted)
             {
-                response = CallService(
+                response = await CallServiceAsync(
                     ServiceProtocol.Commands.TrustDnsServer,
                     new ServiceRequest { DnsTrustAddress = address, DnsTrustEnabled = false },
                     Localizer.T("清空 DNS 信任"));

@@ -163,7 +163,7 @@ public sealed partial class MainForm
     }
 
     /// <summary>已安装但没采到：重新下发当前设置，服务会立刻重试一次。</summary>
-    private void RetryNpcapCapture()
+    private async void RetryNpcapCapture()
     {
         if (!_serviceAvailable)
         {
@@ -190,7 +190,7 @@ public sealed partial class MainForm
             // 关闭状态点重试没有意义，顺手帮用户打开。
             settings.Enabled = true;
 
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ConfigureAntiScan,
                 new ServiceRequest { AntiScanSettings = settings },
                 Localizer.T("重新连接 Npcap"));
@@ -923,7 +923,7 @@ public sealed partial class MainForm
         _antiClearButton.Enabled = enabled && (_antiEvents.Count > 0 || _antiBlocks.Count > 0);
     }
 
-    private void OnAntiScanSettingsClick(object? sender, EventArgs e)
+    private async void OnAntiScanSettingsClick(object? sender, EventArgs e)
     {
         var updated = AntiScanSettingsForm.Ask(
             DialogOwner,
@@ -938,7 +938,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ConfigureAntiScan,
                 new ServiceRequest { AntiScanSettings = updated },
                 Localizer.T("修改反扫描设置"));
@@ -969,7 +969,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnAntiScanReleaseClick(object? sender, EventArgs e)
+    private async void OnAntiScanReleaseClick(object? sender, EventArgs e)
     {
         if (_antiBlockGrid.CurrentRow?.DataBoundItem is not AntiScanBlockRow row)
         {
@@ -978,7 +978,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ReleaseAntiScanBlock,
                 new ServiceRequest { AntiScanAddress = row.Address },
                 Localizer.T("解除临时封禁"));
@@ -1035,11 +1035,11 @@ public sealed partial class MainForm
         }
     }
 
-    private void ReleaseAllAntiScanBlocks()
+    private async void ReleaseAllAntiScanBlocks()
     {
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ReleaseAntiScanBlock,
                 new ServiceRequest { AntiScanReleaseAll = true },
                 Localizer.T("解除全部临时封禁"));
@@ -1067,7 +1067,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnAntiScanClearClick(object? sender, EventArgs e)
+    private async void OnAntiScanClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -1092,7 +1092,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearAntiScan,
                 new ServiceRequest(),
                 Localizer.T("清空反扫描记录"));

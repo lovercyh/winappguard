@@ -313,7 +313,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnConfigRebaselineClick(object? sender, EventArgs e)
+    private async void OnConfigRebaselineClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -341,7 +341,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.RebaselineConfigIntegrity,
                 new ServiceRequest(),
                 Localizer.T("重新采集本机配置基线"));
@@ -362,7 +362,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void OnConfigClearClick(object? sender, EventArgs e)
+    private async void OnConfigClearClick(object? sender, EventArgs e)
     {
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -391,7 +391,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = CallService(
+            var response = await CallServiceAsync(
                 ServiceProtocol.Commands.ClearConfigIntegrity,
                 new ServiceRequest(),
                 Localizer.T("清空本机配置事件"));

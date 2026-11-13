@@ -96,6 +96,13 @@ public static class ServiceClient
                 return null;
             }
 
+            if (!ServerIdentity.IsExpectedServer(
+                    pipe.SafePipeHandle.DangerousGetHandle(), out var identityError))
+            {
+                error = $"检测到异常的服务端：{identityError}";
+                return null;
+            }
+
             var clientNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
             PipeCodec.WriteAsync(pipe, new ProtocolMessage

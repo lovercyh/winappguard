@@ -2343,6 +2343,10 @@ internal static class Program
             return false;
         }
 
+        Bilingual.Say(
+            $"已确认升级：界面/服务版本 = {installedService}",
+            $"Upgrade verified: UI/service version = {installedService}");
+
         return true;
     }
 

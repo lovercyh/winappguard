@@ -107,7 +107,7 @@ internal sealed class ServiceSession : IDisposable
 
             try
             {
-                _pipe.Connect((int)Math.Max(1, Math.Min(250, timeout.TotalMilliseconds)));
+                _pipe.Connect((int)Math.Max(1, Math.Min(1000, timeout.TotalMilliseconds)));
             }
             catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
             {

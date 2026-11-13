@@ -61,26 +61,22 @@ internal sealed class PipeHost : IDisposable
     {
         Stop();
 
-        try
-        {
-            _cancellation.Dispose();
-        }
-        catch (ObjectDisposedException)
-        {
-            // 已释放。
-        }
+        // 不主动 Dispose CTS：工作线程可能仍持有 token，
+        // 进程退出时由运行时回收即可。
     }
 
     private void Loop()
     {
         while (!_cancellation.IsCancellationRequested)
         {
+            NamedPipeServerStream? pipe = null;
+
             try
             {
                 // 用 NamedPipeServerStreamAcl.Create：安全描述符在**创建时**就生效，
                 // 不存在"先建默认管道再收紧"的竞态；也不需要手工 SetSecurityInfo
                 // （后者在非管理员下会直接 ACCESS_DENIED，实测）。
-                using var pipe = CreateOwnerOnlyPipe();
+                pipe = CreateOwnerOnlyPipe();
 
                 if (!_loggedReady)
                 {
@@ -95,7 +91,19 @@ internal sealed class PipeHost : IDisposable
                     break;
                 }
 
-                HandleClient(pipe, _cancellation.Token);
+                // 5.11：会话是长连接。每接受一个客户端就把管道交给工作线程，
+                // 监听线程立刻创建下一个实例；否则第一个会话会占住唯一的管道实例，
+                // 其它线程（状态刷新、后台页面）全部 Connect 超时。
+                var connected = pipe;
+                pipe = null;
+
+                var worker = new Thread(() => HandleConnection(connected))
+                {
+                    IsBackground = true,
+                    Name = "ipc-client",
+                };
+
+                worker.Start();
             }
             catch (OperationCanceledException)
             {
@@ -109,6 +117,41 @@ internal sealed class PipeHost : IDisposable
             {
                 ServiceLog.Error("WAG-IPC-003", "IPC connection handling failed.", ex);
                 Thread.Sleep(200);
+            }
+            finally
+            {
+                pipe?.Dispose();
+            }
+        }
+    }
+
+    private void HandleConnection(NamedPipeServerStream pipe)
+    {
+        try
+        {
+            HandleClient(pipe, _cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // 服务停止：正常退出。
+        }
+        catch (ObjectDisposedException)
+        {
+            // 管道已关闭。
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-IPC-017", "IPC client session ended with an error.", ex);
+        }
+        finally
+        {
+            try
+            {
+                pipe.Dispose();
+            }
+            catch (Exception)
+            {
+                // 忽略关闭异常。
             }
         }
     }
@@ -446,7 +489,7 @@ internal sealed class PipeHost : IDisposable
         return NamedPipeServerStreamAcl.Create(
             ServiceProtocol.PipeName,
             PipeDirection.InOut,
-            maxNumberOfServerInstances: 4,
+            maxNumberOfServerInstances: 32,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous,
             inBufferSize: 0,

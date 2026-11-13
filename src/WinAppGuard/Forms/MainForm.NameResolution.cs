@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 
@@ -335,7 +336,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ClearNameResolution,
                 new ServiceRequest(),
                 Localizer.T("清空名称解析事件"));
@@ -400,7 +401,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.BlockNameSource,
                 new ServiceRequest
                 {

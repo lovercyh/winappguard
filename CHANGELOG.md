@@ -14,6 +14,41 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
+## [5.11.0] - 2026-11-13
+
+> 协议 v4 硬切换：强类型载荷层完成，v3 的万能响应类与适配层已删除。
+
+### 新增
+
+- 管道升级为 `WinAppGuard.Control.v4`，协议版本 4；不再兼容 v3/v2。
+- 22 个请求载荷与 9 个响应载荷：
+  - `QueryView` 携带 IDS、网络检测、反扫描、LAN、DNS 安全、IPv6、
+    配置完整性、名称解析、DNS 记录、流量等真实字段；
+  - 写命令使用 `WriteResult`，状态/严格模式/审计使用 `StatusView`，
+    规则列表、过滤器映射、放行目标、进程路径、流量各有专用结果类型。
+- 客户端新增 `ServiceClient.TryRequestAs<T>` 与强类型网关方法
+  （`TryQuery` / `TryTraffic` / `TryRules` / `TryAllowTargets` /
+  `TryProcessPaths` / `TryFilterMap`）。
+- `--doctor` 增加 `protocol` 与 `payload-contract` 检查。
+
+### 变更
+
+- 删除 `ServiceResponse` / `ActionResult` 万能结果类。
+- 删除 `LegacyPayloadAdapter` 与所有 `Legacy` 响应字段。
+- 服务端抽出 `PipeHost`（监听/握手/会话）与 `StatusBuilder`（状态汇总），
+  `ControlServer` 收敛到 400 行以内。
+- 10 个检测页面的查询与写回路径全部改用强类型载荷。
+
+### 测试
+
+- 架构测试 96 项通过：命令载荷映射、JSON 往返、失败信封、
+  写命令字段约束、无签名密钥拒绝发送等。
+
+### 升级说明
+
+- 5.11 客户端连不上 5.10 服务属于预期行为；请同时升级服务与界面。
+- VM 验收清单见 `docs/5.11-协议v4.md`。
+
 ## [5.10.1] - 2026-11-13
 
 > 统一界面和托盘文案为“开源防火墙”。

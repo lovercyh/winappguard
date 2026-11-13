@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.NetworkDetection;
 
@@ -147,13 +148,12 @@ internal static class NetworkDetectionHost
         ServiceLog.Info("WAG-ND-022", "Network detection stopped.");
     }
 
-    internal static ActionResult Query(ServiceRequest request)
+    internal static QueryView Query(ServiceRequest request)
     {
         lock (Gate)
         {
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 NetworkAlerts = _alerts
                     .OrderByDescending(alert => alert.TimeUtc)
@@ -168,7 +168,7 @@ internal static class NetworkDetectionHost
         }
     }
 
-    internal static ActionResult Configure(ServiceRequest request)
+    internal static QueryView Configure(ServiceRequest request)
     {
         var dto = request.NetworkDetectionSettings;
 
@@ -242,9 +242,8 @@ internal static class NetworkDetectionHost
 
         lock (Gate)
         {
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 NetworkDetectionSettings = ToDto(_state.Settings),
                 NetworkDetectionStatus = BuildStatusLocked(),
@@ -252,7 +251,7 @@ internal static class NetworkDetectionHost
         }
     }
 
-    internal static ActionResult Ack(ServiceRequest request)
+    internal static QueryView Ack(ServiceRequest request)
     {
         var id = request.NetworkAlertId;
 
@@ -277,16 +276,15 @@ internal static class NetworkDetectionHost
 
         PersistState();
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             NetworkDetectionStatus = BuildStatus(),
         };
     }
 
     /// <summary>5.8：把当前所有未读反网络攻击告警一次性标记为已读。</summary>
-    internal static ActionResult AckAll(ServiceRequest request)
+    internal static QueryView AckAll(ServiceRequest request)
     {
         var changed = 0;
 
@@ -307,16 +305,15 @@ internal static class NetworkDetectionHost
 
         PersistState();
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = changed,
             NetworkDetectionStatus = BuildStatus(),
         };
     }
 
-    internal static ActionResult Clear(ServiceRequest request)
+    internal static QueryView Clear(ServiceRequest request)
     {
         int cleared;
 
@@ -335,16 +332,15 @@ internal static class NetworkDetectionHost
             "WAG-ND-024",
             $"Network detection alerts cleared ({cleared} in memory).");
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = cleared,
             NetworkDetectionStatus = BuildStatus(),
         };
     }
 
-    internal static ActionResult Block(ServiceRequest request)
+    internal static QueryView Block(ServiceRequest request)
     {
         var kind = request.NetworkBlockKind;
 
@@ -404,7 +400,7 @@ internal static class NetworkDetectionHost
         return response;
     }
 
-    internal static ActionResult Release(ServiceRequest request)
+    internal static QueryView Release(ServiceRequest request)
     {
         if (request.NetworkBlockReleaseAll)
         {
@@ -721,10 +717,9 @@ internal static class NetworkDetectionHost
             ExpiresUtc = block.ExpiresUtc,
         };
 
-    private static ActionResult Error(ServiceRequest request, string message)
+    private static QueryView Error(ServiceRequest request, string message)
         => new()
         {
-            Id = request.Id,
             Ok = false,
             Error = message,
         };

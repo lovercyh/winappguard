@@ -23,15 +23,15 @@ public sealed class PayloadCatalogTests
     }
 
     [Fact]
-    public void CatalogHasTwentyTwoRequestAndSixResponseTypes()
+    public void CatalogHasTwentyTwoRequestAndNineResponseTypes()
     {
         Assert.Equal(22, PayloadCatalog.RequestTypes.Count);
-        Assert.Equal(6, PayloadCatalog.ResponseTypes.Count);
+        Assert.Equal(9, PayloadCatalog.ResponseTypes.Count);
         Assert.Equal(
             22,
             PayloadCatalog.RequestTypes.Distinct().Count());
         Assert.Equal(
-            6,
+            9,
             PayloadCatalog.ResponseTypes.Distinct().Count());
     }
 

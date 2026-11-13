@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Models;
@@ -323,7 +324,7 @@ public static class DiagnosticBundle
         Dictionary<string, int> counts)    {
         foreach (var (command, fileName) in ServiceSnapshots)
         {
-            ActionResult? response = null;
+            ResponsePayload? response = null;
 
             try
             {
@@ -346,19 +347,23 @@ public static class DiagnosticBundle
             AddText(zip, $"data/raw/service/{fileName}", JsonSerializer.Serialize(response, JsonOptions));
             AddServiceCsv(zip, response, fileName);
 
+            var query = response as QueryView;
+            var rules = response as RulesView;
+            var traffic = response as TrafficView;
+
             var count = fileName switch
             {
-                "rules.json" => response.Rules?.Count,
-                "dns.json" => response.DnsRecords?.Count,
-                "traffic.json" => response.Traffic?.Count,
-                "network-detection.json" => response.NetworkAlerts?.Count,
-                "ids-alerts.json" => response.IdsAlerts?.Count,
-                "anti-scan.json" => response.AntiScanEvents?.Count,
-                "lan.json" => response.LanEvents?.Count,
-                "dns-security.json" => response.DnsSecurityEvents?.Count,
-                "ipv6-security.json" => response.Ipv6SecurityEvents?.Count,
-                "config-integrity.json" => response.ConfigIntegrityEvents?.Count,
-                "name-resolution.json" => response.NameResolutionEvents?.Count,
+                "rules.json" => rules?.Rules?.Count,
+                "dns.json" => query?.DnsRecords?.Count,
+                "traffic.json" => traffic?.Programs?.Count,
+                "network-detection.json" => query?.NetworkAlerts?.Count,
+                "ids-alerts.json" => query?.IdsAlerts?.Count,
+                "anti-scan.json" => query?.AntiScanEvents?.Count,
+                "lan.json" => query?.LanEvents?.Count,
+                "dns-security.json" => query?.DnsSecurityEvents?.Count,
+                "ipv6-security.json" => query?.Ipv6SecurityEvents?.Count,
+                "config-integrity.json" => query?.ConfigIntegrityEvents?.Count,
+                "name-resolution.json" => query?.NameResolutionEvents?.Count,
                 _ => null,
             };
 
@@ -372,79 +377,83 @@ public static class DiagnosticBundle
     /// <summary>把服务响应当中的列表导出成可直接用 Excel 打开的 CSV。</summary>
     private static void AddServiceCsv(
         ZipArchive zip,
-        ActionResult response,
+        ResponsePayload response,
         string fileName)
     {
+        var query = response as QueryView;
+        var rules = response as RulesView;
+        var traffic = response as TrafficView;
+
         switch (fileName)
         {
             case "rules.json":
-                AddText(zip, "data/rules.csv", DiagnosticCsv.FromObjects("rules", response.Rules));
+                AddText(zip, "data/rules.csv", DiagnosticCsv.FromObjects("rules", rules?.Rules));
                 break;
 
             case "dns.json":
-                AddText(zip, "data/dns.csv", DiagnosticCsv.FromObjects("dns", response.DnsRecords));
+                AddText(zip, "data/dns.csv", DiagnosticCsv.FromObjects("dns", query?.DnsRecords));
                 break;
 
             case "traffic.json":
-                AddText(zip, "data/traffic.csv", DiagnosticCsv.FromObjects("traffic", response.Traffic));
+                AddText(zip, "data/traffic.csv", DiagnosticCsv.FromObjects("traffic", traffic?.Programs));
                 break;
 
             case "network-detection.json":
                 AddText(
                     zip,
                     "data/network-alerts.csv",
-                    DiagnosticCsv.FromObjects("network-alerts", response.NetworkAlerts));
+                    DiagnosticCsv.FromObjects("network-alerts", query?.NetworkAlerts));
                 AddText(
                     zip,
                     "data/network-blocks.csv",
-                    DiagnosticCsv.FromObjects("network-blocks", response.NetworkBlocks));
+                    DiagnosticCsv.FromObjects("network-blocks", query?.NetworkBlocks));
                 break;
 
             case "ids-alerts.json":
-                AddText(zip, "data/ids-alerts.csv", DiagnosticCsv.FromObjects("ids-alerts", response.IdsAlerts));
+                AddText(zip, "data/ids-alerts.csv", DiagnosticCsv.FromObjects("ids-alerts", query?.IdsAlerts));
                 break;
 
             case "anti-scan.json":
                 AddText(
                     zip,
                     "data/anti-scan.csv",
-                    DiagnosticCsv.FromObjects("anti-scan", response.AntiScanEvents));
+                    DiagnosticCsv.FromObjects("anti-scan", query?.AntiScanEvents));
                 AddText(
                     zip,
                     "data/anti-scan-blocks.csv",
-                    DiagnosticCsv.FromObjects("anti-scan-blocks", response.AntiScanBlocks));
+                    DiagnosticCsv.FromObjects("anti-scan-blocks", query?.AntiScanBlocks));
                 break;
 
             case "lan.json":
-                AddText(zip, "data/lan.csv", DiagnosticCsv.FromObjects("lan", response.LanEvents));
+                AddText(zip, "data/lan.csv", DiagnosticCsv.FromObjects("lan", query?.LanEvents));
                 break;
 
             case "dns-security.json":
                 AddText(
                     zip,
                     "data/dns-security.csv",
-                    DiagnosticCsv.FromObjects("dns-security", response.DnsSecurityEvents));
+                    DiagnosticCsv.FromObjects("dns-security", query?.DnsSecurityEvents));
                 break;
 
             case "ipv6-security.json":
                 AddText(
                     zip,
                     "data/ipv6-security.csv",
-                    DiagnosticCsv.FromObjects("ipv6-security", response.Ipv6SecurityEvents));
+                    DiagnosticCsv.FromObjects("ipv6-security", query?.Ipv6SecurityEvents));
                 break;
 
             case "config-integrity.json":
                 AddText(
                     zip,
                     "data/config-integrity.csv",
-                    DiagnosticCsv.FromObjects("config-integrity", response.ConfigIntegrityEvents));
+                    DiagnosticCsv.FromObjects("config-integrity", query?.ConfigIntegrityEvents));
                 break;
 
             case "name-resolution.json":
                 AddText(
                     zip,
                     "data/name-resolution.csv",
-                    DiagnosticCsv.FromObjects("name-resolution", response.NameResolutionEvents));
+                    DiagnosticCsv.FromObjects("name-resolution", query?.NameResolutionEvents));
                 break;
         }
     }

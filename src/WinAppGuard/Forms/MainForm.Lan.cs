@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 using WinAppGuard.Models;
@@ -593,7 +594,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ConfigureLan,
                 new ServiceRequest
                 {
@@ -647,7 +648,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ClearLan,
                 new ServiceRequest(),
                 Localizer.T("清空局域网告警"));
@@ -695,7 +696,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ResetLanBaseline,
                 new ServiceRequest(),
                 Localizer.T("重置局域网基线"));
@@ -742,7 +743,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.TrustLan,
                 new ServiceRequest { LanTrustKind = kind, LanTrustValue = value },
                 action);
@@ -801,7 +802,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.BlockLanDhcp,
                 new ServiceRequest { LanBlockServerIp = row.ServerIp, LanBlockEnabled = blocking },
                 Localizer.T(blocking ? "临时阻断 DHCP 服务器" : "解除 DHCP 阻断"));

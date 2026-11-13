@@ -1,9 +1,9 @@
 namespace WinAppGuard.Contracts.Protocol;
 
 /// <summary>
-/// 5.11：76 条命令 → 22 个请求载荷 / 6 个响应载荷的唯一映射。
+/// 5.11：76 条命令 → 22 个请求载荷 / 9 个响应载荷的唯一映射。
 ///
-/// 这里只做类型映射；真正的字段适配由 <c>LegacyPayloadAdapter</c> 完成。
+/// 这里只做类型映射；服务端按类型序列化，客户端按同一类型反序列化。
 /// </summary>
 public static class PayloadCatalog
 {
@@ -119,14 +119,69 @@ public static class PayloadCatalog
         ServiceProtocol.Commands.Status or ServiceProtocol.Commands.Ping
             => typeof(StatusView),
 
-        ServiceProtocol.Commands.ListRules
+        ServiceProtocol.Commands.ListRules or ServiceProtocol.Commands.PurgeExpiredRules
             => typeof(RulesView),
+
+        ServiceProtocol.Commands.FilterMap
+            => typeof(FilterMapView),
+
+        ServiceProtocol.Commands.AllowTargets
+            => typeof(AllowTargetsView),
 
         ServiceProtocol.Commands.QueryProcessPaths
             => typeof(ProcessPathsView),
 
         ServiceProtocol.Commands.QueryTraffic
+            or ServiceProtocol.Commands.ConfigureTraffic
+            or ServiceProtocol.Commands.ClearTraffic
             => typeof(TrafficView),
+
+        ServiceProtocol.Commands.StrictEnable
+            or ServiceProtocol.Commands.StrictDisable
+            or ServiceProtocol.Commands.StrictRefresh
+            or ServiceProtocol.Commands.StrictRecoverLegacy
+            or ServiceProtocol.Commands.StrictLockdown
+            or ServiceProtocol.Commands.AuditConfigure
+            or ServiceProtocol.Commands.AuditClear
+            => typeof(StatusView),
+
+        // 检测/记录类写命令会回显修改后的状态，统一用 QueryView。
+        ServiceProtocol.Commands.IdsConfigure
+            or ServiceProtocol.Commands.IdsAck
+            or ServiceProtocol.Commands.IdsSuppress
+            or ServiceProtocol.Commands.IdsClear
+            or ServiceProtocol.Commands.AlertIdsAck
+            or ServiceProtocol.Commands.AlertIdsAckAll
+            or ServiceProtocol.Commands.AlertIdsSuppress
+            or ServiceProtocol.Commands.AlertIdsClear
+            or ServiceProtocol.Commands.NetworkDetectionConfigure
+            or ServiceProtocol.Commands.NetworkDetectionAck
+            or ServiceProtocol.Commands.NetworkDetectionClear
+            or ServiceProtocol.Commands.NetworkDetectionBlock
+            or ServiceProtocol.Commands.NetworkDetectionRelease
+            or ServiceProtocol.Commands.NetworkDetectionReleaseAll
+            or ServiceProtocol.Commands.AlertNetworkAck
+            or ServiceProtocol.Commands.AlertNetworkAckAll
+            or ServiceProtocol.Commands.AlertNetworkClear
+            or ServiceProtocol.Commands.ConfigureAntiScan
+            or ServiceProtocol.Commands.ReleaseAntiScanBlock
+            or ServiceProtocol.Commands.ClearAntiScan
+            or ServiceProtocol.Commands.ConfigureLan
+            or ServiceProtocol.Commands.ClearLan
+            or ServiceProtocol.Commands.TrustLan
+            or ServiceProtocol.Commands.BlockLanDhcp
+            or ServiceProtocol.Commands.ResetLanBaseline
+            or ServiceProtocol.Commands.TrustDnsServer
+            or ServiceProtocol.Commands.ClearDnsSecurity
+            or ServiceProtocol.Commands.TrustIpv6
+            or ServiceProtocol.Commands.BlockIpv6
+            or ServiceProtocol.Commands.ResetIpv6Baseline
+            or ServiceProtocol.Commands.ClearIpv6Security
+            or ServiceProtocol.Commands.BlockNameSource
+            or ServiceProtocol.Commands.ClearNameResolution
+            or ServiceProtocol.Commands.RebaselineConfigIntegrity
+            or ServiceProtocol.Commands.ClearConfigIntegrity
+            => typeof(QueryView),
 
         _ when command.StartsWith("query.", StringComparison.OrdinalIgnoreCase)
             => typeof(QueryView),
@@ -148,6 +203,7 @@ public static class PayloadCatalog
     public static IReadOnlyList<Type> ResponseTypes { get; } = new[]
     {
         typeof(QueryView), typeof(WriteResult), typeof(StatusView),
-        typeof(RulesView), typeof(ProcessPathsView), typeof(TrafficView),
+        typeof(RulesView), typeof(FilterMapView), typeof(AllowTargetsView),
+        typeof(ProcessPathsView), typeof(TrafficView), typeof(ErrorView),
     };
 }

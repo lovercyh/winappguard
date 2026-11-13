@@ -14,6 +14,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics;
@@ -5845,20 +5846,20 @@ internal static class Program
 
             CheckAssertion(results, "超长请求被拒绝", oversizedPayloadRejected);
 
-            var challenge = new ActionResult
+            var challenge = new ProtocolMessage
             {
                 Ok = true,
-                Nonce = Convert.ToBase64String(nonce),
+                ServerNonce = Convert.ToBase64String(nonce),
             };
 
             var challengeJson = JsonSerializer.Serialize(
                 challenge, ServiceProtocol.JsonOptions);
-            var parsedChallenge = JsonSerializer.Deserialize<ActionResult>(
+            var parsedChallenge = JsonSerializer.Deserialize<ProtocolMessage>(
                 challengeJson, ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "challenge nonce 能原样往返",
-                parsedChallenge?.Nonce is not null
-                && Convert.FromBase64String(parsedChallenge.Nonce).Length == 32);
+                parsedChallenge?.ServerNonce is not null
+                && Convert.FromBase64String(parsedChallenge.ServerNonce).Length == 32);
         }
         catch (Exception ex)
         {
@@ -7069,7 +7070,7 @@ internal static class Program
         var results = new List<(string Title, bool Passed)>();
         var elevated = AdminHelper.IsRunningAsAdmin();
 
-        var statusResponse = ServiceClient.TryRequest(
+        var statusResponse = ServiceClient.TryRequestAs<StatusView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.Status },
             TimeSpan.FromSeconds(1.5),
             out var statusError);
@@ -7246,28 +7247,7 @@ internal static class Program
             using var ownerKey = new OwnerKeyStore(ServicePaths.ProtectedModeDirectory)
                 .LoadForOwner(user);
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-            byte[] Challenge(NamedPipeClientStream pipe)
-            {
-                PipeCodec.WriteAsync(
-                        pipe,
-                        new ServiceRequest { Command = ServiceProtocol.Commands.AuthChallenge },
-                        timeout.Token)
-                    .GetAwaiter().GetResult();
-
-                var response = PipeCodec
-                    .ReadAsync<ActionResult>(pipe, timeout.Token)
-                    .GetAwaiter().GetResult();
-
-                if (response is not { Ok: true } || response.Nonce is null)
-                {
-                    throw new InvalidOperationException(
-                        response?.Error ?? "challenge 没有返回 nonce");
-                }
-
-                return Convert.FromBase64String(response.Nonce);
-            }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
             NamedPipeClientStream Connect()
             {
@@ -7278,111 +7258,168 @@ internal static class Program
                 return pipe;
             }
 
-            static byte[] JoinNonce(byte[] nonce, byte[] payload)
-            {
-                var data = new byte[nonce.Length + payload.Length];
-                Buffer.BlockCopy(nonce, 0, data, 0, nonce.Length);
-                Buffer.BlockCopy(payload, 0, data, nonce.Length, payload.Length);
-                return data;
-            }
+            ProtocolMessage ReadFrame(NamedPipeClientStream pipe)
+                => PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
+                       .GetAwaiter().GetResult()
+                   ?? throw new InvalidOperationException("服务关闭了连接。");
 
-            static ActionResult SendSigned(
+            ProtocolMessage StartSession(
                 NamedPipeClientStream pipe,
-                byte[] nonce,
-                byte[] payload,
-                byte[] signature,
-                CancellationToken token)
+                OwnerKey key,
+                out string clientNonce,
+                out ProtocolMessage challenge)
             {
-                PipeCodec.WriteSignedAsync(pipe, signature, payload, token)
-                    .GetAwaiter().GetResult();
-                return PipeCodec.ReadAsync<ActionResult>(pipe, token)
-                           .GetAwaiter().GetResult()
-                       ?? new ActionResult { Ok = false, Error = "无响应" };
+                clientNonce = Convert.ToBase64String(
+                    RandomNumberGenerator.GetBytes(32));
+
+                PipeCodec.WriteAsync(pipe, new ProtocolMessage
+                {
+                    Type = "hello",
+                    V = ServiceProtocol.Version,
+                    ClientNonce = clientNonce,
+                }, timeout.Token).GetAwaiter().GetResult();
+
+                challenge = ReadFrame(pipe);
+
+                if (!string.Equals(challenge.Type, "challenge", StringComparison.Ordinal)
+                    || challenge.ServerNonce is null
+                    || challenge.SessionId is null)
+                {
+                    throw new InvalidOperationException(
+                        challenge.Message ?? "challenge 无效。");
+                }
+
+                var authBytes = Encoding.UTF8.GetBytes(
+                    $"{challenge.ServerNonce}|{clientNonce}|{challenge.SessionId}");
+
+                PipeCodec.WriteAsync(pipe, new ProtocolMessage
+                {
+                    Type = "auth",
+                    V = ServiceProtocol.Version,
+                    SessionId = challenge.SessionId,
+                    Signature = Convert.ToBase64String(key.Sign(authBytes)),
+                }, timeout.Token).GetAwaiter().GetResult();
+
+                return ReadFrame(pipe);
             }
 
-            var payload = JsonSerializer.SerializeToUtf8Bytes(
-                new ServiceRequest { Command = ServiceProtocol.Commands.Status },
-                ServiceProtocol.JsonOptions);
-
-            // 1) challenge nonce 长度
-            using (var pipe = Connect())
+            ProtocolMessage BuildRequest(
+                string serverNonce,
+                string command,
+                OwnerKey key)
             {
-                var nonce = Challenge(pipe);
-                CheckAssertion(results, "challenge 返回 32 字节 nonce",
-                    nonce.Length == 32);
+                var frame = new ProtocolMessage
+                {
+                    Type = "request",
+                    V = ServiceProtocol.Version,
+                    Id = "selfcheck",
+                    Seq = 1,
+                    Command = command,
+                    Payload = JsonSerializer.SerializeToElement(
+                        new ServiceRequest { Command = command },
+                        ServiceProtocol.JsonOptions),
+                };
+
+                var canonical = ProtocolSigning.CanonicalBytes(frame);
+                var nonceBytes = Encoding.UTF8.GetBytes(serverNonce);
+                var signed = new byte[nonceBytes.Length + canonical.Length];
+                Buffer.BlockCopy(nonceBytes, 0, signed, 0, nonceBytes.Length);
+                Buffer.BlockCopy(canonical, 0, signed, nonceBytes.Length, canonical.Length);
+                frame.Signature = Convert.ToBase64String(key.Sign(signed));
+                return frame;
             }
 
-            // 2) 无签名（把 status 当第一条命令）
+            // 1) 完整 v4 握手 + 正确签名
             using (var pipe = Connect())
             {
+                var welcome = StartSession(pipe, ownerKey, out _, out var challenge);
+                CheckAssertion(results, "v4 challenge 返回 32 字节 nonce",
+                    Convert.FromBase64String(challenge.ServerNonce!).Length == 32);
+                CheckAssertion(results, "v4 握手返回 welcome",
+                    string.Equals(welcome.Type, "welcome", StringComparison.Ordinal));
+
                 PipeCodec.WriteAsync(
                         pipe,
-                        new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+                        BuildRequest(challenge.ServerNonce!, ServiceProtocol.Commands.Status, ownerKey),
                         timeout.Token)
                     .GetAwaiter().GetResult();
 
-                var response = PipeCodec
-                    .ReadAsync<ActionResult>(pipe, timeout.Token)
-                    .GetAwaiter().GetResult();
+                var response = ReadFrame(pipe);
+                CheckAssertion(results, "正确签名能通过 v4 请求", response.Ok == true);
+            }
 
-                CheckAssertion(results, "无签名的请求被拒绝",
-                    response is { Ok: false });
+            // 2) 请求缺少签名
+            using (var pipe = Connect())
+            {
+                StartSession(pipe, ownerKey, out _, out var challenge);
+
+                var frame = BuildRequest(
+                    challenge.ServerNonce!, ServiceProtocol.Commands.Status, ownerKey);
+                frame.Signature = null;
+
+                PipeCodec.WriteAsync(pipe, frame, timeout.Token).GetAwaiter().GetResult();
+
+                var response = ReadFrame(pipe);
+                CheckAssertion(results, "请求缺少签名被拒绝",
+                    string.Equals(response.Type, "error", StringComparison.Ordinal));
             }
 
             // 3) 篡改签名
             using (var pipe = Connect())
             {
-                var nonce = Challenge(pipe);
-                var signature = ownerKey.Sign(JoinNonce(nonce, payload));
+                StartSession(pipe, ownerKey, out _, out var challenge);
+
+                var frame = BuildRequest(
+                    challenge.ServerNonce!, ServiceProtocol.Commands.Status, ownerKey);
+                var signature = Convert.FromBase64String(frame.Signature!);
                 signature[0] ^= 0x01;
+                frame.Signature = Convert.ToBase64String(signature);
 
-                var response = SendSigned(
-                    pipe, nonce, payload, signature, timeout.Token);
+                PipeCodec.WriteAsync(pipe, frame, timeout.Token).GetAwaiter().GetResult();
 
-                CheckAssertion(results, "篡改签名被拒绝", !response.Ok);
+                var response = ReadFrame(pipe);
+                CheckAssertion(results, "篡改签名被拒绝",
+                    string.Equals(response.Type, "error", StringComparison.Ordinal));
             }
 
-            // 4) 重放：在另一个连接里复用旧签名（nonce 不同）
-            byte[] replayedSignature;
+            // 4) 重放：在另一个会话里复用旧签名
+            ProtocolMessage replayedFrame;
 
             using (var pipe = Connect())
             {
-                var nonce = Challenge(pipe);
-                replayedSignature = ownerKey.Sign(JoinNonce(nonce, payload));
+                StartSession(pipe, ownerKey, out _, out var challenge);
+                replayedFrame = BuildRequest(
+                    challenge.ServerNonce!, ServiceProtocol.Commands.Status, ownerKey);
 
-                var response = SendSigned(
-                    pipe, nonce, payload, replayedSignature, timeout.Token);
-
-                CheckAssertion(results, "正确签名能通过原始封套发送", response.Ok);
+                PipeCodec.WriteAsync(pipe, replayedFrame, timeout.Token)
+                    .GetAwaiter().GetResult();
+                _ = ReadFrame(pipe);
             }
 
             using (var pipe = Connect())
             {
-                var newNonce = Challenge(pipe);
+                StartSession(pipe, ownerKey, out _, out _);
 
-                var response = SendSigned(
-                    pipe, newNonce, payload, replayedSignature, timeout.Token);
+                PipeCodec.WriteAsync(pipe, replayedFrame, timeout.Token)
+                    .GetAwaiter().GetResult();
 
-                CheckAssertion(results, "重放旧签名被拒绝", !response.Ok);
+                var response = ReadFrame(pipe);
+                CheckAssertion(results, "重放旧签名被拒绝",
+                    string.Equals(response.Type, "error", StringComparison.Ordinal));
             }
 
             // 5) 错误密钥
             using (var wrongKey = OwnerKey.Create())
             using (var pipe = Connect())
             {
-                var nonce = Challenge(pipe);
-                var signature = wrongKey.Sign(JoinNonce(nonce, payload));
-
-                var response = SendSigned(
-                    pipe, nonce, payload, signature, timeout.Token);
-
-                CheckAssertion(results, "错误密钥的签名被拒绝", !response.Ok);
+                var welcome = StartSession(pipe, wrongKey, out _, out _);
+                CheckAssertion(results, "错误密钥在 auth 阶段被拒绝",
+                    string.Equals(welcome.Type, "error", StringComparison.Ordinal));
             }
-
             // 6) 客户端没有 signer 时不发请求
             ServiceClient.SetSigner(null);
 
-            var noSigner = ServiceClient.TryRequest(
+            var noSigner = ServiceClient.TryRequestAs<StatusView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.Status },
                 TimeSpan.FromSeconds(1),
                 out var noSignerError);
@@ -7434,14 +7471,14 @@ internal static class Program
             // 保证从"未开启"开始。
             if (status.StrictModeActive)
             {
-                _ = Call(ServiceProtocol.Commands.StrictDisable, new ServiceRequest(), out _);
+                _ = Call<StatusView>(ServiceProtocol.Commands.StrictDisable, new ServiceRequest(), out _);
             }
 
             var baseline = CountOurFilters();
             W($"    停服务前的过滤器数（基线）= {baseline}");
 
             // ---- 1. 通过 IPC 开启 ----
-            var enable = Call(ServiceProtocol.Commands.StrictEnable, new ServiceRequest(), out var enableError);
+            var enable = Call<StatusView>(ServiceProtocol.Commands.StrictEnable, new ServiceRequest(), out var enableError);
 
             W($"    开启：{(enable is null ? enableError : $"Ok={enable.Ok}")}");
             CheckAssertion(results, "通过 IPC 开启严格模式成功", enable is { Ok: true });
@@ -8103,7 +8140,7 @@ internal static class Program
 
         try
         {
-            var statusResponse = ServiceClient.TryRequest(
+            var statusResponse = ServiceClient.TryRequestAs<StatusView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.Status },
                 TimeSpan.FromSeconds(2),
                 out var statusError);
@@ -8126,7 +8163,7 @@ internal static class Program
                 AuditRetentionDays = status.AuditRetentionDays,
             };
 
-            var enable = Call(ServiceProtocol.Commands.AuditConfigure, new ServiceRequest
+            var enable = Call<StatusView>(ServiceProtocol.Commands.AuditConfigure, new ServiceRequest
             {
                 AuditEnabled = true,
                 AuditDomainLookup = false,
@@ -8211,7 +8248,7 @@ internal static class Program
             // 恢复原设置（失败也要尝试）。
             try
             {
-                _ = Call(ServiceProtocol.Commands.AuditConfigure, restore, out _);
+                _ = Call<StatusView>(ServiceProtocol.Commands.AuditConfigure, restore, out _);
             }
             catch (Exception)
             {
@@ -8354,7 +8391,7 @@ internal static class Program
 
             File.Copy(Path.Combine(Environment.SystemDirectory, "whoami.exe"), tempExe, overwrite: true);
 
-            var add = Call(ServiceProtocol.Commands.AddProgramRule, new ServiceRequest
+            var add = Call<WriteResult>(ServiceProtocol.Commands.AddProgramRule, new ServiceRequest
             {
                 Value = tempExe,
                 Action = "block",
@@ -8371,7 +8408,7 @@ internal static class Program
                 return;
             }
 
-            var before = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var before = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
             var rule = before?.Rules?.FirstOrDefault(item =>
                 string.Equals(item.Value, tempExe, StringComparison.OrdinalIgnoreCase));
 
@@ -8406,7 +8443,7 @@ internal static class Program
             W($"    已直接删除 {deleted} 个过滤器（绕过服务）");
             CheckAssertion(results, "确实删掉了过滤器", deleted > 0);
 
-            var afterDelete = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var afterDelete = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
             var stillThere = afterDelete?.Rules?.Any(item =>
                 string.Equals(item.Name, rule.Name, StringComparison.OrdinalIgnoreCase)) == true;
 
@@ -8416,7 +8453,7 @@ internal static class Program
             // ---- 等服务自动重建（检测周期 10 秒，给 25 秒余量）----
             var rebuilt = WaitUntil(() =>
             {
-                var list = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+                var list = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
                 return list?.Rules?.Any(item =>
                     string.Equals(item.Name, rule.Name, StringComparison.OrdinalIgnoreCase)) == true;
             }, 25000);
@@ -8424,7 +8461,7 @@ internal static class Program
             W($"    25 秒内自动重建 = {rebuilt}");
             CheckAssertion(results, "服务自动重建了被删的规则", rebuilt);
 
-            var afterRebuild = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var afterRebuild = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
             var restored = afterRebuild?.Rules?.FirstOrDefault(item =>
                 string.Equals(item.Name, rule.Name, StringComparison.OrdinalIgnoreCase));
 
@@ -8438,7 +8475,7 @@ internal static class Program
             // ---- 服务自己删除：不应误报 ----
             var countBeforeSelfDelete = statusAfter?.TamperRebuiltCount ?? 0;
 
-            _ = Call(ServiceProtocol.Commands.DeleteRule,
+            _ = Call<WriteResult>(ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = rule.Name }, out _);
 
             Thread.Sleep(12000);
@@ -8452,13 +8489,13 @@ internal static class Program
         {
             try
             {
-                var list = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+                var list = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
                 var leftover = list?.Rules?.FirstOrDefault(item =>
                     string.Equals(item.Value, tempExe, StringComparison.OrdinalIgnoreCase));
 
                 if (leftover is not null)
                 {
-                    _ = Call(ServiceProtocol.Commands.DeleteRule,
+                    _ = Call<WriteResult>(ServiceProtocol.Commands.DeleteRule,
                         new ServiceRequest { RuleName = leftover.Name }, out _);
                 }
 
@@ -8494,7 +8531,7 @@ internal static class Program
         {
             File.Copy(Path.Combine(Environment.SystemDirectory, "whoami.exe"), tempExe, overwrite: true);
 
-            var list = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out var listError);
+            var list = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out var listError);
 
             W($"    初始规则数 = {list?.Rules?.Count ?? -1}");
             CheckAssertion(results, "能通过服务列出规则", list is { Ok: true, Rules: not null });
@@ -8505,7 +8542,7 @@ internal static class Program
             }
 
             // 1) 添加
-            var add = Call(ServiceProtocol.Commands.AddProgramRule, new ServiceRequest
+            var add = Call<WriteResult>(ServiceProtocol.Commands.AddProgramRule, new ServiceRequest
             {
                 Value = tempExe,
                 Action = "block",
@@ -8518,7 +8555,7 @@ internal static class Program
             CheckAssertion(results, "添加阻止规则成功", add is { Ok: true });
 
             // 2) 列表 / 分组
-            var afterAdd = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var afterAdd = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
             var added = afterAdd?.Rules?.FirstOrDefault(rule =>
                 string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase));
 
@@ -8536,14 +8573,14 @@ internal static class Program
                     string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase)) == true);
 
             // 3) 过滤器映射
-            var map = Call(ServiceProtocol.Commands.FilterMap, new ServiceRequest(), out _);
+            var map = Call<FilterMapView>(ServiceProtocol.Commands.FilterMap, new ServiceRequest(), out _);
             CheckAssertion(results, "能取到过滤器 id → 规则名映射",
                 map is { Ok: true, FilterMap: not null });
 
             // 4) 删除
             if (added is not null)
             {
-                var delete = Call(ServiceProtocol.Commands.DeleteRule, new ServiceRequest
+                var delete = Call<WriteResult>(ServiceProtocol.Commands.DeleteRule, new ServiceRequest
                 {
                     RuleName = added.Name,
                 }, out var deleteError);
@@ -8551,7 +8588,7 @@ internal static class Program
                 W($"    删除：{(delete is null ? deleteError : $"Ok={delete.Ok}，错误={delete.Error}")}");
                 CheckAssertion(results, "删除规则成功", delete is { Ok: true });
 
-                var afterDelete = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+                var afterDelete = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
                 CheckAssertion(results, "删除后列表里不再有它",
                     afterDelete?.Rules?.All(rule =>
                         !string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase)) == true);
@@ -8569,7 +8606,7 @@ internal static class Program
                 Group = "导入分组",
             });
 
-            var import = Call(ServiceProtocol.Commands.ImportRules, new ServiceRequest
+            var import = Call<WriteResult>(ServiceProtocol.Commands.ImportRules, new ServiceRequest
             {
                 Action = "block",
                 Json = RuleExport.Serialize(document),
@@ -8578,7 +8615,7 @@ internal static class Program
             W($"    导入：{(import is null ? importError : $"Ok={import.Ok}，影响 {import.Affected} 条")}");
             CheckAssertion(results, "导入成功且新建 1 条", import is { Ok: true, Affected: 1 });
 
-            var afterImport = Call(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
+            var afterImport = Call<RulesView>(ServiceProtocol.Commands.ListRules, new ServiceRequest(), out _);
             var imported = afterImport?.Rules?.FirstOrDefault(rule =>
                 string.Equals(rule.Value, tempExe, StringComparison.OrdinalIgnoreCase));
 
@@ -8586,7 +8623,7 @@ internal static class Program
 
             if (imported is not null)
             {
-                _ = Call(ServiceProtocol.Commands.DeleteRule,
+                _ = Call<WriteResult>(ServiceProtocol.Commands.DeleteRule,
                     new ServiceRequest { RuleName = imported.Name }, out _);
             }
         }
@@ -8609,11 +8646,12 @@ internal static class Program
     }
 
     /// <summary>发一条规则命令并取回响应（3 秒超时）。</summary>
-    private static ActionResult? Call(
+    private static T? Call<T>(
         string command, ServiceRequest request, out string? error)
+        where T : ResponsePayload
     {
         request.Command = command;
-        return ServiceClient.TryRequest(request, TimeSpan.FromSeconds(3), out error);
+        return ServiceClient.TryRequestAs<T>(request, TimeSpan.FromSeconds(3), out error);
     }
 
     /// <summary>
@@ -12274,11 +12312,11 @@ internal static class Program
             return;
         }
 
-        ActionResult? enabled = null;
+        StatusView? enabled = null;
 
         try
         {
-            enabled = ServiceClient.TryRequest(
+            enabled = ServiceClient.TryRequestAs<StatusView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.StrictLockdown,
@@ -12306,7 +12344,7 @@ internal static class Program
         finally
         {
             // 无论上面成功与否，都要尽力把会话关掉，绝不留下断网状态。
-            var disabled = ServiceClient.TryRequest(
+            var disabled = ServiceClient.TryRequestAs<StatusView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.StrictDisable },
                 TimeSpan.FromSeconds(20),
                 out var disableError);
@@ -12479,7 +12517,7 @@ internal static class Program
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var configure = ServiceClient.TryRequest(
+            var configure = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.ConfigureAntiScan,
@@ -12495,7 +12533,7 @@ internal static class Program
             CheckAssertion(results, "允许名单已保存",
                 after?.AntiScanSettings?.Allowlist?.Contains(testAllowlist, StringComparer.OrdinalIgnoreCase) == true);
 
-            var release = ServiceClient.TryRequest(
+            var release = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.ReleaseAntiScanBlock,
@@ -12507,7 +12545,7 @@ internal static class Program
             W($"    解除不存在的封禁：ok={release?.Ok}，影响={release?.Affected}，错误={release?.Error ?? releaseError}");
             CheckAssertion(results, "解除不存在的封禁不报错", release is { Ok: true });
 
-            var clear = ServiceClient.TryRequest(
+            var clear = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ClearAntiScan },
                 TimeSpan.FromSeconds(15),
                 out var clearError);
@@ -12519,7 +12557,7 @@ internal static class Program
         {
             if (initialSettings is not null)
             {
-                var restore = ServiceClient.TryRequest(
+                var restore = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.ConfigureAntiScan,
@@ -12536,9 +12574,9 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ActionResult? QueryAntiScanResponse(out string? error)
+    private static QueryView? QueryAntiScanResponse(out string? error)
     {
-        return ServiceClient.TryRequest(
+        return ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryAntiScan },
             TimeSpan.FromSeconds(5),
             out error);
@@ -12618,7 +12656,7 @@ internal static class Program
             var off = CloneSettings(initialSettings);
             off.Enabled = false;
 
-            var offResponse = ServiceClient.TryRequest(
+            var offResponse = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.IdsConfigure,
@@ -12637,7 +12675,7 @@ internal static class Program
             var on = CloneSettings(initialSettings);
             on.Enabled = true;
 
-            var onResponse = ServiceClient.TryRequest(
+            var onResponse = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.IdsConfigure,
@@ -12663,7 +12701,7 @@ internal static class Program
             // ---- 抑制往返 ----
             var target = "selftest-" + Guid.NewGuid().ToString("N") + ".example";
 
-            var addResponse = ServiceClient.TryRequest(
+            var addResponse = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.AlertIdsSuppress,
@@ -12686,7 +12724,7 @@ internal static class Program
 
             if (added is not null)
             {
-                var removeResponse = ServiceClient.TryRequest(
+                var removeResponse = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.AlertIdsSuppress,
@@ -12706,7 +12744,7 @@ internal static class Program
             }
 
             // ---- 未知告警确认 / 清空 ----
-            var ackMissing = ServiceClient.TryRequest(
+            var ackMissing = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.AlertIdsAck,
@@ -12717,7 +12755,7 @@ internal static class Program
 
             CheckAssertion(results, "确认不存在的告警返回失败", ackMissing is { Ok: false });
 
-            var clear = ServiceClient.TryRequest(
+            var clear = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.AlertIdsClear },
                 TimeSpan.FromSeconds(15),
                 out var clearError);
@@ -12734,7 +12772,7 @@ internal static class Program
             // 无论断言结果如何都要恢复用户原来的设置。
             if (initialSettings is not null)
             {
-                var restore = ServiceClient.TryRequest(
+                var restore = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.IdsConfigure,
@@ -12751,9 +12789,9 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ActionResult? QueryIdsResponse(out string? error)
+    private static QueryView? QueryIdsResponse(out string? error)
     {
-        return ServiceClient.TryRequest(
+        return ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },
             TimeSpan.FromSeconds(5),
             out error);
@@ -12825,7 +12863,7 @@ internal static class Program
 
         try
         {
-            var configure = ServiceClient.TryRequest(
+            var configure = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.ConfigureLan,
@@ -12842,7 +12880,7 @@ internal static class Program
                 W($"    配置失败：{configure?.Error ?? configureError}");
             }
 
-            var block = ServiceClient.TryRequest(
+            var block = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.BlockLanDhcp,
@@ -12858,7 +12896,7 @@ internal static class Program
             CheckAssertion(results, "创建 DHCP 阻断过滤器",
                 block is { Ok: true } && block.LanBlocks?.Any(item => item.ServerIp == "203.0.113.9") == true);
 
-            var unblock = ServiceClient.TryRequest(
+            var unblock = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.BlockLanDhcp,
@@ -12877,7 +12915,7 @@ internal static class Program
                 W($"    解除失败：{unblockError}");
             }
 
-            var clear = ServiceClient.TryRequest(
+            var clear = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ClearLan },
                 TimeSpan.FromSeconds(15),
                 out var clearError);
@@ -12894,7 +12932,7 @@ internal static class Program
         {
             if (initial is not null)
             {
-                var restore = ServiceClient.TryRequest(
+                var restore = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.ConfigureLan,
@@ -12915,9 +12953,9 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: true);
     }
 
-    private static ActionResult? QueryLanResponse(out string? error)
+    private static QueryView? QueryLanResponse(out string? error)
     {
-        return ServiceClient.TryRequest(
+        return ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryLan },
             TimeSpan.FromSeconds(5),
             out error);
@@ -12973,7 +13011,7 @@ internal static class Program
 
         try
         {
-            var trust = ServiceClient.TryRequest(
+            var trust = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.TrustDnsServer,
@@ -12993,7 +13031,7 @@ internal static class Program
                 W($"    信任失败：{trustError}");
             }
 
-            var untrust = ServiceClient.TryRequest(
+            var untrust = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.TrustDnsServer,
@@ -13013,7 +13051,7 @@ internal static class Program
                 W($"    取消信任失败：{untrustError}");
             }
 
-            var clear = ServiceClient.TryRequest(
+            var clear = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ClearDnsSecurity },
                 TimeSpan.FromSeconds(15),
                 out var clearError);
@@ -13029,7 +13067,7 @@ internal static class Program
         finally
         {
             // 测试地址本身不写入任何配置；保险起见再取消一次。
-            ServiceClient.TryRequest(
+            ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.TrustDnsServer,
@@ -13100,7 +13138,7 @@ internal static class Program
 
         try
         {
-            var unknownBlock = ServiceClient.TryRequest(
+            var unknownBlock = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13125,7 +13163,7 @@ internal static class Program
             {
                 blockTarget = blockTargetServer.Address;
 
-                var block = ServiceClient.TryRequest(
+                var block = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13148,7 +13186,7 @@ internal static class Program
                     W($"    阻断失败：{block?.Error ?? blockError}");
                 }
 
-                var release = ServiceClient.TryRequest(
+                var release = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13180,7 +13218,7 @@ internal static class Program
             {
                 blockTargetRouter = blockTargetRouters.LinkLocal;
 
-                var raBlock = ServiceClient.TryRequest(
+                var raBlock = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13203,7 +13241,7 @@ internal static class Program
                     W($"    RA 阻断失败：{raBlock?.Error ?? raBlockError}");
                 }
 
-                var raRelease = ServiceClient.TryRequest(
+                var raRelease = ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13224,7 +13262,7 @@ internal static class Program
                 }
             }
 
-            var trust = ServiceClient.TryRequest(
+            var trust = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.TrustIpv6,
@@ -13243,7 +13281,7 @@ internal static class Program
                 W($"    信任失败：{trustError}");
             }
 
-            var untrust = ServiceClient.TryRequest(
+            var untrust = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.TrustIpv6,
@@ -13262,7 +13300,7 @@ internal static class Program
                 W($"    取消信任失败：{untrustError}");
             }
 
-            var clear = ServiceClient.TryRequest(
+            var clear = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ClearIpv6Security },
                 TimeSpan.FromSeconds(15),
                 out var clearError);
@@ -13275,7 +13313,7 @@ internal static class Program
                 W($"    清空失败：{clearError}");
             }
 
-            var reset = ServiceClient.TryRequest(
+            var reset = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ResetIpv6Baseline },
                 TimeSpan.FromSeconds(15),
                 out var resetError);
@@ -13289,7 +13327,7 @@ internal static class Program
         }
         finally
         {
-            ServiceClient.TryRequest(
+            ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.TrustIpv6,
@@ -13303,7 +13341,7 @@ internal static class Program
 
             if (!string.IsNullOrWhiteSpace(blockTarget))
             {
-                ServiceClient.TryRequest(
+                ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13317,7 +13355,7 @@ internal static class Program
 
             if (!string.IsNullOrWhiteSpace(blockTargetRouter))
             {
-                ServiceClient.TryRequest(
+                ServiceClient.TryRequestAs<QueryView>(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.BlockIpv6,
@@ -13342,7 +13380,7 @@ internal static class Program
         W("################################################################");
         W();
 
-        var snapshot = ServiceClient.TryRequest(
+        var snapshot = ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryNameResolution },
             TimeSpan.FromSeconds(5),
             out var error);
@@ -13370,7 +13408,7 @@ internal static class Program
         }
         else
         {
-            var block = ServiceClient.TryRequest(
+            var block = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.BlockNameSource,
@@ -13392,7 +13430,7 @@ internal static class Program
                 W($"    阻断失败：{block?.Error ?? blockError}");
             }
 
-            var release = ServiceClient.TryRequest(
+            var release = ServiceClient.TryRequestAs<QueryView>(
                 new ServiceRequest
                 {
                     Command = ServiceProtocol.Commands.BlockNameSource,
@@ -13424,7 +13462,7 @@ internal static class Program
         W("################################################################");
         W();
 
-        var snapshot = ServiceClient.TryRequest(
+        var snapshot = ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryConfigIntegrity },
             TimeSpan.FromSeconds(5),
             out var error);
@@ -13449,7 +13487,7 @@ internal static class Program
         CheckAssertion(results, "每个监控项都带基线存在标志",
             snapshot.ConfigItems?.All(item => item.BaselineExists) == true);
 
-        var rebaseline = ServiceClient.TryRequest(
+        var rebaseline = ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.RebaselineConfigIntegrity },
             TimeSpan.FromSeconds(15),
             out var rebaselineError);
@@ -13464,7 +13502,7 @@ internal static class Program
             W($"    重采基线失败：{rebaseline?.Error ?? rebaselineError}");
         }
 
-        var clear = ServiceClient.TryRequest(
+        var clear = ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.ClearConfigIntegrity },
             TimeSpan.FromSeconds(15),
             out var clearError);
@@ -13481,17 +13519,17 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ActionResult? QueryIpv6Response(out string? error)
+    private static QueryView? QueryIpv6Response(out string? error)
     {
-        return ServiceClient.TryRequest(
+        return ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryIpv6Security },
             TimeSpan.FromSeconds(5),
             out error);
     }
 
-    private static ActionResult? QueryDnsSecurityResponse(out string? error)
+    private static QueryView? QueryDnsSecurityResponse(out string? error)
     {
-        return ServiceClient.TryRequest(
+        return ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryDnsSecurity },
             TimeSpan.FromSeconds(5),
             out error);
@@ -13530,16 +13568,16 @@ internal static class Program
             return;
         }
 
-        var beforeSeries = before.TrafficSeries?.BytesIn?.Count ?? 0;
-        W($"    采集={before.TrafficStatus?.Collecting} Npcap={before.TrafficStatus?.NpcapVersion} " +
-          $"pps={before.TrafficStatus?.Pps} 丢包={before.TrafficStatus?.Dropped} " +
-          $"采样={before.TrafficStatus?.Sampled} 曲线点={beforeSeries}");
+        var beforeSeries = before.Series?.BytesIn?.Count ?? 0;
+        W($"    采集={before.Status?.Collecting} Npcap={before.Status?.NpcapVersion} " +
+          $"pps={before.Status?.Pps} 丢包={before.Status?.Dropped} " +
+          $"采样={before.Status?.Sampled} 曲线点={beforeSeries}");
 
         CheckAssertion(results, "返回 Npcap 版本与曲线",
-            !string.IsNullOrWhiteSpace(before.TrafficStatus?.NpcapVersion)
-            && before.TrafficSeries is not null);
+            !string.IsNullOrWhiteSpace(before.Status?.NpcapVersion)
+            && before.Series is not null);
 
-        var paused = ServiceClient.TryRequest(
+        var paused = ServiceClient.TryRequestAs<TrafficView>(
             new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.ConfigureTraffic,
@@ -13549,7 +13587,7 @@ internal static class Program
             out var pauseError);
 
         CheckAssertion(results, "暂停精确统计成功",
-            paused is { Ok: true, TrafficStatus.Paused: true });
+            paused is { Ok: true, Status.Paused: true });
 
         if (paused is not { Ok: true })
         {
@@ -13561,13 +13599,13 @@ internal static class Program
         Thread.Sleep(TimeSpan.FromSeconds(3));
 
         var pausedSnapshot = QueryTrafficResponse(out _);
-        var pausedSeries = pausedSnapshot?.TrafficSeries?.BytesIn?.Count ?? 0;
+        var pausedSeries = pausedSnapshot?.Series?.BytesIn?.Count ?? 0;
 
         W($"    暂停 3 秒后曲线点 = {pausedSeries}（暂停前 {beforeSeries}）");
         CheckAssertion(results, "暂停后曲线不再增长",
             pausedSeries <= beforeSeries + 1);
 
-        var resumed = ServiceClient.TryRequest(
+        var resumed = ServiceClient.TryRequestAs<TrafficView>(
             new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.ConfigureTraffic,
@@ -13577,7 +13615,7 @@ internal static class Program
             out var resumeError);
 
         CheckAssertion(results, "继续精确统计成功",
-            resumed is { Ok: true, TrafficStatus.Paused: false });
+            resumed is { Ok: true, Status.Paused: false });
 
         if (resumed is not { Ok: true })
         {
@@ -13589,13 +13627,13 @@ internal static class Program
         Thread.Sleep(TimeSpan.FromSeconds(3));
 
         var resumedSnapshot = QueryTrafficResponse(out _);
-        var resumedSeries = resumedSnapshot?.TrafficSeries?.BytesIn?.Count ?? 0;
+        var resumedSeries = resumedSnapshot?.Series?.BytesIn?.Count ?? 0;
 
         W($"    继续 3 秒后曲线点 = {resumedSeries}");
         CheckAssertion(results, "继续后曲线恢复增长",
             resumedSeries > pausedSeries);
 
-        var cleared = ServiceClient.TryRequest(
+        var cleared = ServiceClient.TryRequestAs<TrafficView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.ClearTraffic },
             TimeSpan.FromSeconds(15),
             out var clearError);
@@ -13606,8 +13644,8 @@ internal static class Program
 
         CheckAssertion(results, "清空后程序与曲线归零",
             afterClear is { Ok: true }
-            && (afterClear.Traffic?.Count ?? 0) == 0
-            && (afterClear.TrafficSeries?.BytesIn?.Count ?? 0) == 0);
+            && (afterClear.Programs?.Count ?? 0) == 0
+            && (afterClear.Series?.BytesIn?.Count ?? 0) == 0);
 
         if (cleared is null)
         {
@@ -13646,10 +13684,10 @@ internal static class Program
             return;
         }
 
-        W($"    清空前：{before.Traffic?.Count ?? 0} 个程序，" +
+        W($"    清空前：{before.Programs?.Count ?? 0} 个程序，" +
           $"统计起点 = {before.TrafficStartedUtc?.ToString("O") ?? "（旧服务未返回）"}");
 
-        var cleared = ServiceClient.TryRequest(
+        var cleared = ServiceClient.TryRequestAs<TrafficView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.ClearTraffic },
             TimeSpan.FromSeconds(15),
             out var clearError);
@@ -13670,13 +13708,13 @@ internal static class Program
             return;
         }
 
-        W($"    清空后：{after.Traffic?.Count ?? 0} 个程序，" +
+        W($"    清空后：{after.Programs?.Count ?? 0} 个程序，" +
           $"统计起点 = {after.TrafficStartedUtc?.ToString("O") ?? "（旧服务未返回）"}");
 
         // 清空后可能有别的程序在毫秒级产生新流量，不能要求列表绝对为 0；
         // 核心断言是：本进程原有的计数没了，且统计起点已重置。
         var ownPath = Environment.ProcessPath;
-        var ownAfter = after.Traffic?.FirstOrDefault(item =>
+        var ownAfter = after.Programs?.FirstOrDefault(item =>
             item.IsPathKnown
             && !string.IsNullOrEmpty(ownPath)
             && string.Equals(item.Path, ownPath, StringComparison.OrdinalIgnoreCase));
@@ -13694,9 +13732,9 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ActionResult? QueryTrafficResponse(out string? error)
+    private static TrafficView? QueryTrafficResponse(out string? error)
     {
-        return ServiceClient.TryRequest(
+        return ServiceClient.TryRequestAs<TrafficView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
             TimeSpan.FromSeconds(5),
             out error);
@@ -13704,13 +13742,13 @@ internal static class Program
 
     private static List<TrafficDto>? QueryTrafficFromService(out string? error)
     {
-        var response = ServiceClient.TryRequest(
+        var response = ServiceClient.TryRequestAs<TrafficView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
             TimeSpan.FromSeconds(5),
             out error);
 
-        return response is { Ok: true, Traffic: not null }
-            ? response.Traffic
+        return response is { Ok: true, Programs: not null }
+            ? response.Programs
             : null;
     }
 
@@ -13740,7 +13778,7 @@ internal static class Program
 
     private static List<DnsDto>? QueryDnsFromService(out string? error)
     {
-        var response = ServiceClient.TryRequest(
+        var response = ServiceClient.TryRequestAs<QueryView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryDns },
             TimeSpan.FromSeconds(5),
             out error);
@@ -14102,7 +14140,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(
-                new ActionResult { Ok = true, DnsRecords = new List<DnsDto> { dto } },
+                new QueryView { Ok = true, DnsRecords = new List<DnsDto> { dto } },
                 ServiceProtocol.JsonOptions);
             W($"    DNS JSON = {json}");
             CheckAssertion(results, "响应 JSON 带 dnsRecords / queryName",
@@ -14462,7 +14500,7 @@ internal static class Program
                 broken.Settings.Enabled && broken.Settings.RetentionDays == 30);
 
             // ---- DTO 往返 ----
-            var response = new ActionResult
+            var response = new QueryView
             {
                 Ok = true,
                 IdsAlerts = new List<IdsAlertDto>
@@ -14484,7 +14522,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-            var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
+            var back = JsonSerializer.Deserialize<QueryView>(json, ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "协议 DTO：告警 / 设置 / 状态往返",
                 back?.IdsAlerts is { Count: 1 }
@@ -14872,10 +14910,10 @@ internal static class Program
             beforeClear > 0 && cleared.Programs.Count == 0 && cleared.BytesIn.Count == 0);
 
         // 新增 DTO 的 JSON 往返。
-        var response = new ActionResult
+        var response = new TrafficView
         {
             Ok = true,
-            Traffic = new List<TrafficDto>
+            Programs = new List<TrafficDto>
             {
                 new()
                 {
@@ -14894,14 +14932,14 @@ internal static class Program
                     Source = "npcap",
                 },
             },
-            TrafficSeries = new TrafficSeriesDto
+            Series = new TrafficSeriesDto
             {
                 StartUtc = start,
                 BytesIn = new List<long> { 1300, 0 },
                 BytesOut = new List<long> { 2000, 0 },
                 Sampled = true,
             },
-            TrafficStatus = new TrafficStatusDto
+            Status = new TrafficStatusDto
             {
                 Collecting = true,
                 Pps = 1234,
@@ -14911,13 +14949,13 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<TrafficView>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：精确字段 / 曲线 / 状态往返",
-            back?.Traffic is { Count: 1 }
-            && back.Traffic[0] is { UdpBytesIn: 300, Sampled: true, Source: "npcap" }
-            && back.TrafficSeries is { BytesIn.Count: 2, Sampled: true }
-            && back.TrafficStatus is { Collecting: true, Pps: 1234, NpcapVersion: "1.90" });
+            back?.Programs is { Count: 1 }
+            && back.Programs![0] is { UdpBytesIn: 300, Sampled: true, Source: "npcap" }
+            && back.Series is { BytesIn.Count: 2, Sampled: true }
+            && back.Status is { Collecting: true, Pps: 1234, NpcapVersion: "1.90" });
 
         PrintSummary(results, showFirewallResidue: false);
     }
@@ -15116,7 +15154,7 @@ internal static class Program
         }
 
         // 协议 DTO 往返。
-        var response = new ActionResult
+        var response = new QueryView
         {
             Ok = true,
             LanSettings = new LanSettingsDto { RetentionDays = 15, DhcpBlockEnabled = true },
@@ -15148,7 +15186,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<QueryView>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：局域网状态 / 事件 / 网关 / 服务器 / 阻断往返",
             back?.LanSettings is { RetentionDays: 15, DhcpBlockEnabled: true }
@@ -15607,7 +15645,7 @@ internal static class Program
         }
 
         // 协议 DTO 往返。
-        var response = new ActionResult
+        var response = new QueryView
         {
             Ok = true,
             DnsSecurityStatus = new DnsSecurityStatusDto
@@ -15630,7 +15668,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<QueryView>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：DNS 状态 / 服务器 / 事件往返",
             back?.DnsSecurityStatus is { Collecting: true, BaselineReady: true, ConfiguredCount: 1 }
@@ -16103,7 +16141,7 @@ internal static class Program
             }
         }
 
-        var response = new ActionResult
+        var response = new QueryView
         {
             Ok = true,
             Ipv6SecurityStatus = new Ipv6SecurityStatusDto
@@ -16136,7 +16174,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<QueryView>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：IPv6 状态 / 路由器 / DHCPv6 / 邻居 / 事件往返",
             back?.Ipv6SecurityStatus is { Collecting: true, BaselineReady: true, RouterCount: 1 }
@@ -16634,7 +16672,7 @@ internal static class Program
             CheckAssertion(results, "状态文件：坏文件回退默认值",
                 broken.Settings.Enabled && broken.Settings.BlockMinutes == 10);
 
-            var response = new ActionResult
+            var response = new QueryView
             {
                 Ok = true,
                 AntiScanSettings = new AntiScanSettingsDto
@@ -16679,7 +16717,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-            var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
+            var back = JsonSerializer.Deserialize<QueryView>(json, ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "协议 DTO：反扫描设置 / 状态 / 事件 / 封禁往返",
                 back?.AntiScanSettings is { AutoBlock: true, BlockMinutes: 10 }
@@ -17452,7 +17490,7 @@ internal static class Program
 
             var started = new DateTime(2026, 10, 26, 12, 34, 56, DateTimeKind.Utc);
             var metadataJson = JsonSerializer.Serialize(
-                new ActionResult { Ok = true, TrafficStartedUtc = started },
+                new TrafficView { Ok = true, TrafficStartedUtc = started },
                 ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "响应 JSON 带 trafficStartedUtc",
@@ -18085,11 +18123,11 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(
-                new ActionResult { Ok = true, Traffic = new List<TrafficDto> { dto } },
+                new TrafficView { Ok = true, Programs = new List<TrafficDto> { dto } },
                 ServiceProtocol.JsonOptions);
             W($"    流量 JSON = {json}");
-            CheckAssertion(results, "响应 JSON 带 traffic / bytesIn / bytesOut",
-                json.Contains("\"traffic\":[", StringComparison.Ordinal)
+            CheckAssertion(results, "响应 JSON 带 programs / bytesIn / bytesOut",
+                json.Contains("\"programs\":[", StringComparison.Ordinal)
                 && json.Contains("\"bytesIn\":1234", StringComparison.Ordinal)
                 && json.Contains("\"bytesOut\":56", StringComparison.Ordinal)
                 && json.Contains("\"isPathKnown\":true", StringComparison.Ordinal));
@@ -18283,10 +18321,10 @@ internal static class Program
             CheckAssertion(results, "请求 JSON 使用 camelCase 且带 pids",
                 requestJson.Contains("\"pids\":[1,2]", StringComparison.Ordinal));
 
-            var response = new ActionResult
+            var response = new ProcessPathsView
             {
                 Ok = true,
-                ProcessPaths = new List<ProcessPathDto>
+                Paths = new List<ProcessPathDto>
                 {
                     new() { Pid = 1, Path = @"C:\Tools\a.exe" },
                 },
@@ -18294,8 +18332,8 @@ internal static class Program
 
             var responseJson = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
             W($"    响应 JSON = {responseJson}");
-            CheckAssertion(results, "响应 JSON 带 processPaths",
-                responseJson.Contains("\"processPaths\"", StringComparison.Ordinal));
+            CheckAssertion(results, "响应 JSON 带 paths",
+                responseJson.Contains("\"paths\"", StringComparison.Ordinal));
             CheckAssertion(results, "响应 JSON 带 pid/path",
                 responseJson.Contains("\"pid\":1", StringComparison.Ordinal)
                 && responseJson.Contains(@"C:\\Tools\\a.exe", StringComparison.Ordinal));

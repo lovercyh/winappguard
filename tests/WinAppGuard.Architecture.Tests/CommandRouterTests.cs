@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Service;
 
 namespace WinAppGuard.Architecture.Tests;
@@ -65,13 +66,13 @@ public sealed class CommandRouterTests
         router.Register(new DelegateCommandHandler(
             ServiceProtocol.Commands.Ping,
             "one",
-            context => new ActionResult { Id = context.Request.Id }));
+            context => new WriteResult { Ok = true }));
 
         var error = Assert.Throws<InvalidOperationException>(() =>
             router.Register(new DelegateCommandHandler(
                 ServiceProtocol.Commands.Ping,
                 "two",
-                context => new ActionResult { Id = context.Request.Id })));
+                context => new WriteResult { Ok = true })));
 
         Assert.Contains(ServiceProtocol.Commands.Ping, error.Message, StringComparison.Ordinal);
     }
@@ -87,7 +88,7 @@ public sealed class CommandRouterTests
             router.Register(new DelegateCommandHandler(
                 command,
                 "test",
-                context => new ActionResult { Id = context.Request.Id }));
+                context => new WriteResult { Ok = true }));
         }
 
         var error = Assert.Throws<InvalidOperationException>(router.Validate);
@@ -105,13 +106,13 @@ public sealed class CommandRouterTests
             router.Register(new DelegateCommandHandler(
                 command,
                 "test",
-                context => new ActionResult { Id = context.Request.Id }));
+                context => new WriteResult { Ok = true }));
         }
 
         router.Register(new DelegateCommandHandler(
             "write.not-declared",
             "test",
-            context => new ActionResult { Id = context.Request.Id }));
+            context => new WriteResult { Ok = true }));
 
         var error = Assert.Throws<InvalidOperationException>(router.Validate);
 

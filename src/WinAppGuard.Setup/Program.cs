@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics.AntiScan;
@@ -834,9 +835,9 @@ internal static class Program
 
             lastError = response?.Error ?? error;
 
-            if (response is { Ok: true } && response.Status is not null)
+            if (response is StatusView { Ok: true, Status: not null } view)
             {
-                status = response.Status;
+                status = view.Status;
                 break;
             }
 

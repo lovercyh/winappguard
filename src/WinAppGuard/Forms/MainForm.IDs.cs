@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 
@@ -612,7 +613,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallAlertServiceAsync(
+            var response = await CallAlertServiceAsync<QueryView>(
                 ServiceProtocol.Commands.AlertIdsAck,
                 new ServiceRequest { IdsAlertId = row.Id },
                 Localizer.T("标记 IDS 告警为已读"));
@@ -650,7 +651,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallAlertServiceAsync(
+            var response = await CallAlertServiceAsync<QueryView>(
                 ServiceProtocol.Commands.AlertIdsAckAll,
                 new ServiceRequest(),
                 Localizer.T("全部标记 IDS 告警为已读"));
@@ -717,11 +718,11 @@ public sealed partial class MainForm
             // 5.2：1 小时 / 24 小时只改告警可见性，免 UAC；
             // 永久不再提醒会长期改变检测可见性，仍然走提权路径。
             var response = permanent
-                ? await CallServiceAsync(
+                ? await CallServiceAsync<QueryView>(
                     ServiceProtocol.Commands.IdsSuppress,
                     request,
                     Localizer.T("设置永久不再提醒"))
-                : await CallAlertServiceAsync(
+                : await CallAlertServiceAsync<QueryView>(
                     ServiceProtocol.Commands.AlertIdsSuppress,
                     request,
                     Localizer.T("设置同类告警不再提醒"));
@@ -766,7 +767,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.IdsConfigure,
                 new ServiceRequest
                 {
@@ -830,7 +831,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallAlertServiceAsync(
+            var response = await CallAlertServiceAsync<QueryView>(
                 ServiceProtocol.Commands.AlertIdsClear,
                 new ServiceRequest(),
                 Localizer.T("清空 IDS 告警"));

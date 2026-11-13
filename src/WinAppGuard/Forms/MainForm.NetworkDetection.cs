@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Localization;
 
 namespace WinAppGuard.Forms;
@@ -531,7 +532,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = await CallAlertServiceAsync(
+        var response = await CallAlertServiceAsync<QueryView>(
             ServiceProtocol.Commands.AlertNetworkAck,
             new ServiceRequest { NetworkAlertId = alert.Id },
             Localizer.T("标记反网络攻击告警为已读"));
@@ -553,7 +554,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = await CallAlertServiceAsync(
+        var response = await CallAlertServiceAsync<QueryView>(
             ServiceProtocol.Commands.AlertNetworkAckAll,
             new ServiceRequest(),
             Localizer.T("全部标记反网络攻击告警为已读"));
@@ -718,7 +719,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = await CallAlertServiceAsync(
+        var response = await CallAlertServiceAsync<QueryView>(
             ServiceProtocol.Commands.AlertNetworkClear,
             new ServiceRequest(),
             Localizer.T("清空反网络攻击告警"));

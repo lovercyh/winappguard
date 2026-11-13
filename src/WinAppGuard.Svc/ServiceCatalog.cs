@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 
 namespace WinAppGuard.Service;
 
@@ -38,9 +39,8 @@ internal static class ServiceCatalog
         // auth.challenge 是握手命令，由连接循环在 Dispatch 之前单独处理（且免签名）。
         // 这里仍然登记一个防御性 Handler：万一它作为普通请求到达，明确拒绝，
         // 而不是让它落进“未知命令”或被别的模块误处理。
-        Route(router, ServiceProtocol.Commands.AuthChallenge, SystemModule, context => new ActionResult
+        Route(router, ServiceProtocol.Commands.AuthChallenge, SystemModule, context => new ErrorView
         {
-            Id = context.Request.Id,
             Ok = false,
             Error = "auth.challenge 只能作为连接后的第一条命令。",
         });
@@ -51,9 +51,8 @@ internal static class ServiceCatalog
                 "WAG-AUTH-004",
                 $"Auth probe: pid={context.ClientPid}, elevated={context.Elevated}.");
 
-            return new ActionResult
+            return new WriteResult
             {
-                Id = context.Request.Id,
                 Ok = context.Elevated,
                 Error = context.Elevated ? null : "当前客户端未提权。",
             };
@@ -120,16 +119,14 @@ internal static class ServiceCatalog
             context => TrafficCaptureHost.Configure(context.Request));
 
         // ------------------------------------------------------------------- DNS
-        Route(router, ServiceProtocol.Commands.QueryDns, DnsModule, context => new ActionResult
+        Route(router, ServiceProtocol.Commands.QueryDns, DnsModule, context => new QueryView
         {
-            Id = context.Request.Id,
             Ok = true,
             DnsRecords = DnsHost.Snapshot(500),
         });
 
-        Route(router, ServiceProtocol.Commands.ClearDns, DnsModule, context => new ActionResult
+        Route(router, ServiceProtocol.Commands.ClearDns, DnsModule, context => new WriteResult
         {
-            Id = context.Request.Id,
             Ok = true,
             Affected = DnsHost.Clear(),
         });
@@ -422,10 +419,9 @@ internal static class ServiceCatalog
         return router;
     }
 
-    private static ActionResult StatusResponse(ServiceRequest request)
+    private static StatusView StatusResponse(ServiceRequest request)
         => new()
         {
-            Id = request.Id,
             Ok = true,
             Status = ControlServer.BuildStatus(),
         };
@@ -434,6 +430,6 @@ internal static class ServiceCatalog
         CommandRouter router,
         string command,
         string module,
-        Func<CommandContext, ActionResult> handler)
+        Func<CommandContext, ResponsePayload> handler)
         => router.Register(new DelegateCommandHandler(command, module, handler));
 }

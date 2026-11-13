@@ -1,17 +1,18 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 
 namespace WinAppGuard.Service;
 
 /// <summary>
 /// 5.9：命令权限判定的唯一入口。
 ///
-/// 现有协议 v2 仍然使用 ServiceRequest/ActionResult，但不再在 ControlServer 里
+/// 协议使用 ServiceRequest，响应是强类型 ResponsePayload；不再在 ControlServer 里
 /// 用 "write." 前缀、alert 白名单和永久抑制特判三套机制分散判断。
 /// </summary>
 internal static class CommandPolicyGuard
 {
     /// <summary>返回 null 表示允许继续执行；否则返回拒绝响应。</summary>
-    internal static ActionResult? Check(
+    internal static ResponsePayload? Check(
         ServiceRequest request,
         bool elevated,
         uint clientPid)
@@ -19,9 +20,9 @@ internal static class CommandPolicyGuard
         if (!CommandPolicyTable.TryGet(request.Command, out var policy))
         {
             // 未声明的命令按未知命令处理，不能默认当成只读放行。
-            return new ActionResult
+            return new ErrorView
             {
-                Id = request.Id,
+                
                 Ok = false,
                 ErrorCode = "UnknownCommand",
                 Error = $"未知命令：{request.Command}",
@@ -35,9 +36,9 @@ internal static class CommandPolicyGuard
                     "WAG-AUTH-005",
                     $"Rejected write operation: pid={clientPid} is not elevated, command={request.Command}.");
 
-                return new ActionResult
+                return new ErrorView
                 {
-                    Id = request.Id,
+                    
                     Ok = false,
                     ErrorCode = "NotElevated",
                     Error = "修改规则需要管理员权限（请从界面操作，会弹出 UAC）。",
@@ -59,9 +60,9 @@ internal static class CommandPolicyGuard
         // “永久不再提醒”会长期改变检测可见性，即使走 alert.* 也要求管理员同意。
         if (ServiceProtocol.IsPermanentAlertSuppression(request) && !elevated)
         {
-            return new ActionResult
+            return new ErrorView
             {
-                Id = request.Id,
+                
                 Ok = false,
                 ErrorCode = "NotElevated",
                 Error = "永久不再提醒需要管理员权限。",

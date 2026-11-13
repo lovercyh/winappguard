@@ -1,5 +1,6 @@
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
@@ -63,7 +64,7 @@ internal sealed class RuleHandlers
     /// </summary>
     internal static readonly object Gate = new();
 
-    internal ActionResult Handle(ServiceRequest request)
+    internal ResponsePayload Handle(ServiceRequest request)
     {
         lock (Gate)
         {
@@ -79,7 +80,7 @@ internal sealed class RuleHandlers
         }
     }
 
-    private ActionResult HandleCore(ServiceRequest request)
+    private ResponsePayload HandleCore(ServiceRequest request)
     {
         try
         {
@@ -120,15 +121,14 @@ internal sealed class RuleHandlers
         }
     }
 
-    private ActionResult AllowTargets(ServiceRequest request)
+    private AllowTargetsView AllowTargets(ServiceRequest request)
     {
         // 界面不再自己枚举防火墙规则：这里把两类信息一次读齐。
         var ours = RuleEngine.GetAllowRulePrograms();
         var targets = FirewallManager.GetOutboundAllowTargets();
 
-        return new ActionResult
+        return new AllowTargetsView
         {
-            Id = request.Id,
             Ok = true,
             Programs = ours.ToList(),
             OtherPrograms = targets.OtherSoftwareAllowRulePrograms.ToList(),
@@ -136,7 +136,7 @@ internal sealed class RuleHandlers
         };
     }
 
-    private ActionResult Strict(ServiceRequest request, bool enable)
+    private StatusView Strict(ServiceRequest request, bool enable)
     {
         if (!enable)
         {
@@ -149,9 +149,8 @@ internal sealed class RuleHandlers
 
         var result = enable ? StrictModeHost.Enable() : StrictModeHost.Disable();
 
-        return new ActionResult
+        return new StatusView
         {
-            Id = request.Id,
             Ok = result.Success,
             Error = result.Success ? null : result.Message,
             Message = result.Message,
@@ -159,25 +158,23 @@ internal sealed class RuleHandlers
         };
     }
 
-    private ActionResult StrictRefresh(ServiceRequest request)
+    private StatusView StrictRefresh(ServiceRequest request)
     {
         StrictModeHost.RefreshIfEnabled();
 
-        return new ActionResult
+        return new StatusView
         {
-            Id = request.Id,
             Ok = true,
             Status = ControlServer.BuildStatus(),
         };
     }
 
-    private ActionResult StrictLockdown(ServiceRequest request)
+    private StatusView StrictLockdown(ServiceRequest request)
     {
         var result = LockdownHost.Enable(request.LockdownSeconds ?? 0);
 
-        return new ActionResult
+        return new StatusView
         {
-            Id = request.Id,
             Ok = result.Success,
             Error = result.Success ? null : result.Message,
             Message = result.Message,
@@ -226,7 +223,7 @@ internal sealed class RuleHandlers
         }
     }
 
-    private ActionResult StrictRecoverLegacy(ServiceRequest request)
+    private WriteResult StrictRecoverLegacy(ServiceRequest request)
     {
         var settingsPath = request.Value?.Trim() ?? string.Empty;
 
@@ -237,16 +234,15 @@ internal sealed class RuleHandlers
 
         var result = StrictModeHost.RecoverLegacy(settingsPath);
 
-        return new ActionResult
+        return new WriteResult
         {
-            Id = request.Id,
             Ok = true,
             Message = result.Message,
             Affected = result.WasLeftOn ? 1 : 0,
         };
     }
 
-    private ActionResult AuditConfigure(ServiceRequest request)
+    private StatusView AuditConfigure(ServiceRequest request)
     {
         var settings = AuditHost.Snapshot();
 
@@ -271,22 +267,20 @@ internal sealed class RuleHandlers
             "WAG-AUDIT-011",
             $"Audit settings updated (enabled={applied.Enabled}, retention={applied.RetentionDays} days, domainLookup={applied.DomainLookup}).");
 
-        return new ActionResult
+        return new StatusView
         {
-            Id = request.Id,
             Ok = true,
             Message = "记录设置已更新。",
             Status = ControlServer.BuildStatus(),
         };
     }
 
-    private ActionResult AuditClear(ServiceRequest request)
+    private StatusView AuditClear(ServiceRequest request)
     {
         var deleted = AuditHost.Clear();
 
-        return new ActionResult
+        return new StatusView
         {
-            Id = request.Id,
             Ok = true,
             Affected = deleted,
             Status = ControlServer.BuildStatus(),
@@ -605,11 +599,11 @@ internal sealed class RuleHandlers
             return false;
         }
     }
-    private ActionResult List(ServiceRequest request)
+    private RulesView List(ServiceRequest request)
     {
         var list = BuildRuleDtos();
 
-        return new ActionResult { Id = request.Id, Ok = true, Rules = list };
+        return new RulesView { Ok = true, Rules = list };
     }
 
     /// <summary>把当前规则 + 分组映射成 IPC 用的 DTO（列表与快照共用）。</summary>
@@ -670,15 +664,15 @@ internal sealed class RuleHandlers
         }
     }
 
-    private ActionResult FilterMap(ServiceRequest request)
+    private FilterMapView FilterMap(ServiceRequest request)
     {
         var map = RuleEngine.GetFilterIdToRuleName()
             .ToDictionary(pair => pair.Key.ToString(), pair => pair.Value);
 
-        return new ActionResult { Id = request.Id, Ok = true, FilterMap = map };
+        return new FilterMapView { Ok = true, FilterMap = map };
     }
 
-    private ActionResult AddProgram(ServiceRequest request)
+    private WriteResult AddProgram(ServiceRequest request)
     {
         var path = request.Value?.Trim() ?? string.Empty;
 
@@ -716,10 +710,10 @@ internal sealed class RuleHandlers
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-001", $"Rule {(action.Value == FirewallAction.Block ? "block" : "allow")}: {path} ({name}).");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = 1 };
+        return new WriteResult { Ok = true, Affected = 1 };
     }
 
-    private ActionResult AddIp(ServiceRequest request)
+    private WriteResult AddIp(ServiceRequest request)
     {
         var address = request.Value?.Trim() ?? string.Empty;
 
@@ -734,10 +728,10 @@ internal sealed class RuleHandlers
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-002", $"Rule block IP: {address} ({name}).");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = 1 };
+        return new WriteResult { Ok = true, Affected = 1 };
     }
 
-    private ActionResult Delete(ServiceRequest request)
+    private WriteResult Delete(ServiceRequest request)
     {
         var name = request.RuleName?.Trim() ?? string.Empty;
 
@@ -759,10 +753,10 @@ internal sealed class RuleHandlers
 
         ServiceLog.Operation("WAG-RULE-003", $"Rule deleted: {name}.");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = 1 };
+        return new WriteResult { Ok = true, Affected = 1 };
     }
 
-    private ActionResult DeleteForProgram(ServiceRequest request)
+    private WriteResult DeleteForProgram(ServiceRequest request)
     {
         var path = request.Value?.Trim() ?? string.Empty;
 
@@ -784,10 +778,10 @@ internal sealed class RuleHandlers
 
         ServiceLog.Operation("WAG-RULE-004", $"Rule unblock: {path} ({deleted} rules deleted).");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = deleted };
+        return new WriteResult { Ok = true, Affected = deleted };
     }
 
-    private ActionResult Clear(ServiceRequest request, FirewallAction action)
+    private WriteResult Clear(ServiceRequest request, FirewallAction action)
     {
         var deleted = RuleEngine.DeleteRulesByAction(action);
 
@@ -803,11 +797,11 @@ internal sealed class RuleHandlers
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-005", $"Rules cleared ({(action == FirewallAction.Block ? "blocklist" : "allowlist")}): {deleted}.");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = deleted };
+        return new WriteResult { Ok = true, Affected = deleted };
     }
 
     /// <summary>CLI --unblock-all：删除本工具创建的全部规则（阻止 + 允许 + IP）。</summary>
-    private ActionResult ClearAll(ServiceRequest request)
+    private WriteResult ClearAll(ServiceRequest request)
     {
         var deleted = RuleEngine.DeleteAllRules();
 
@@ -820,10 +814,10 @@ internal sealed class RuleHandlers
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-006", $"Rules cleared by CLI: {deleted}.");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = deleted };
+        return new WriteResult { Ok = true, Affected = deleted };
     }
 
-    private ActionResult SetGroup(ServiceRequest request)
+    private WriteResult SetGroup(ServiceRequest request)
     {
         var name = request.RuleName?.Trim() ?? string.Empty;
 
@@ -838,10 +832,10 @@ internal sealed class RuleHandlers
 
         ServiceLog.Operation("WAG-RULE-007", $"Rule group: {name} -> {(string.IsNullOrWhiteSpace(request.Group) ? "(none)" : request.Group)}.");
 
-        return new ActionResult { Id = request.Id, Ok = true };
+        return new WriteResult { Ok = true };
     }
 
-    private ActionResult PurgeExpired(ServiceRequest request)
+    private RulesView PurgeExpired(ServiceRequest request)
     {
         var removed = RuleEngine.PurgeExpiredRules(
             DateTime.UtcNow, SystemUptime.BootTimeUtc, request.FreshLogonSession);
@@ -856,9 +850,8 @@ internal sealed class RuleHandlers
             ServiceLog.Operation("WAG-RULE-008", $"Expired temporary rules purged: {removed.Count}.");
         }
 
-        return new ActionResult
+        return new RulesView
         {
-            Id = request.Id,
             Ok = true,
             Affected = removed.Count,
             Rules = removed
@@ -867,7 +860,7 @@ internal sealed class RuleHandlers
         };
     }
 
-    private ActionResult Import(ServiceRequest request)
+    private WriteResult Import(ServiceRequest request)
     {
         var expected = ParseAction(request.Action, out var actionError);
 
@@ -966,16 +959,15 @@ internal sealed class RuleHandlers
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-031", $"Rules imported: created {created}, skipped {skipped}, failed {failed}.");
 
-        return new ActionResult
+        return new WriteResult
         {
-            Id = request.Id,
             Ok = true,
             Affected = created,
             Error = failed > 0 ? $"有 {failed} 条失败（详见服务日志）。" : null,
         };
     }
 
-    private ActionResult ImportGroups(ServiceRequest request)
+    private WriteResult ImportGroups(ServiceRequest request)
     {
         var imported = _groups.ImportJson(request.Json);
         _groups.Save();
@@ -983,7 +975,7 @@ internal sealed class RuleHandlers
 
         ServiceLog.Operation("WAG-RULE-032", $"Legacy rule groups imported: {imported}.");
 
-        return new ActionResult { Id = request.Id, Ok = true, Affected = imported };
+        return new WriteResult { Ok = true, Affected = imported };
     }
 
     private void ApplyGroup(string ruleName, string? group)
@@ -1013,6 +1005,6 @@ internal sealed class RuleHandlers
         return null;
     }
 
-    private static ActionResult Fail(ServiceRequest request, string error)
-        => new() { Id = request.Id, Ok = false, Error = error };
+    private static WriteResult Fail(ServiceRequest request, string error)
+        => new() { Ok = false, Error = error };
 }

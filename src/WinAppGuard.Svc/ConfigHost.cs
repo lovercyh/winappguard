@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.Config;
 using WinAppGuard.Core.Diagnostics.Lan;
@@ -110,16 +111,15 @@ internal static class ConfigHost
         ServiceLog.Info("WAG-CONFIG-002", "Config integrity monitor stopped.");
     }
 
-    internal static ActionResult Query(ServiceRequest request)
+    internal static QueryView Query(ServiceRequest request)
     {
         lock (Gate)
         {
             var items = BuildItemsLocked();
             var changed = items.Count(item => item.Changed);
 
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 ConfigIntegrityStatus = new ConfigIntegrityStatusDto
                 {
@@ -136,7 +136,7 @@ internal static class ConfigHost
         }
     }
 
-    internal static ActionResult Clear(ServiceRequest request)
+    internal static QueryView Clear(ServiceRequest request)
     {
         LanEventStore? store;
 
@@ -159,7 +159,7 @@ internal static class ConfigHost
         return Query(request);
     }
 
-    internal static ActionResult Rebaseline(ServiceRequest request)
+    internal static QueryView Rebaseline(ServiceRequest request)
     {
         List<ConfigEntry> entries;
 

@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace WinAppGuard.Contracts.Protocol;
 
 /// <summary>
-/// 5.10：协议 v3 的单一帧模型。
+/// 5.11：协议 v4 的单一帧模型。
 ///
 /// 握手、认证、请求、响应都复用同一条长度前缀 JSON 帧；用 <see cref="Type"/>
 /// 区分。这样不用为每种帧维护一套读写逻辑。

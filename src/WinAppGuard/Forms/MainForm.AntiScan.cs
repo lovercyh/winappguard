@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Localization;
@@ -190,7 +191,7 @@ public sealed partial class MainForm
             // 关闭状态点重试没有意义，顺手帮用户打开。
             settings.Enabled = true;
 
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ConfigureAntiScan,
                 new ServiceRequest { AntiScanSettings = settings },
                 Localizer.T("重新连接 Npcap"));
@@ -207,7 +208,7 @@ public sealed partial class MainForm
             // 精确流量是独立的 Npcap 会话：同样清掉退避，装完驱动后不用等 30 秒。
             if (_trafficStatus?.Paused != true)
             {
-                var traffic = Gateway.TryRequest(
+                var traffic = Gateway.TryTraffic(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.ConfigureTraffic,
@@ -218,7 +219,7 @@ public sealed partial class MainForm
 
                 if (traffic is { Ok: true })
                 {
-                    _trafficStatus = traffic.TrafficStatus ?? _trafficStatus;
+                    _trafficStatus = traffic.Status ?? _trafficStatus;
                 }
             }
 
@@ -938,7 +939,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ConfigureAntiScan,
                 new ServiceRequest { AntiScanSettings = updated },
                 Localizer.T("修改反扫描设置"));
@@ -978,7 +979,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ReleaseAntiScanBlock,
                 new ServiceRequest { AntiScanAddress = row.Address },
                 Localizer.T("解除临时封禁"));
@@ -1039,7 +1040,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ReleaseAntiScanBlock,
                 new ServiceRequest { AntiScanReleaseAll = true },
                 Localizer.T("解除全部临时封禁"));
@@ -1092,7 +1093,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ClearAntiScan,
                 new ServiceRequest(),
                 Localizer.T("清空反扫描记录"));

@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 using WinAppGuard.Models;
@@ -620,7 +621,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<TrafficView>(
                 ServiceProtocol.Commands.ConfigureTraffic,
                 new ServiceRequest { TrafficPaused = paused },
                 Localizer.T(paused ? "暂停精确流量统计" : "继续精确流量统计"));
@@ -630,9 +631,9 @@ public sealed partial class MainForm
                 return;
             }
 
-            _trafficStatus = response.TrafficStatus ?? _trafficStatus;
-            _trafficSeries = response.TrafficSeries ?? _trafficSeries;
-            _trafficRecords = response.Traffic ?? _trafficRecords;
+            _trafficStatus = response.Status ?? _trafficStatus;
+            _trafficSeries = response.Series ?? _trafficSeries;
+            _trafficRecords = response.Programs ?? _trafficRecords;
             _trafficTable?.Invalidate();
 
             _trafficChart.SetSeries(
@@ -677,7 +678,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<TrafficView>(
                 ServiceProtocol.Commands.ClearTraffic,
                 new ServiceRequest(),
                 "清空流量统计");
@@ -688,8 +689,8 @@ public sealed partial class MainForm
             }
 
             _trafficRecords = new List<TrafficDto>();
-            _trafficSeries = response.TrafficSeries;
-            _trafficStatus = response.TrafficStatus ?? _trafficStatus;
+            _trafficSeries = response.Series;
+            _trafficStatus = response.Status ?? _trafficStatus;
             _trafficStartedUtc = response.TrafficStartedUtc ?? DateTime.UtcNow;
             _trafficTable?.Invalidate();
             _trafficGrid.DataSource = new List<TrafficRow>();

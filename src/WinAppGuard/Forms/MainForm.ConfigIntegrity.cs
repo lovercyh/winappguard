@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 
@@ -341,7 +342,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.RebaselineConfigIntegrity,
                 new ServiceRequest(),
                 Localizer.T("重新采集本机配置基线"));
@@ -391,7 +392,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ClearConfigIntegrity,
                 new ServiceRequest(),
                 Localizer.T("清空本机配置事件"));
@@ -412,7 +413,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void ApplyConfigResponse(ActionResult response)
+    private void ApplyConfigResponse(QueryView response)
     {
         _configItemTable?.Invalidate();
         _configEventTable?.Invalidate();

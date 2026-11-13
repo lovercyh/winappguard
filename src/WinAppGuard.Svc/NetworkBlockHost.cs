@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core.Diagnostics.NetworkDetection;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Interop;
@@ -69,7 +70,7 @@ internal static class NetworkBlockHost
         }
     }
 
-    internal static ActionResult Add(
+    internal static QueryView Add(
         ServiceRequest request,
         string kind,
         string target,
@@ -108,9 +109,8 @@ internal static class NetworkBlockHost
             if (existing is not null)
             {
                 existing.ExpiresUtc = DateTime.UtcNow.AddMinutes(duration);
-                return new ActionResult
+                return new QueryView
                 {
-                    Id = request.Id,
                     Ok = true,
                     NetworkBlocks = SnapshotLocked(),
                 };
@@ -155,16 +155,15 @@ internal static class NetworkBlockHost
                 $"Manual network block: id={block.Id}, kind={kind}, target={target}, " +
                 $"minutes={duration}, alert={alertId ?? "-"};");
 
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 NetworkBlocks = SnapshotLocked(),
             };
         }
     }
 
-    internal static ActionResult Remove(ServiceRequest request, string blockId)
+    internal static QueryView Remove(ServiceRequest request, string blockId)
     {
         lock (Gate)
         {
@@ -178,9 +177,8 @@ internal static class NetworkBlockHost
 
             RemoveLocked(block);
 
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 Affected = 1,
                 NetworkBlocks = SnapshotLocked(),
@@ -188,7 +186,7 @@ internal static class NetworkBlockHost
         }
     }
 
-    internal static ActionResult RemoveAll(ServiceRequest request)
+    internal static QueryView RemoveAll(ServiceRequest request)
     {
         lock (Gate)
         {
@@ -203,9 +201,8 @@ internal static class NetworkBlockHost
                 "WAG-ND-013",
                 $"Released all manual network blocks ({removed}).");
 
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 Affected = removed,
                 NetworkBlocks = SnapshotLocked(),
@@ -394,10 +391,9 @@ internal static class NetworkBlockHost
         return true;
     }
 
-    private static ActionResult Error(ServiceRequest request, string message)
+    private static QueryView Error(ServiceRequest request, string message)
         => new()
         {
-            Id = request.Id,
             Ok = false,
             Error = message,
         };

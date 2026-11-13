@@ -29,7 +29,11 @@ internal sealed class ServiceSession : IDisposable
         _signer = signer;
     }
 
-    internal static ActionResult? TryRequest(
+    /// <summary>
+    /// 发一条 v4 请求并返回**强类型**响应载荷；失败返回 null 并通过
+    /// <paramref name="error"/> 给出原因。连接失效时重连一次。
+    /// </summary>
+    internal static ResponsePayload? TrySend(
         ServiceRequest request,
         TimeSpan timeout,
         IServiceSigner signer,
@@ -55,11 +59,11 @@ internal sealed class ServiceSession : IDisposable
             }
         }
 
-        var response = session.Send(request, timeout, out error);
+        var payload = session.Send(request, timeout, out error);
 
-        if (response is not null)
+        if (payload is not null)
         {
-            return response;
+            return payload;
         }
 
         // 连接可能已被服务端关闭：重连一次再试。
@@ -74,15 +78,15 @@ internal sealed class ServiceSession : IDisposable
         }
 
         _current = retry;
-        response = retry.Send(request, timeout, out error);
+        payload = retry.Send(request, timeout, out error);
 
-        if (response is null)
+        if (payload is null)
         {
             retry.Dispose();
             _current = null;
         }
 
-        return response;
+        return payload;
     }
 
     private bool Connect(TimeSpan timeout, out string? error)
@@ -157,7 +161,7 @@ internal sealed class ServiceSession : IDisposable
         }
     }
 
-    private ActionResult? Send(
+    private ResponsePayload? Send(
         ServiceRequest request,
         TimeSpan timeout,
         out string? error)
@@ -180,8 +184,7 @@ internal sealed class ServiceSession : IDisposable
                 Id = request.Id,
                 Seq = ++_seq,
                 Command = request.Command,
-                Payload = LegacyPayloadAdapter.CreateRequestPayload(
-                    request.Command, request),
+                Payload = CreateRequestPayload(request.Command, request),
             };
 
             var canonical = ProtocolSigning.CanonicalBytes(frame);
@@ -215,18 +218,49 @@ internal sealed class ServiceSession : IDisposable
                 return null;
             }
 
-            var response = LegacyPayloadAdapter.ToResponse(reply.Data.Value);
-            response.Ok = reply.Ok ?? response.Ok;
-            response.Error ??= reply.Message;
-            response.ErrorCode ??= reply.ErrorCode;
+            var type = PayloadCatalog.ResponseTypeFor(request.Command);
+            var payload = reply.Data.Value.Deserialize(type, ServiceProtocol.JsonOptions)
+                as ResponsePayload;
 
-            return response;
+            if (payload is null)
+            {
+                error = $"v4 响应载荷不是 {type.Name}。";
+                return null;
+            }
+
+            if (reply.Ok is { } ok)
+            {
+                payload.Ok = ok;
+            }
+
+            payload.Error ??= reply.Message;
+            payload.ErrorCode ??= reply.ErrorCode;
+
+            if (reply.Revision is { } revision)
+            {
+                payload.Revision = revision;
+            }
+
+            return payload;
         }
         catch (Exception ex)
         {
             error = $"{ex.GetType().Name}: {ex.Message}";
             return null;
         }
+    }
+
+    /// <summary>
+    /// 把请求收敛成该命令声明的 v4 请求载荷；未知字段不会上线。
+    /// </summary>
+    private static JsonElement CreateRequestPayload(string command, ServiceRequest request)
+    {
+        var type = PayloadCatalog.RequestTypeFor(command);
+        var element = JsonSerializer.SerializeToElement(request, ServiceProtocol.JsonOptions);
+        var typed = element.Deserialize(type, ServiceProtocol.JsonOptions);
+
+        return JsonSerializer.SerializeToElement(
+            typed, type, ServiceProtocol.JsonOptions);
     }
 
     public void Dispose()

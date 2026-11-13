@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 
 namespace WinAppGuard;
 
@@ -13,7 +14,7 @@ namespace WinAppGuard;
 /// 而界面已经改成 asInvoker。写操作因此走一次 UAC：
 ///   - 界面把 ServiceRequest 写进临时 JSON；
 ///   - 用 runas 启动 `WinAppGuardSvc.exe --elevated-ipc <req> <resp>`；
-///   - 助手以提权身份连服务、执行、把 ActionResult 写回文件；
+///   - 助手以提权身份连服务、执行、把强类型响应载荷写回文件；
 ///   - 界面读回响应并清理临时文件。
 ///
 /// 只转发 `write.*` 命令；其它命令界面自己就能发，没必要提权。
@@ -26,7 +27,7 @@ internal static class ElevatedClient
     private const int UacCancelledError = 1223;
 
     /// <summary>提权执行一条写命令。失败返回 null，并通过 <paramref name="error"/> 说明原因。</summary>
-    internal static ActionResult? TryRequest(ServiceRequest request, out string? error)
+    internal static ResponsePayload? TryRequest(ServiceRequest request, out string? error)
     {
         error = null;
 
@@ -85,8 +86,10 @@ internal static class ElevatedClient
                 return null;
             }
 
-            var response = JsonSerializer.Deserialize<ActionResult>(
-                File.ReadAllText(responsePath, Encoding.UTF8));
+            var type = PayloadCatalog.ResponseTypeFor(request.Command);
+            var response = JsonSerializer.Deserialize(
+                File.ReadAllText(responsePath, Encoding.UTF8), type)
+                as ResponsePayload;
 
             if (response is null)
             {

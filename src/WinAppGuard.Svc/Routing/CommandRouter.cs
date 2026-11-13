@@ -1,11 +1,12 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 
 namespace WinAppGuard.Service;
 
 /// <summary>
 /// 5.9：每条命令执行时需要的上下文。
 ///
-/// 协议仍是 v2 的 <see cref="ServiceRequest"/>/<see cref="ActionResult"/>；
+/// 协议请求仍是 <see cref="ServiceRequest"/>；响应已改为强类型 <see cref="ResponsePayload"/>；
 /// 这里只把“请求 + 客户端令牌结果”打包，避免 Handler 再各自去猜提权状态。
 /// </summary>
 public readonly record struct CommandContext(
@@ -25,18 +26,18 @@ public interface ICommandHandler
 
     string Module { get; }
 
-    ActionResult Handle(CommandContext context);
+    ResponsePayload Handle(CommandContext context);
 }
 
 /// <summary>5.9：把委托包装成 Handler，避免为 70 多条命令各写一个类。</summary>
 public sealed class DelegateCommandHandler : ICommandHandler
 {
-    private readonly Func<CommandContext, ActionResult> _handler;
+    private readonly Func<CommandContext, ResponsePayload> _handler;
 
     public DelegateCommandHandler(
         string command,
         string module,
-        Func<CommandContext, ActionResult> handler)
+        Func<CommandContext, ResponsePayload> handler)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -57,7 +58,7 @@ public sealed class DelegateCommandHandler : ICommandHandler
 
     public string Module { get; }
 
-    public ActionResult Handle(CommandContext context) => _handler(context);
+    public ResponsePayload Handle(CommandContext context) => _handler(context);
 }
 
 /// <summary>
@@ -95,13 +96,12 @@ public sealed class CommandRouter
             .ThenBy(handler => handler.Command, StringComparer.Ordinal)
             .ToList();
 
-    public ActionResult Dispatch(CommandContext context)
+    public ResponsePayload Dispatch(CommandContext context)
     {
         if (!_handlers.TryGetValue(context.Request.Command, out var handler))
         {
-            return new ActionResult
+            return new ErrorView
             {
-                Id = context.Request.Id,
                 Ok = false,
                 ErrorCode = "UnknownCommand",
                 Error = $"未知命令：{context.Request.Command}",

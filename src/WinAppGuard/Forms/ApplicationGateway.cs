@@ -16,33 +16,45 @@ internal enum GatewayFailure
 }
 
 internal sealed record GatewayResult(
-    ActionResult? Response,
+    ResponsePayload? Payload,
     string? Error,
     bool Cancelled,
     GatewayFailure Failure = GatewayFailure.None)
 {
-    internal bool Ok => Response is { Ok: true };
+    internal bool Ok => Payload is { Ok: true };
+
+    internal T? As<T>()
+        where T : ResponsePayload
+        => Payload as T;
 }
 
 /// <summary>
 /// 5.10：界面访问服务端的唯一入口。
 ///
 /// 读刷新和写命令都通过异步方法执行，避免 UI 线程等待 IPC；
-/// 底层仍复用 v3/v2 客户端，协议细节不泄漏到页面。
+/// 协议细节不泄漏到页面：查询返回强类型视图，写命令返回 <see cref="ResponsePayload"/>。
 /// </summary>
 internal interface IApplicationGateway
 {
     bool IsRunningAsAdmin { get; }
 
-    ActionResult? TryRequest(ServiceRequest request, TimeSpan timeout, out string? error);
+    ResponsePayload? TryRequest(ServiceRequest request, TimeSpan timeout, out string? error);
 
-    ActionResult? TryElevatedRequest(ServiceRequest request, out string? error);
+    ResponsePayload? TryElevatedRequest(ServiceRequest request, out string? error);
 
     ServiceStatus? TryGetStatus(TimeSpan timeout);
 
     QueryView? TryQuery(ServiceRequest request, TimeSpan timeout, out string? error);
 
     TrafficView? TryTraffic(ServiceRequest request, TimeSpan timeout, out string? error);
+
+    RulesView? TryRules(ServiceRequest request, TimeSpan timeout, out string? error);
+
+    AllowTargetsView? TryAllowTargets(ServiceRequest request, TimeSpan timeout, out string? error);
+
+    ProcessPathsView? TryProcessPaths(ServiceRequest request, TimeSpan timeout, out string? error);
+
+    FilterMapView? TryFilterMap(ServiceRequest request, TimeSpan timeout, out string? error);
 
     Task<GatewayResult> TryRequestAsync(
         ServiceRequest request,
@@ -58,16 +70,16 @@ internal interface IApplicationGateway
         CancellationToken cancellationToken);
 }
 
-/// <summary>5.10：生产实现，直接包装现有 IPC 客户端；协议仍是 v3（可回退 v2）。</summary>
+/// <summary>5.10：生产实现，直接包装 v4 IPC 客户端。</summary>
 internal sealed class ServiceApplicationGateway : IApplicationGateway
 {
     public bool IsRunningAsAdmin => AdminHelper.IsRunningAsAdmin();
 
-    public ActionResult? TryRequest(
+    public ResponsePayload? TryRequest(
         ServiceRequest request, TimeSpan timeout, out string? error)
         => ServiceClient.TryRequest(request, timeout, out error);
 
-    public ActionResult? TryElevatedRequest(ServiceRequest request, out string? error)
+    public ResponsePayload? TryElevatedRequest(ServiceRequest request, out string? error)
         => ElevatedClient.TryRequest(request, out error);
 
     public ServiceStatus? TryGetStatus(TimeSpan timeout)
@@ -75,38 +87,27 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
 
     public QueryView? TryQuery(
         ServiceRequest request, TimeSpan timeout, out string? error)
-    {
-        var response = ServiceClient.TryRequest(request, timeout, out error);
-
-        if (response is null)
-        {
-            return null;
-        }
-
-        if (!response.Ok)
-        {
-            error = response.Error ?? error ?? "查询失败。";
-            return null;
-        }
-
-        return LegacyPayloadAdapter.CreateResponse(
-            request.Command, response, 0, null) as QueryView;
-    }
+        => ServiceClient.TryRequestAs<QueryView>(request, timeout, out error);
 
     public TrafficView? TryTraffic(
         ServiceRequest request, TimeSpan timeout, out string? error)
-    {
-        var response = ServiceClient.TryRequest(request, timeout, out error);
+        => ServiceClient.TryRequestAs<TrafficView>(request, timeout, out error);
 
-        if (response is null || !response.Ok)
-        {
-            error ??= response?.Error ?? "查询失败。";
-            return null;
-        }
+    public RulesView? TryRules(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+        => ServiceClient.TryRequestAs<RulesView>(request, timeout, out error);
 
-        return LegacyPayloadAdapter.CreateResponse(
-            request.Command, response, 0, null) as TrafficView;
-    }
+    public AllowTargetsView? TryAllowTargets(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+        => ServiceClient.TryRequestAs<AllowTargetsView>(request, timeout, out error);
+
+    public ProcessPathsView? TryProcessPaths(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+        => ServiceClient.TryRequestAs<ProcessPathsView>(request, timeout, out error);
+
+    public FilterMapView? TryFilterMap(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+        => ServiceClient.TryRequestAs<FilterMapView>(request, timeout, out error);
 
     public async Task<GatewayResult> TryRequestAsync(
         ServiceRequest request,
@@ -192,8 +193,8 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
             return result with { Failure = GatewayFailure.None };
         }
 
-        var code = result.Response?.ErrorCode;
-        var error = result.Error ?? result.Response?.Error ?? string.Empty;
+        var code = result.Payload?.ErrorCode;
+        var error = result.Error ?? result.Payload?.Error ?? string.Empty;
 
         if (string.Equals(code, "NotElevated", StringComparison.Ordinal)
             || string.Equals(code, "NotOwner", StringComparison.Ordinal)
@@ -217,7 +218,7 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
             return result with { Failure = GatewayFailure.Timeout };
         }
 
-        if (result.Response is null
+        if (result.Payload is null
             && (error.Contains("管道", StringComparison.Ordinal)
                 || error.Contains("v4", StringComparison.OrdinalIgnoreCase)
                 || error.Contains("连接", StringComparison.Ordinal)

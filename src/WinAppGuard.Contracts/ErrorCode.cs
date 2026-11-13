@@ -5,7 +5,7 @@ namespace WinAppGuard.Contracts;
 ///
 /// 现有命令的错误信息是写死的中文句子，脚本只能靠字符串判断。
 /// 新代码改为返回 ErrorCode，由 UI / CLI 负责本地化。
-/// 旧的 ServiceRequest/ActionResult 暂时保留，协议 v3 在 5.10 切换。
+/// 5.11 起响应统一为强类型 ResponsePayload，错误码放在公共信封上。
 /// </summary>
 public enum ErrorCode
 {

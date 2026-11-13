@@ -31,9 +31,7 @@ internal sealed class ControlServer : IDisposable
 {
     private static readonly RuleHandlers Rules = new();
 
-    private readonly CancellationTokenSource _cancellation = new();
-    private Thread? _thread;
-    private bool _loggedReady;
+    private PipeHost? _pipeHost;
     // 5.9：命令路由在 Start 里创建并校验；校验失败时不创建控制管道（失败关闭）。
     private static CommandRouter? _router;
     private static ModuleHost? _modules;
@@ -176,41 +174,30 @@ internal sealed class ControlServer : IDisposable
                 "受保护模式或命令目录不可用，控制管道已禁用。");
         }
 
-        _thread = new Thread(Loop)
-        {
-            IsBackground = true,
-            Name = "ipc-server",
-        };
-
-        _thread.Start();
+        _pipeHost = new PipeHost();
+        _pipeHost.Start();
 
         ServiceLog.Info(
             "WAG-IPC-001",
-            $"IPC started: {ServiceProtocol.PipeName} (v3 signed session).");
+            $"IPC started: {ServiceProtocol.PipeName} (v4 signed session).");
     }
 
     internal void StopControlPlane()
     {
-        _thread?.Join(3000);
-        _thread = null;
+        var host = _pipeHost;
+        _pipeHost = null;
+        host?.Dispose();
     }
 
     internal static string RulesHealth()
         => $"tamperRebuilt={Rules.TamperRebuiltCount}, expiredPurged={Rules.ExpiredPurgedCount}";
 
     internal string ControlPlaneHealth()
-        => _thread is { IsAlive: true } ? "listening" : "not listening";
+        => _pipeHost is { IsListening: true } ? "listening" : "not listening";
 
     internal void Stop()
     {
-        try
-        {
-            _cancellation.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
+        StopControlPlane();
 
         // 严格模式会话随服务一起撤销：停服务 = 立即恢复联网。
         // 放在模块停止之前，避免等检测模块收尾后才恢复。
@@ -225,354 +212,10 @@ internal sealed class ControlServer : IDisposable
     public void Dispose()
     {
         Stop();
-        _cancellation.Dispose();
     }
 
-    private void Loop()
-    {
-        while (!_cancellation.IsCancellationRequested)
-        {
-            try
-            {
-                // 用 NamedPipeServerStreamAcl.Create：安全描述符在**创建时**就生效，
-                // 不存在"先建默认管道再收紧"的竞态；也不需要手工 SetSecurityInfo
-                // （后者在非管理员下会直接 ACCESS_DENIED，实测）。
-                using var pipe = CreateOwnerOnlyPipe();
-
-                if (!_loggedReady)
-                {
-                    _loggedReady = true;
-                    ServiceLog.Info("WAG-IPC-002", "Named pipe created (ACL: SYSTEM + owner only).");
-                }
-
-                pipe.WaitForConnectionAsync(_cancellation.Token).GetAwaiter().GetResult();
-
-                if (_cancellation.IsCancellationRequested)
-                {
-                    break;
-                }
-
-                HandleClient(pipe, _cancellation.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                ServiceLog.Error("WAG-IPC-003", "IPC connection handling failed.", ex);
-                Thread.Sleep(200);
-            }
-        }
-    }
-
-    private void HandleClient(NamedPipeServerStream pipe, CancellationToken serverToken)
-    {
-        if (_protectedMode is null)
-        {
-            return;
-        }
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
-
-        if (!ClientAuth.TryGetElevation(
-                pipe, out var elevated, out var clientPid,
-                out var clientSid, out var clientPath, out var reason))
-        {
-            ServiceLog.Warning("WAG-IPC-004", $"Rejected IPC connection (pid={clientPid}); client identity could not be verified.");
-            TryWrite(pipe, new ProtocolMessage
-            {
-                Type = "error",
-                V = ServiceProtocol.Version,
-                Ok = false,
-                ErrorCode = nameof(ProtocolErrorCode.NotOwner),
-                Message = reason,
-            }, timeout.Token);
-            return;
-        }
-
-        ProtocolMessage? hello;
-
-        try
-        {
-            hello = PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
-                .GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            ServiceLog.Warning("WAG-IPC-005", "IPC v3 hello timed out.");
-            return;
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning("WAG-IPC-006", "IPC v3 hello was malformed.", ex);
-            return;
-        }
-
-        if (hello is null
-            || !string.Equals(hello.Type, "hello", StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(hello.ClientNonce))
-        {
-            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.VersionMismatch, "协议握手无效。");
-            return;
-        }
-
-        if (hello.V != ServiceProtocol.Version)
-        {
-            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.VersionMismatch, "协议版本不匹配。");
-            return;
-        }
-
-        var serverNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        var sessionId = Guid.NewGuid().ToString("N");
-        var capacities = new[] { "v3", "modules", "revision" };
-
-        TryWrite(pipe, new ProtocolMessage
-        {
-            Type = "challenge",
-            V = ServiceProtocol.Version,
-            SessionId = sessionId,
-            ServerNonce = serverNonce,
-            ServerTimeUtc = DateTime.UtcNow,
-            ToolVersion = BuildVersion(),
-            Protocol = ServiceProtocol.Version,
-            Capabilities = capacities,
-            MaxFrameBytes = ServiceProtocol.MaxMessageBytes,
-        }, timeout.Token);
-
-        ProtocolMessage? auth;
-
-        try
-        {
-            auth = PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
-                .GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            ServiceLog.Warning("WAG-IPC-008", "IPC v3 auth timed out.");
-            return;
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning("WAG-IPC-009", "IPC v3 auth was malformed.", ex);
-            return;
-        }
-
-        if (auth is null
-            || !string.Equals(auth.Type, "auth", StringComparison.Ordinal)
-            || !string.Equals(auth.SessionId, sessionId, StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(auth.Signature))
-        {
-            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "认证失败。");
-            return;
-        }
-
-        var authBytes = Encoding.UTF8.GetBytes(
-            $"{serverNonce}|{hello.ClientNonce}|{sessionId}");
-
-        byte[] authSignature;
-
-        try
-        {
-            authSignature = Convert.FromBase64String(auth.Signature);
-        }
-        catch (FormatException)
-        {
-            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "认证失败。");
-            return;
-        }
-
-        if (!OwnerKey.Verify(
-                _protectedMode.GetPublicKeyBytes(), authBytes, authSignature))
-        {
-            var rejected = Interlocked.Increment(ref _authRejectedCount);
-            ServiceLog.Warning(
-                "WAG-AUTH-003",
-                $"Rejected IPC v3 auth: invalid signature (pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, total rejected={rejected}).");
-            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "认证失败。");
-            return;
-        }
-
-        TryWrite(pipe, new ProtocolMessage
-        {
-            Type = "welcome",
-            V = ServiceProtocol.Version,
-            SessionId = sessionId,
-            ExpiresUtc = DateTime.UtcNow.AddMinutes(5),
-            Protocol = ServiceProtocol.Version,
-        }, timeout.Token);
-
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
-
-        var expectedSeq = 1L;
-        var sessionExpiresUtc = DateTime.UtcNow.AddMinutes(5);
-        var nonceBytes = Encoding.UTF8.GetBytes(serverNonce);
-        var rateWindowStartUtc = DateTime.UtcNow;
-        var requestCountInWindow = 0;
-
-        while (!serverToken.IsCancellationRequested)
-        {
-            timeout.CancelAfter(TimeSpan.FromSeconds(30));
-            var now = DateTime.UtcNow;
-
-            if (now - rateWindowStartUtc >= TimeSpan.FromSeconds(1))
-            {
-                rateWindowStartUtc = now;
-                requestCountInWindow = 0;
-            }
-
-            if (++requestCountInWindow > 50)
-            {
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.RateLimited, "请求过于频繁。");
-                break;
-            }
-
-            ProtocolMessage? frame;
-
-            try
-            {
-                frame = PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
-                    .GetAwaiter().GetResult();
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                ServiceLog.Warning("WAG-IPC-010", "IPC v3 request was malformed.", ex);
-                break;
-            }
-
-            if (frame is null)
-            {
-                break;
-            }
-
-            if (!string.Equals(frame.Type, "request", StringComparison.Ordinal)
-                || frame.Seq != expectedSeq
-                || string.IsNullOrWhiteSpace(frame.Command)
-                || frame.Payload is null)
-            {
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.InvalidArgument, "请求帧无效。");
-                break;
-            }
-
-            if (DateTime.UtcNow > sessionExpiresUtc)
-            {
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.Timeout, "会话已过期。");
-                break;
-            }
-
-            if (string.IsNullOrWhiteSpace(frame.Signature))
-            {
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "请求缺少签名。");
-                break;
-            }
-
-            var canonical = ProtocolSigning.CanonicalBytes(frame);
-            var signed = new byte[nonceBytes.Length + canonical.Length];
-            Buffer.BlockCopy(nonceBytes, 0, signed, 0, nonceBytes.Length);
-            Buffer.BlockCopy(canonical, 0, signed, nonceBytes.Length, canonical.Length);
-
-            byte[] requestSignature;
-
-            try
-            {
-                requestSignature = Convert.FromBase64String(frame.Signature);
-            }
-            catch (FormatException)
-            {
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "请求签名无效。");
-                break;
-            }
-
-            if (!OwnerKey.Verify(
-                    _protectedMode.GetPublicKeyBytes(), signed, requestSignature))
-            {
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "请求签名无效。");
-                break;
-            }
-
-            ServiceRequest request;
-
-            try
-            {
-                request = LegacyPayloadAdapter.ToRequest(
-                    frame.Command, frame.Id, frame.Payload.Value);
-            }
-            catch (Exception ex)
-            {
-                ServiceLog.Warning("WAG-IPC-011", "IPC v4 request payload was invalid.", ex);
-                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.InvalidArgument, "请求载荷无效。");
-                break;
-            }
-
-            request.Id = frame.Id ?? request.Id;
-            request.Command = frame.Command;
-            request.ProtocolVersion = ServiceProtocol.Version;
-
-            if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
-            {
-                ServiceLog.Operation(
-                    "WAG-IPC-012",
-                    $"IPC v3 write operation: pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, command={request.Command}.");
-            }
-
-            var response = Dispatch(request, elevated, clientPid);
-
-            var responsePayload = LegacyPayloadAdapter.CreateResponse(
-                request.Command,
-                response,
-                Rules.RuleRevision,
-                Rules.RuleRevisionEpoch);
-
-            TryWrite(pipe, new ProtocolMessage
-            {
-                Type = "response",
-                V = ServiceProtocol.Version,
-                Id = request.Id,
-                Seq = frame.Seq,
-                Ok = response.Ok,
-                ErrorCode = response.ErrorCode
-                    ?? (response.Ok ? nameof(ProtocolErrorCode.None) : nameof(ProtocolErrorCode.Internal)),
-                Message = response.Error,
-                Revision = Rules.RuleRevision,
-                Data = JsonSerializer.SerializeToElement(
-                    responsePayload,
-                    responsePayload.GetType(),
-                    ServiceProtocol.JsonOptions),
-            }, timeout.Token);
-
-            expectedSeq++;
-        }
-    }
-
-    private static void RejectProtocol(
-        NamedPipeServerStream pipe,
-        CancellationToken token,
-        ProtocolErrorCode code,
-        string message)
-    {
-        TryWrite(pipe, new ProtocolMessage
-        {
-            Type = "error",
-            V = ServiceProtocol.Version,
-            Ok = false,
-            ErrorCode = code.ToString(),
-            Message = message,
-        }, token);
-    }
-
-    /// <summary>
-    /// 3.5：批量 PID → 路径。只返回当前仍存在且服务能打开的进程。
     /// </summary>
-    internal static ActionResult ResolveProcessPaths(ServiceRequest request)
+    internal static ProcessPathsView ResolveProcessPaths(ServiceRequest request)
     {
         var paths = new List<ProcessPathDto>();
         var pids = (request.Pids ?? new List<int>())
@@ -604,33 +247,22 @@ internal sealed class ControlServer : IDisposable
             }
         }
 
-        return new ActionResult
+        return new ProcessPathsView
         {
-            Id = request.Id,
             Ok = true,
-            ProcessPaths = paths,
+            Paths = paths,
         };
     }
-    private static void TryWrite<T>(
-        NamedPipeServerStream pipe, T response, CancellationToken token)
-    {
-        try
-        {
-            PipeCodec.WriteAsync(pipe, response, token).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning("WAG-IPC-015", "Failed to write the IPC response.", ex);
-        }
-    }
+    internal static ResponsePayload DispatchRequest(
+        ServiceRequest request, bool elevated, uint clientPid)
+        => Dispatch(request, elevated, clientPid);
 
-    private ActionResult Dispatch(ServiceRequest request, bool elevated, uint clientPid)
+    private static ResponsePayload Dispatch(ServiceRequest request, bool elevated, uint clientPid)
     {
         if (request.ProtocolVersion != ServiceProtocol.Version)
         {
-            return new ActionResult
+            return new ErrorView
             {
-                Id = request.Id,
                 Ok = false,
                 Error = $"协议版本不匹配（服务 {ServiceProtocol.Version}，客户端 {request.ProtocolVersion}）。",
             };
@@ -650,9 +282,8 @@ internal sealed class ControlServer : IDisposable
 
         if (router is null)
         {
-            return new ActionResult
+            return new ErrorView
             {
-                Id = request.Id,
                 Ok = false,
                 Error = "服务命令目录未通过启动校验，控制管道不可用。",
             };
@@ -662,120 +293,15 @@ internal sealed class ControlServer : IDisposable
     }
 
     /// <summary>5.9：规则命令统一交给 RuleHandlers（与启动迁移、定时任务共用同一实例）。</summary>
-    internal static ActionResult HandleRuleCommand(ServiceRequest request) => Rules.Handle(request);
+    internal static ResponsePayload HandleRuleCommand(ServiceRequest request) => Rules.Handle(request);
 
     internal static ServiceStatus BuildStatus()
     {
         // 与规则写入串行：WFP 的读和写不要同时发生（status 命令不走 RuleHandlers）。
         lock (RuleHandlers.Gate)
         {
-            return BuildStatusCore();
+            return StatusBuilder.Build();
         }
-    }
-
-    private static ServiceStatus BuildStatusCore()
-    {
-        var status = new ServiceStatus
-        {
-            ServiceVersion = BuildVersion(),
-            ProtocolVersion = ServiceProtocol.Version,
-            ProtectedMode = _protectedMode is not null,
-            ProtectedModeOwner = _protectedMode?.OwnerName,
-            ProtectedModeOwnerSid = _protectedMode?.OwnerSid,
-            ProtectedModeFingerprint = _protectedMode?.Fingerprint,
-            AuthRejectedCount = Volatile.Read(ref _authRejectedCount),
-            Revision = Rules.RuleRevision,
-            RevisionEpoch = Rules.RuleRevisionEpoch,
-            Modules = _modules?.Snapshot()
-                .Select(item => new ModuleStatusDto
-                {
-                    Name = item.Name,
-                    Order = item.Order,
-                    State = item.State.ToString(),
-                    Detail = item.Detail,
-                    LastError = item.LastError,
-                    Restarts = item.RestartCount,
-                })
-                .ToList(),
-        };
-
-        try
-        {
-            using var engine = WfpEngine.Open();
-
-            try
-            {
-                _ = engine.ReadSublayer();
-                status.SublayerPresent = true;
-            }
-            catch (WfpException)
-            {
-                status.SublayerPresent = false;
-            }
-
-            var rules = Rules.GetRuleSnapshot();
-            status.BlockRuleCount = rules.Count(rule => rule.Action == FirewallAction.Block);
-            status.AllowRuleCount = rules.Count(rule => rule.Action == FirewallAction.Allow);
-            status.IpRuleCount = rules.Count(rule => !string.IsNullOrEmpty(rule.IpAddress));
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning("WAG-SVC-010", "Failed to read service status.", ex);
-        }
-
-        status.StrictModeActive = StrictModeHost.IsEnabled;
-        status.StrictModePermittedCount = StrictModeHost.PermittedCount;
-        status.StrictModeLockdownActive = LockdownHost.IsActive;
-        status.StrictModeLockdownExpiresUtc = LockdownHost.ExpiresUtc;
-        status.StrictModeLockdownRemainingSeconds = LockdownHost.RemainingSeconds;
-
-        var audit = AuditHost.Snapshot();
-        status.AuditEnabled = audit.Enabled;
-        status.AuditDomainLookup = audit.DomainLookup;
-        status.AuditRetentionDays = audit.RetentionDays;
-        status.AuditCollecting = AuditHost.Collecting;
-        status.AuditEventsWritten = AuditHost.EventsWritten;
-        var traffic = TrafficCaptureHost.GetStatus();
-        status.TrafficCollecting = traffic.Collecting;
-        status.TrafficEventsSeen = TrafficHost.EventsSeen;
-        status.TrafficPps = traffic.Pps;
-        status.TrafficDropped = traffic.Dropped;
-        status.TrafficSampled = traffic.Sampled;
-        status.DnsCollecting = DnsHost.Collecting;
-
-        var ids = IdsHost.GetStatus();
-        status.IdsEnabled = ids.Enabled;
-        status.IdsCollecting = ids.Collecting;
-        status.IdsAlertsNew = ids.AlertsNew;
-        status.IdsFlowCount = ids.FlowCount;
-        status.IdsEventsSeen = ids.EventsSeen;
-
-        var antiScan = AntiScanHost.GetStatus();
-        status.AntiScanEnabled = antiScan.Enabled;
-        status.AntiScanCollecting = antiScan.Collecting;
-        status.AntiScanNpcapAvailable = antiScan.NpcapAvailable;
-        status.AntiScanBlockedCount = antiScan.BlockedCount;
-
-        var lan = LanHost.GetStatus();
-        status.LanCollecting = lan.Collecting;
-        status.LanEventCount = lan.EventCount;
-        status.LanBlockedCount = lan.BlockedCount;
-        status.LanBaselineReady = lan.BaselineReady;
-
-        // 4.3：DNS 安全。
-        status.DnsSecurityCollecting = lan.DnsSecurityCollecting;
-        status.DnsSecurityEventCount = lan.DnsSecurityEventCount;
-
-        // 4.4：IPv6 邻接安全。
-        status.Ipv6SecurityCollecting = lan.Ipv6SecurityCollecting;
-        status.Ipv6SecurityEventCount = lan.Ipv6SecurityEventCount;
-
-        status.TamperRebuiltCount = Rules.TamperRebuiltCount;
-        status.LastTamperUtc = Rules.LastTamperUtc;
-        status.ExpiredPurgedCount = Rules.ExpiredPurgedCount;
-        status.LastPurgedPrograms = Rules.LastPurgedPrograms;
-
-        return status;
     }
 
     private static string BuildVersion()
@@ -793,33 +319,24 @@ internal sealed class ControlServer : IDisposable
         return plus > 0 ? informational[..plus] : informational;
     }
 
-    /// <summary>
-    /// 创建一条只有 SYSTEM 与**所有者 SID** 能连接的命名管道。
-    /// 安全描述符在建管道时生效，避免"先建后收紧"的窗口。
-    /// 其他账户（包括其他管理员）连不上；这是 3.1 第 4 步的边界。
-    /// </summary>
-    private static NamedPipeServerStream CreateOwnerOnlyPipe()
-    {
-        var security = new PipeSecurity();
+    internal static ProtectedModeConfig? CurrentProtectedMode => _protectedMode;
 
-        security.AddAccessRule(new PipeAccessRule(
-            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow));
+    internal static bool HasRouter => _router is not null;
 
-        security.AddAccessRule(new PipeAccessRule(
-            _protectedMode!.GetOwnerSid(),
-            PipeAccessRights.FullControl,
-            AccessControlType.Allow));
+    internal static string VersionText => BuildVersion();
 
-        return NamedPipeServerStreamAcl.Create(
-            ServiceProtocol.PipeName,
-            PipeDirection.InOut,
-            maxNumberOfServerInstances: 4,
-            PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous,
-            inBufferSize: 0,
-            outBufferSize: 0,
-            pipeSecurity: security);
-    }
+    internal static string RuntimeVersion => BuildVersion();
+
+    internal static long RuleRevision => Rules.RuleRevision;
+
+    internal static string RuleRevisionEpoch => Rules.RuleRevisionEpoch;
+
+    internal static RuleHandlers RuleHandler => Rules;
+
+    internal static ModuleHost? CurrentModules => _modules;
+
+    internal static int AuthRejectedCount => Volatile.Read(ref _authRejectedCount);
+
+    internal static int RecordAuthRejection()
+        => Interlocked.Increment(ref _authRejectedCount);
 }

@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 
@@ -333,7 +334,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.ClearDns,
                 new ServiceRequest(),
                 "清空 DNS 记录");

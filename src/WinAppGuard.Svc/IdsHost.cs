@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.Diagnostics.Ids;
@@ -314,7 +315,7 @@ internal static class IdsHost
 
     // ---------------- IPC ----------------
 
-    internal static ActionResult QueryAlerts(ServiceRequest request)
+    internal static QueryView QueryAlerts(ServiceRequest request)
     {
         List<IdsAlertDto> alerts;
         List<IdsSuppressionDto> suppressions;
@@ -335,9 +336,8 @@ internal static class IdsHost
             status = BuildStatusLocked();
         }
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             IdsAlerts = alerts,
             IdsSuppressions = suppressions,
@@ -346,7 +346,7 @@ internal static class IdsHost
         };
     }
 
-    internal static ActionResult Configure(ServiceRequest request)
+    internal static QueryView Configure(ServiceRequest request)
     {
         var dto = request.IdsSettings;
 
@@ -397,9 +397,8 @@ internal static class IdsHost
             $"rules=beacon:{GetSettings().BeaconingRule}/scan:{GetSettings().ScanRule}/" +
             $"lateral:{GetSettings().LateralRule}/dns:{GetSettings().DnsRule}.");
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             IdsSettings = GetSettings(),
             IdsSuppressions = GetSuppressions(),
@@ -407,7 +406,7 @@ internal static class IdsHost
         };
     }
 
-    internal static ActionResult Ack(ServiceRequest request)
+    internal static QueryView Ack(ServiceRequest request)
     {
         var id = request.IdsAlertId;
 
@@ -431,16 +430,15 @@ internal static class IdsHost
 
         PersistState();
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             IdsStatus = GetStatus(),
         };
     }
 
     /// <summary>5.8：把当前所有未读 IDS 告警一次性标记为已读。</summary>
-    internal static ActionResult AckAll(ServiceRequest request)
+    internal static QueryView AckAll(ServiceRequest request)
     {
         var changed = 0;
 
@@ -461,16 +459,15 @@ internal static class IdsHost
 
         PersistState();
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = changed,
             IdsStatus = GetStatus(),
         };
     }
 
-    internal static ActionResult Suppress(ServiceRequest request)
+    internal static QueryView Suppress(ServiceRequest request)
     {
         var dto = request.IdsSuppression;
 
@@ -505,9 +502,8 @@ internal static class IdsHost
                 "WAG-IDS-008",
                 $"IDS suppression removed: {dto.Id}.");
 
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 Affected = removed,
                 IdsSuppressions = GetSuppressions(),
@@ -537,16 +533,15 @@ internal static class IdsHost
             $"process={suppression.ProcessPath ?? suppression.ProcessName ?? "*"}, " +
             $"target={suppression.Target ?? "*"}, until={suppression.UntilUtc?.ToString("O") ?? "never"}.");
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = 1,
             IdsSuppressions = GetSuppressions(),
         };
     }
 
-    internal static ActionResult Clear(ServiceRequest request)
+    internal static QueryView Clear(ServiceRequest request)
     {
         int cleared;
 
@@ -564,9 +559,8 @@ internal static class IdsHost
 
         ServiceLog.Operation("WAG-IDS-006", $"IDS alerts cleared ({cleared} in memory).");
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = cleared,
             IdsStatus = GetStatus(),
@@ -757,9 +751,8 @@ internal static class IdsHost
         }
     }
 
-    private static ActionResult Error(ServiceRequest request, string message) => new()
+    private static QueryView Error(ServiceRequest request, string message) => new()
     {
-        Id = request.Id,
         Ok = false,
         Error = message,
     };

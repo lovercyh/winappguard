@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.ProtectedMode;
 
@@ -32,7 +33,7 @@ internal static class ElevatedIpc
         var requestPath = args[index + 1];
         var responsePath = args[index + 2];
 
-        ActionResult response;
+        ResponsePayload response;
 
         try
         {
@@ -42,7 +43,7 @@ internal static class ElevatedIpc
             if (request is null
                 || !request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
             {
-                response = new ActionResult
+                response = new ErrorView
                 {
                     Ok = false,
                     Error = "提权助手只接受写命令。",
@@ -53,7 +54,7 @@ internal static class ElevatedIpc
                 // 提权助手以所有者身份运行：加载 DPAPI 密钥后才能签名。
                 if (!ProtectedModeClient.TryConfigureSigner(out _, out var authError))
                 {
-                    response = new ActionResult
+                    response = new ErrorView
                     {
                         Ok = false,
                         Error = $"当前提权账户无法加载签名密钥：{authError}",
@@ -63,7 +64,7 @@ internal static class ElevatedIpc
                 {
                     response = ServiceClient.TryRequest(
                         request, TimeSpan.FromSeconds(15), out var error)
-                        ?? new ActionResult
+                        ?? new ErrorView
                         {
                             Ok = false,
                             Error = $"防护服务没有响应：{error}",
@@ -73,14 +74,15 @@ internal static class ElevatedIpc
         }
         catch (Exception ex)
         {
-            response = new ActionResult { Ok = false, Error = ex.Message };
+            response = new ErrorView { Ok = false, Error = ex.Message };
         }
 
         try
         {
             File.WriteAllText(
                 responsePath,
-                JsonSerializer.Serialize(response),
+                JsonSerializer.Serialize(
+                    response, response.GetType(), ServiceProtocol.JsonOptions),
                 new UTF8Encoding(false));
         }
         catch (Exception)

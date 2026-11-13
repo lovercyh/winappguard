@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Diagnostics.Traffic;
@@ -104,13 +105,12 @@ internal static class TrafficCaptureHost
     }
 
     /// <summary>暂停 / 继续（本次服务运行有效，不落盘）。</summary>
-    internal static ActionResult Configure(ServiceRequest request)
+    internal static TrafficView Configure(ServiceRequest request)
     {
         if (request.TrafficPaused is not { } paused)
         {
-            return new ActionResult
+            return new TrafficView
             {
-                Id = request.Id,
                 Ok = false,
                 Error = "缺少暂停状态。",
             };
@@ -152,7 +152,7 @@ internal static class TrafficCaptureHost
         return Query(request);
     }
 
-    internal static ActionResult Query(ServiceRequest request)
+    internal static TrafficView Query(ServiceRequest request)
     {
         TrafficSnapshot snapshot;
         bool sampled;
@@ -164,13 +164,12 @@ internal static class TrafficCaptureHost
 
         snapshot = Aggregator.Snapshot(sampled);
 
-        return new ActionResult
+        return new TrafficView
         {
-            Id = request.Id,
             Ok = true,
-            Traffic = snapshot.Programs.Select(program => ToDto(program, sampled)).ToList(),
+            Programs = snapshot.Programs.Select(program => ToDto(program, sampled)).ToList(),
             TrafficStartedUtc = StartedUtc,
-            TrafficSeries = new TrafficSeriesDto
+            Series = new TrafficSeriesDto
             {
                 StartUtc = snapshot.SeriesStartUtc,
                 IntervalMs = snapshot.IntervalMs,
@@ -178,11 +177,11 @@ internal static class TrafficCaptureHost
                 BytesOut = snapshot.BytesOut,
                 Sampled = sampled,
             },
-            TrafficStatus = GetStatus(),
+            Status = GetStatus(),
         };
     }
 
-    internal static ActionResult Clear(ServiceRequest request)
+    internal static TrafficView Clear(ServiceRequest request)
     {
         int affected;
         DateTime startedUtc;
@@ -200,20 +199,19 @@ internal static class TrafficCaptureHost
             "WAG-TRAFFIC-013",
             $"Precise traffic counters cleared ({affected} programs); start time reset.");
 
-        return new ActionResult
+        return new TrafficView
         {
-            Id = request.Id,
             Ok = true,
             Affected = affected,
             TrafficStartedUtc = startedUtc,
-            Traffic = new List<TrafficDto>(),
-            TrafficSeries = new TrafficSeriesDto
+            Programs = new List<TrafficDto>(),
+            Series = new TrafficSeriesDto
             {
                 StartUtc = startedUtc,
                 BytesIn = new List<long>(),
                 BytesOut = new List<long>(),
             },
-            TrafficStatus = GetStatus(),
+            Status = GetStatus(),
         };
     }
 

@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 using WinAppGuard.Core.Audit;
@@ -384,7 +385,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = await CallServiceAsync(
+        var response = await CallServiceAsync<StatusView>(
             ServiceProtocol.Commands.AuditConfigure,
             new ServiceRequest { AuditEnabled = desired },
             "修改记录设置");
@@ -483,7 +484,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = await CallServiceAsync(
+        var response = await CallServiceAsync<StatusView>(
             ServiceProtocol.Commands.AuditConfigure,
             new ServiceRequest { AuditRetentionDays = days },
             "修改记录保留期");
@@ -530,7 +531,7 @@ public sealed partial class MainForm
             return;
         }
 
-        var response = await CallServiceAsync(
+        var response = await CallServiceAsync<StatusView>(
             ServiceProtocol.Commands.AuditConfigure,
             new ServiceRequest { AuditDomainLookup = desired },
             "修改域名推测设置");
@@ -896,7 +897,7 @@ public sealed partial class MainForm
 
         // 3.0-c：采集在服务里，删除也必须由服务做 ——
         // 它开着写入端时 Windows 不允许删除这些文件。
-        var response = await CallServiceAsync(
+        var response = await CallServiceAsync<StatusView>(
             ServiceProtocol.Commands.AuditClear,
             new ServiceRequest(),
             "清空记录");
@@ -1032,7 +1033,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.AddIpRule,
                 new ServiceRequest { Value = normalized },
                 "封禁 IP");
@@ -1063,7 +1064,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var response = Gateway.TryFilterMap(
                 new ServiceRequest { Command = ServiceProtocol.Commands.FilterMap },
                 TimeSpan.FromSeconds(2),
                 out _);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Wfp;
@@ -186,13 +187,12 @@ internal static class AntiScanHost
         ServiceLog.Info("WAG-ANTISCAN-006", "Anti-scan stopped.");
     }
 
-    internal static ActionResult Query(ServiceRequest request)
+    internal static QueryView Query(ServiceRequest request)
     {
         lock (Gate)
         {
-            return new ActionResult
+            return new QueryView
             {
-                Id = request.Id,
                 Ok = true,
                 AntiScanSettings = ToDto(_state.Settings),
                 AntiScanStatus = BuildStatusLocked(),
@@ -205,7 +205,7 @@ internal static class AntiScanHost
         }
     }
 
-    internal static ActionResult Configure(ServiceRequest request)
+    internal static QueryView Configure(ServiceRequest request)
     {
         var dto = request.AntiScanSettings;
 
@@ -271,7 +271,7 @@ internal static class AntiScanHost
         return Query(request);
     }
 
-    internal static ActionResult Release(ServiceRequest request)
+    internal static QueryView Release(ServiceRequest request)
     {
         var address = request.AntiScanAddress;
         var released = 0;
@@ -304,9 +304,8 @@ internal static class AntiScanHost
                 $"Released {released} anti-scan inbound block(s).");
         }
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = released,
             AntiScanStatus = GetStatus(),
@@ -314,7 +313,7 @@ internal static class AntiScanHost
         };
     }
 
-    internal static ActionResult Clear(ServiceRequest request)
+    internal static QueryView Clear(ServiceRequest request)
     {
         int released;
         int events;
@@ -334,9 +333,8 @@ internal static class AntiScanHost
             "WAG-ANTISCAN-009",
             $"Anti-scan cleared ({events} event(s), {released} block(s) released).");
 
-        return new ActionResult
+        return new QueryView
         {
-            Id = request.Id,
             Ok = true,
             Affected = released,
             AntiScanStatus = GetStatus(),
@@ -928,9 +926,8 @@ internal static class AntiScanHost
         }
     }
 
-    private static ActionResult Error(ServiceRequest request, string message) => new()
+    private static QueryView Error(ServiceRequest request, string message) => new()
     {
-        Id = request.Id,
         Ok = false,
         Error = message,
     };

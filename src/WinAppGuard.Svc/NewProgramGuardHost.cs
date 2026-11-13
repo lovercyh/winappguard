@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Interop;
@@ -61,7 +62,7 @@ internal static class NewProgramGuardHost
         }
     }
 
-    internal static ActionResult Block(ServiceRequest request)
+    internal static WriteResult Block(ServiceRequest request)
     {
         var rawPath = request.Value;
 
@@ -90,9 +91,8 @@ internal static class NewProgramGuardHost
 
             if (Blocked.ContainsKey(fullPath))
             {
-                return new ActionResult
+                return new WriteResult
                 {
-                    Id = request.Id,
                     Ok = true,
                     Affected = 0,
                 };
@@ -149,15 +149,14 @@ internal static class NewProgramGuardHost
             "WAG-GUARD-003",
             $"Temporary new-program block created: {fullPath}");
 
-        return new ActionResult
+        return new WriteResult
         {
-            Id = request.Id,
             Ok = true,
             Affected = 1,
         };
     }
 
-    internal static ActionResult Release(ServiceRequest request)
+    internal static WriteResult Release(ServiceRequest request)
     {
         var path = request.Value?.Trim();
 
@@ -179,9 +178,8 @@ internal static class NewProgramGuardHost
         {
             if (!Blocked.TryGetValue(path, out var keys))
             {
-                return new ActionResult
+                return new WriteResult
                 {
-                    Id = request.Id,
                     Ok = true,
                     Affected = 0,
                 };
@@ -209,9 +207,8 @@ internal static class NewProgramGuardHost
             "WAG-GUARD-005",
             $"Temporary new-program block released: {path}");
 
-        return new ActionResult
+        return new WriteResult
         {
-            Id = request.Id,
             Ok = true,
             Affected = 1,
         };
@@ -240,10 +237,9 @@ internal static class NewProgramGuardHost
         _engine = null;
     }
 
-    private static ActionResult Error(ServiceRequest request, string message)
+    private static WriteResult Error(ServiceRequest request, string message)
         => new()
         {
-            Id = request.Id,
             Ok = false,
             Error = message,
         };

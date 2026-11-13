@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 using WinAppGuard.Models;
@@ -509,7 +510,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ClearIpv6Security,
                 new ServiceRequest(),
                 Localizer.T("清空 IPv6 邻接告警"));
@@ -565,7 +566,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ResetIpv6Baseline,
                 new ServiceRequest(),
                 Localizer.T("重置 IPv6 基线"));
@@ -707,7 +708,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.BlockIpv6,
                 new ServiceRequest
                 {
@@ -749,7 +750,7 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.TrustIpv6,
                 new ServiceRequest
                 {

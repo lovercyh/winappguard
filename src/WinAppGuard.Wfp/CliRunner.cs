@@ -1,5 +1,6 @@
 using System.Text;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core.Audit;
 using WinAppGuard.Core.Diagnostics.AntiScan;
 using WinAppGuard.Core.Diagnostics.NetworkDetection;
@@ -1666,8 +1667,40 @@ internal static class CliRunner
                 ? (Localizer.IsEnglish ? "Service is not responding." : "服务没有响应。")
                 : (Localizer.IsEnglish ? "Service is running." : "服务正在运行。")));
 
+        // 离线契约校验：每条命令都必须有明确的 v4 请求/响应载荷。
+        var contractErrors = new List<string>();
+
+        foreach (var command in CommandPolicyTable.DeclaredCommands())
+        {
+            try
+            {
+                _ = PayloadCatalog.RequestTypeFor(command);
+                _ = PayloadCatalog.ResponseTypeFor(command);
+            }
+            catch (Exception ex)
+            {
+                contractErrors.Add($"{command}: {ex.Message}");
+            }
+        }
+
+        checks.Add(new DoctorCheck(
+            "payload-contract",
+            contractErrors.Count == 0 ? "OK" : "FAIL",
+            contractErrors.Count == 0
+                ? (Localizer.IsEnglish
+                    ? $"{CommandPolicyTable.DeclaredCommands().Count} commands have typed v4 payloads."
+                    : $"{CommandPolicyTable.DeclaredCommands().Count} 条命令都有 v4 强类型载荷。")
+                : string.Join("; ", contractErrors.Take(3))));
+
         if (status is not null)
         {
+            checks.Add(new DoctorCheck(
+                "protocol",
+                status.ProtocolVersion == ServiceProtocol.Version ? "OK" : "FAIL",
+                Localizer.IsEnglish
+                    ? $"client v{ServiceProtocol.Version} / service v{status.ProtocolVersion}, pipe {ServiceProtocol.PipeName}"
+                    : $"客户端 v{ServiceProtocol.Version} / 服务 v{status.ProtocolVersion}，管道 {ServiceProtocol.PipeName}"));
+
             checks.Add(new DoctorCheck(
                 "protected-mode",
                 status.ProtectedMode ? "OK" : "FAIL",
@@ -1909,16 +1942,20 @@ internal static class CliRunner
     /// <summary>5.7：列出服务采集到的最近 DNS 查询（只读）。</summary>
     private static int RunDns(CommandLineOptions options)
     {
-        ActionResult? response;
+        QueryView? dnsView = null;
 
         try
         {
-            response = ServiceClient.TryRequest(
+            var response = ServiceClient.TryRequest(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryDns },
                 TimeSpan.FromSeconds(5),
                 out var error);
 
-            if (response is not { Ok: true, DnsRecords: not null })
+            if (response is QueryView { Ok: true, DnsRecords: not null } typed)
+            {
+                dnsView = typed;
+            }
+            else
             {
                 return Fail(options, "DNS_UNAVAILABLE",
                     Localizer.IsEnglish
@@ -1936,7 +1973,7 @@ internal static class CliRunner
                 ExitFailed);
         }
 
-        var records = response.DnsRecords
+        var records = dnsView!.DnsRecords
             .OrderByDescending(item => item.TimeUtc)
             .Take(options.Limit)
             .ToList();
@@ -2281,7 +2318,7 @@ internal static class CliRunner
             return null;
         }
 
-        return response.Rules ?? new List<RuleDto>();
+        return (response as RulesView)?.Rules ?? new List<RuleDto>();
     }
 
     private static NetworkSnapshot? QueryNetwork(out string? error)
@@ -2297,27 +2334,29 @@ internal static class CliRunner
             return null;
         }
 
+        var view = (QueryView)response;
+
         return new NetworkSnapshot(
-            response.NetworkAlerts ?? new List<NetworkAlertDto>(),
-            response.NetworkBlocks ?? new List<NetworkBlockDto>(),
-            response.NetworkDetectionSettings,
-            response.NetworkDetectionStatus);
+            view.NetworkAlerts ?? new List<NetworkAlertDto>(),
+            view.NetworkBlocks ?? new List<NetworkBlockDto>(),
+            view.NetworkDetectionSettings,
+            view.NetworkDetectionStatus);
     }
 
-    private static ActionResult? QueryIds(out string? error)
+    private static QueryView? QueryIds(out string? error)
     {
         var response = ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },
             TimeSpan.FromSeconds(10),
             out error);
 
-        if (response is not { Ok: true })
+        if (response is not QueryView { Ok: true } view)
         {
             error = response?.Error ?? error;
             return null;
         }
 
-        return response;
+        return view;
     }
 
     private static string DescribeExpiry(string encoded)

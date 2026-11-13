@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Service;
 
 namespace WinAppGuard.Architecture.Tests;
@@ -84,7 +85,7 @@ public sealed class CommandPolicyGuardTests
         Assert.Null(CommandPolicyGuard.Check(request, elevated: false, clientPid: 1));
     }
 
-    private static ActionResult? Check(string command, bool elevated)
+    private static ResponsePayload? Check(string command, bool elevated)
         => CommandPolicyGuard.Check(
             new ServiceRequest { Id = "1", Command = command },
             elevated,

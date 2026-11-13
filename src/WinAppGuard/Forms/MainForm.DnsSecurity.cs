@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Localization;
 using WinAppGuard.Models;
@@ -429,7 +430,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.ClearDnsSecurity,
                 new ServiceRequest(),
                 Localizer.T("清空 DNS 安全告警"));
@@ -466,7 +467,7 @@ public sealed partial class MainForm
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<QueryView>(
                 ServiceProtocol.Commands.TrustDnsServer,
                 new ServiceRequest { DnsTrustAddress = row.Address, DnsTrustEnabled = trust },
                 Localizer.T(trust ? "信任此 DNS 服务器" : "取消信任此 DNS 服务器"));
@@ -535,11 +536,11 @@ public sealed partial class MainForm
 
         try
         {
-            ActionResult? response = null;
+            QueryView? response = null;
 
             foreach (var address in trusted)
             {
-                response = await CallServiceAsync(
+                response = await CallServiceAsync<QueryView>(
                     ServiceProtocol.Commands.TrustDnsServer,
                     new ServiceRequest { DnsTrustAddress = address, DnsTrustEnabled = false },
                     Localizer.T("清空 DNS 信任"));

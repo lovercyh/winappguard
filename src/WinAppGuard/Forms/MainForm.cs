@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Text;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.ProtectedMode;
@@ -1122,7 +1123,7 @@ public partial class MainForm : Form
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var response = Gateway.TryRules(
                 new ServiceRequest { Command = ServiceProtocol.Commands.ListRules },
                 TimeSpan.FromSeconds(3),
                 out var error);
@@ -1311,8 +1312,9 @@ public partial class MainForm : Form
     /// 发一条写命令；失败时弹出原因并返回 null。
     /// 统一在这里处理"服务没起 / 未提权 / 服务拒绝"，避免每个调用点各写一遍。
     /// </summary>
-    private async Task<ActionResult?> CallServiceAsync(
+    private async Task<T?> CallServiceAsync<T>(
         string command, ServiceRequest request, string actionName)
+        where T : ResponsePayload
     {
         request.Command = command;
 
@@ -1340,12 +1342,12 @@ public partial class MainForm : Form
             return null;
         }
 
-        var response = result.Response;
+        var response = result.Payload;
         var error = result.Error;
 
-        if (response is { Ok: true })
+        if (response is { Ok: true } && response is T typed)
         {
-            return response;
+            return typed;
         }
 
         if (response is null && string.Equals(error, ElevatedClient.CancelledMessage, StringComparison.Ordinal))
@@ -1378,8 +1380,9 @@ public partial class MainForm : Form
     /// 不碰 WFP、拦截和设置。服务端只对 <c>alert.*</c> 精确放行，
     /// 系统变更命令仍然必须提权。
     /// </summary>
-    private async Task<ActionResult?> CallAlertServiceAsync(
+    private async Task<T?> CallAlertServiceAsync<T>(
         string command, ServiceRequest request, string actionName)
+        where T : ResponsePayload
     {
         request.Command = command;
 
@@ -1396,12 +1399,12 @@ public partial class MainForm : Form
             return null;
         }
 
-        var response = result.Response;
+        var response = result.Payload;
         var error = result.Error;
 
-        if (response is { Ok: true })
+        if (response is { Ok: true } && response is T typed)
         {
-            return response;
+            return typed;
         }
 
         var reason = response?.Error ?? error ?? "防护服务没有响应。";
@@ -1481,7 +1484,7 @@ public partial class MainForm : Form
             var started = Environment.TickCount64;
 
             // 3.0-c：界面不再枚举防火墙规则，两类信息都由服务一次读齐。
-            var response = Gateway.TryRequest(
+            var response = Gateway.TryAllowTargets(
                 new ServiceRequest { Command = ServiceProtocol.Commands.AllowTargets },
                 TimeSpan.FromSeconds(5),
                 out var error);
@@ -1559,7 +1562,7 @@ public partial class MainForm : Form
         {
             try
             {
-                return Gateway.TryRequest(
+                return Gateway.TryProcessPaths(
                     new ServiceRequest
                     {
                         Command = ServiceProtocol.Commands.QueryProcessPaths,
@@ -1574,14 +1577,14 @@ public partial class MainForm : Form
             }
         });
 
-        if (response is not { Ok: true, ProcessPaths: not null }
+        if (response is not { Ok: true, Paths: not null }
             || IsDisposed
             || Disposing)
         {
             return;
         }
 
-        var paths = response.ProcessPaths
+        var paths = response.Paths
             .Where(item => !string.IsNullOrEmpty(item.Path))
             .GroupBy(item => item.Pid)
             .ToDictionary(group => group.Key, group => group.First().Path!);
@@ -2351,7 +2354,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -2418,7 +2421,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = rule.Name },
                 "移出白名单");
@@ -2486,7 +2489,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.ClearWhitelist,
                 new ServiceRequest(),
                 "清空白名单");
@@ -2537,7 +2540,7 @@ public partial class MainForm : Form
             return;
         }
 
-        var response = await CallServiceAsync(
+        var response = await CallServiceAsync<WriteResult>(
             ServiceProtocol.Commands.SetGroup,
             new ServiceRequest { RuleName = rule.Name, Group = group },
             "修改分组");
@@ -2747,7 +2750,7 @@ public partial class MainForm : Form
     /// </summary>
     private async void ApplyImportedRules(FirewallAction scope, string json)
     {
-        var response = await CallServiceAsync(
+        var response = await CallServiceAsync<WriteResult>(
             ServiceProtocol.Commands.ImportRules,
             new ServiceRequest
             {
@@ -3094,7 +3097,7 @@ public partial class MainForm : Form
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var response = Gateway.TryTraffic(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
                 TimeSpan.FromSeconds(2),
                 out _);
@@ -3104,8 +3107,8 @@ public partial class MainForm : Form
                 return new TrafficQueryResult(null, _trafficSupported);
             }
 
-            return response is { Ok: true, Traffic: not null }
-                ? new TrafficQueryResult(response.Traffic, true)
+            return response is { Ok: true, Programs: not null }
+                ? new TrafficQueryResult(response.Programs, true)
                 : new TrafficQueryResult(null, false);
         }
         catch (Exception)
@@ -3788,7 +3791,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -3901,7 +3904,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -3985,7 +3988,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.DeleteRulesForProgram,
                 new ServiceRequest { Value = programPath },
                 "允许联网");
@@ -4099,7 +4102,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.AddProgramRule,
                 new ServiceRequest
                 {
@@ -4171,7 +4174,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = ruleName },
                 "移出白名单");
@@ -4233,7 +4236,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.DeleteRule,
                 new ServiceRequest { RuleName = rule.Name },
                 "删除规则");
@@ -4328,7 +4331,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.ClearBlocklist,
                 new ServiceRequest(),
                 "清空黑名单");
@@ -5933,7 +5936,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<StatusView>(
                 ServiceProtocol.Commands.StrictLockdown,
                 new ServiceRequest { LockdownSeconds = (int)duration.TotalSeconds },
                 "临时锁网");
@@ -6018,7 +6021,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<StatusView>(
                 ServiceProtocol.Commands.StrictDisable,
                 new ServiceRequest(),
                 "关闭严格模式");
@@ -6138,7 +6141,7 @@ public partial class MainForm : Form
 
         try
         {
-            var response = await CallServiceAsync(
+            var response = await CallServiceAsync<StatusView>(
                 ServiceProtocol.Commands.StrictEnable,
                 new ServiceRequest(),
                 "开启严格模式");

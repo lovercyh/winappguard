@@ -32,21 +32,21 @@ public static class ServiceClient
 
     public static ServiceStatus? TryGetStatus(TimeSpan timeout)
     {
-        var response = TryRequest(
+        var response = TryRequestAs<StatusView>(
             new ServiceRequest { Command = ServiceProtocol.Commands.Status },
             timeout);
 
         return response is { Ok: true } ? response.Status : null;
     }
 
-    public static ActionResult? TryRequest(ServiceRequest request, TimeSpan timeout)
+    public static ResponsePayload? TryRequest(ServiceRequest request, TimeSpan timeout)
         => TryRequest(request, timeout, out _);
 
     /// <summary>
     /// 发一条请求并等响应；失败返回 null，并通过 <paramref name="error"/>
     /// 给出**真实原因**（没有密钥 / 连接被拒 / 找不到管道 / 超时 / 认证失败）。
     /// </summary>
-    public static ActionResult? TryRequest(
+    public static ResponsePayload? TryRequest(
         ServiceRequest request, TimeSpan timeout, out string? error)
     {
         var signer = Volatile.Read(ref _signer);
@@ -57,8 +57,37 @@ public static class ServiceClient
             return null;
         }
 
-        return ServiceSession.TryRequest(request, timeout, signer, out error);
+        return ServiceSession.TrySend(request, timeout, signer, out error);
     }
+
+    /// <summary>发一条请求，并断言响应是 <typeparamref name="T"/>。</summary>
+    public static T? TryRequestAs<T>(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+        where T : ResponsePayload
+    {
+        var payload = TryRequest(request, timeout, out error);
+
+        if (payload is null)
+        {
+            return null;
+        }
+
+        if (payload is T typed)
+        {
+            return typed;
+        }
+
+        // 失败时服务端可能只返回 ErrorView：把真实原因带回调用方，
+        // 不要用“类型不匹配”掩盖业务错误。
+        error = payload.Ok
+            ? $"服务返回了 {payload.GetType().Name}，但客户端期望 {typeof(T).Name}。"
+            : payload.Error ?? $"服务返回了 {payload.GetType().Name}，但客户端期望 {typeof(T).Name}。";
+        return null;
+    }
+
+    public static T? TryRequestAs<T>(ServiceRequest request, TimeSpan timeout)
+        where T : ResponsePayload
+        => TryRequestAs<T>(request, timeout, out _);
 
 
     /// <summary>服务是否在运行（只要签名后的 status 能通就算）。</summary>

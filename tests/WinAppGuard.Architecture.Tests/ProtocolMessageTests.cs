@@ -58,6 +58,40 @@ public sealed class ProtocolMessageTests
     }
 
     [Fact]
+    public void CanonicalBytesSurviveJsonRoundTripAndSignatureVerification()
+    {
+        var frame = new ProtocolMessage
+        {
+            Type = "request",
+            V = ServiceProtocol.Version,
+            Id = "abc",
+            Seq = 7,
+            Command = ServiceProtocol.Commands.Ping,
+            Payload = JsonSerializer.SerializeToElement(
+                new ServiceRequest { Command = ServiceProtocol.Commands.Ping },
+                ServiceProtocol.JsonOptions),
+        };
+
+        var canonical = ProtocolSigning.CanonicalBytes(frame);
+        var json = JsonSerializer.SerializeToUtf8Bytes(frame, ServiceProtocol.JsonOptions);
+        var received = JsonSerializer.Deserialize<ProtocolMessage>(
+            json, ServiceProtocol.JsonOptions);
+
+        Assert.NotNull(received);
+
+        var receivedCanonical = ProtocolSigning.CanonicalBytes(received!);
+
+        using var key = System.Security.Cryptography.ECDsa.Create(
+            System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        var signature = key.SignData(canonical, System.Security.Cryptography.HashAlgorithmName.SHA256);
+
+        Assert.True(key.VerifyData(
+            receivedCanonical,
+            signature,
+            System.Security.Cryptography.HashAlgorithmName.SHA256));
+    }
+
+    [Fact]
     public void ProtocolVersionIsThreeAndPipeIsV3()
     {
         Assert.Equal(3, ServiceProtocol.Version);

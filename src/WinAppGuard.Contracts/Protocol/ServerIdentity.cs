@@ -1,33 +1,60 @@
 using System.Runtime.InteropServices;
-using System.Security.Principal;
-using System.Text;
 
 namespace WinAppGuard.Contracts.Protocol;
 
 /// <summary>
-/// 5.10：客户端校验管道对端确实是本安装目录里的 SYSTEM 服务。
-/// 防的是“非管理员先抢占同名管道，再返回假数据”。
+/// 5.10：客户端校验管道对端确实是已安装的 WinAppGuard 服务进程。
+///
+/// 为什么不用“打开服务端令牌 + 镜像路径”：
+///   服务以 SYSTEM 运行，普通权限界面没有权限打开 SYSTEM 进程令牌，
+///   会把正常服务误判成假服务端。
+///
+/// 现在直接比较：
+///   - 管道服务端 PID（GetNamedPipeServerProcessId）；
+///   - SCM 里 WinAppGuardSvc 的 PID（QueryServiceStatusEx）。
+/// 两者一致才放行。非管理员无法伪造这个 PID。
 /// </summary>
 public static class ServerIdentity
 {
-    private const uint ProcessQueryLimitedInformation = 0x1000;
-    private const uint TokenQuery = 0x0008;
+    private const uint ScManagerConnect = 0x0001;
+    private const uint ServiceQueryStatus = 0x0004;
+    private const int ScStatusProcessInfo = 0;
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetNamedPipeServerProcessId(IntPtr pipe, out uint serverProcessId);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenSCManagerW(
+        string? machineName, string? databaseName, uint desiredAccess);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool QueryFullProcessImageNameW(
-        IntPtr process, uint flags, StringBuilder exeName, ref int size);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenServiceW(
+        IntPtr scManager, string serviceName, uint desiredAccess);
 
     [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern bool OpenProcessToken(IntPtr process, uint desiredAccess, out IntPtr token);
+    private static extern bool QueryServiceStatusEx(
+        IntPtr service,
+        int infoLevel,
+        IntPtr buffer,
+        uint bufferSize,
+        out uint bytesNeeded);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool CloseServiceHandle(IntPtr handle);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceStatusProcess
+    {
+        public uint ServiceType;
+        public uint CurrentState;
+        public uint ControlsAccepted;
+        public uint Win32ExitCode;
+        public uint ServiceSpecificExitCode;
+        public uint CheckPoint;
+        public uint WaitHint;
+        public uint ProcessId;
+        public uint ServiceFlags;
+    }
 
     public static bool IsExpectedServer(IntPtr pipeHandle, out string? error)
     {
@@ -35,81 +62,94 @@ public static class ServerIdentity
 
         try
         {
-            if (!GetNamedPipeServerProcessId(pipeHandle, out var pid))
+            if (!GetNamedPipeServerProcessId(pipeHandle, out var serverPid))
             {
                 error = $"无法读取管道服务端进程：Win32 {Marshal.GetLastWin32Error()}";
                 return false;
             }
 
-            var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
-
-            if (process == IntPtr.Zero)
+            if (!TryGetServiceProcessId(out var servicePid, out var serviceError))
             {
-                error = $"无法打开服务端进程 {pid}：Win32 {Marshal.GetLastWin32Error()}";
+                error = serviceError;
                 return false;
             }
 
-            var token = IntPtr.Zero;
-
-            try
+            if (serverPid != servicePid)
             {
-                var pathBuffer = new StringBuilder(1024);
-                var pathLength = pathBuffer.Capacity;
-
-                if (!QueryFullProcessImageNameW(process, 0, pathBuffer, ref pathLength))
-                {
-                    error = $"无法读取服务端镜像路径：Win32 {Marshal.GetLastWin32Error()}";
-                    return false;
-                }
-
-                var serverPath = pathBuffer.ToString();
-                var expectedDirectory = Path.GetFullPath(AppContext.BaseDirectory)
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var actualDirectory = Path.GetFullPath(Path.GetDirectoryName(serverPath) ?? string.Empty)
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var serverFileName = Path.GetFileName(serverPath);
-
-                // 允许用户直接运行 dist 里的界面连接 Program Files 里的服务；
-                // 真正的安全边界是“必须是 SYSTEM 且镜像名是 WinAppGuardSvc.exe”。
-                if (!string.Equals(expectedDirectory, actualDirectory, StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(serverFileName, "WinAppGuardSvc.exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    error = $"服务端镜像不在安装目录：{serverPath}";
-                    return false;
-                }
-
-                if (!OpenProcessToken(process, TokenQuery, out token))
-                {
-                    error = $"无法读取服务端令牌：Win32 {Marshal.GetLastWin32Error()}";
-                    return false;
-                }
-
-                using var identity = new WindowsIdentity(token);
-                var systemSid = new SecurityIdentifier(
-                    WellKnownSidType.LocalSystemSid, null);
-
-                if (identity.User is null || !identity.User.Equals(systemSid))
-                {
-                    error = "服务端不是 SYSTEM。";
-                    return false;
-                }
-
-                return true;
+                error = $"管道服务端 PID {serverPid} 与已安装服务 PID {servicePid} 不一致。";
+                return false;
             }
-            finally
-            {
-                if (token != IntPtr.Zero)
-                {
-                    _ = CloseHandle(token);
-                }
 
-                _ = CloseHandle(process);
-            }
+            return true;
         }
         catch (Exception ex)
         {
             error = ex.Message;
             return false;
+        }
+    }
+
+    private static bool TryGetServiceProcessId(out uint processId, out string? error)
+    {
+        processId = 0;
+        error = null;
+
+        var scManager = OpenSCManagerW(null, null, ScManagerConnect);
+
+        if (scManager == IntPtr.Zero)
+        {
+            error = $"无法连接服务管理器：Win32 {Marshal.GetLastWin32Error()}";
+            return false;
+        }
+
+        var service = IntPtr.Zero;
+
+        try
+        {
+            service = OpenServiceW(scManager, ServiceProtocol.ServiceName, ServiceQueryStatus);
+
+            if (service == IntPtr.Zero)
+            {
+                error = $"无法打开服务 {ServiceProtocol.ServiceName}：Win32 {Marshal.GetLastWin32Error()}";
+                return false;
+            }
+
+            var size = Marshal.SizeOf<ServiceStatusProcess>();
+            var buffer = Marshal.AllocHGlobal(size);
+
+            try
+            {
+                if (!QueryServiceStatusEx(
+                        service, ScStatusProcessInfo, buffer, (uint)size, out _))
+                {
+                    error = $"无法查询服务状态：Win32 {Marshal.GetLastWin32Error()}";
+                    return false;
+                }
+
+                var status = Marshal.PtrToStructure<ServiceStatusProcess>(buffer);
+
+                if (status.ProcessId == 0)
+                {
+                    error = "服务没有运行中的进程。";
+                    return false;
+                }
+
+                processId = status.ProcessId;
+                return true;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+        finally
+        {
+            if (service != IntPtr.Zero)
+            {
+                _ = CloseServiceHandle(service);
+            }
+
+            _ = CloseServiceHandle(scManager);
         }
     }
 }

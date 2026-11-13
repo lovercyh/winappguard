@@ -104,11 +104,11 @@ internal static class TrafficCaptureHost
     }
 
     /// <summary>暂停 / 继续（本次服务运行有效，不落盘）。</summary>
-    internal static ServiceResponse Configure(ServiceRequest request)
+    internal static ActionResult Configure(ServiceRequest request)
     {
         if (request.TrafficPaused is not { } paused)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = false,
@@ -152,7 +152,7 @@ internal static class TrafficCaptureHost
         return Query(request);
     }
 
-    internal static ServiceResponse Query(ServiceRequest request)
+    internal static ActionResult Query(ServiceRequest request)
     {
         TrafficSnapshot snapshot;
         bool sampled;
@@ -164,7 +164,7 @@ internal static class TrafficCaptureHost
 
         snapshot = Aggregator.Snapshot(sampled);
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -182,7 +182,7 @@ internal static class TrafficCaptureHost
         };
     }
 
-    internal static ServiceResponse Clear(ServiceRequest request)
+    internal static ActionResult Clear(ServiceRequest request)
     {
         int affected;
         DateTime startedUtc;
@@ -200,7 +200,7 @@ internal static class TrafficCaptureHost
             "WAG-TRAFFIC-013",
             $"Precise traffic counters cleared ({affected} programs); start time reset.");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,

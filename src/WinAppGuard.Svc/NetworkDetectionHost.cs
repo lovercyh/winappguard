@@ -147,11 +147,11 @@ internal static class NetworkDetectionHost
         ServiceLog.Info("WAG-ND-022", "Network detection stopped.");
     }
 
-    internal static ServiceResponse Query(ServiceRequest request)
+    internal static ActionResult Query(ServiceRequest request)
     {
         lock (Gate)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -168,7 +168,7 @@ internal static class NetworkDetectionHost
         }
     }
 
-    internal static ServiceResponse Configure(ServiceRequest request)
+    internal static ActionResult Configure(ServiceRequest request)
     {
         var dto = request.NetworkDetectionSettings;
 
@@ -242,7 +242,7 @@ internal static class NetworkDetectionHost
 
         lock (Gate)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -252,7 +252,7 @@ internal static class NetworkDetectionHost
         }
     }
 
-    internal static ServiceResponse Ack(ServiceRequest request)
+    internal static ActionResult Ack(ServiceRequest request)
     {
         var id = request.NetworkAlertId;
 
@@ -277,7 +277,7 @@ internal static class NetworkDetectionHost
 
         PersistState();
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -286,7 +286,7 @@ internal static class NetworkDetectionHost
     }
 
     /// <summary>5.8：把当前所有未读反网络攻击告警一次性标记为已读。</summary>
-    internal static ServiceResponse AckAll(ServiceRequest request)
+    internal static ActionResult AckAll(ServiceRequest request)
     {
         var changed = 0;
 
@@ -307,7 +307,7 @@ internal static class NetworkDetectionHost
 
         PersistState();
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -316,7 +316,7 @@ internal static class NetworkDetectionHost
         };
     }
 
-    internal static ServiceResponse Clear(ServiceRequest request)
+    internal static ActionResult Clear(ServiceRequest request)
     {
         int cleared;
 
@@ -335,7 +335,7 @@ internal static class NetworkDetectionHost
             "WAG-ND-024",
             $"Network detection alerts cleared ({cleared} in memory).");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -344,7 +344,7 @@ internal static class NetworkDetectionHost
         };
     }
 
-    internal static ServiceResponse Block(ServiceRequest request)
+    internal static ActionResult Block(ServiceRequest request)
     {
         var kind = request.NetworkBlockKind;
 
@@ -404,7 +404,7 @@ internal static class NetworkDetectionHost
         return response;
     }
 
-    internal static ServiceResponse Release(ServiceRequest request)
+    internal static ActionResult Release(ServiceRequest request)
     {
         if (request.NetworkBlockReleaseAll)
         {
@@ -721,7 +721,7 @@ internal static class NetworkDetectionHost
             ExpiresUtc = block.ExpiresUtc,
         };
 
-    private static ServiceResponse Error(ServiceRequest request, string message)
+    private static ActionResult Error(ServiceRequest request, string message)
         => new()
         {
             Id = request.Id,

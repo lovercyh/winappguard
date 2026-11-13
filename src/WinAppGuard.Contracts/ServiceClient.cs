@@ -39,14 +39,14 @@ public static class ServiceClient
         return response is { Ok: true } ? response.Status : null;
     }
 
-    public static ServiceResponse? TryRequest(ServiceRequest request, TimeSpan timeout)
+    public static ActionResult? TryRequest(ServiceRequest request, TimeSpan timeout)
         => TryRequest(request, timeout, out _);
 
     /// <summary>
     /// 发一条请求并等响应；失败返回 null，并通过 <paramref name="error"/>
     /// 给出**真实原因**（没有密钥 / 连接被拒 / 找不到管道 / 超时 / 认证失败）。
     /// </summary>
-    public static ServiceResponse? TryRequest(
+    public static ActionResult? TryRequest(
         ServiceRequest request, TimeSpan timeout, out string? error)
     {
         var signer = Volatile.Read(ref _signer);

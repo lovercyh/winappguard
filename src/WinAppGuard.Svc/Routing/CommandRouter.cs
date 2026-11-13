@@ -5,7 +5,7 @@ namespace WinAppGuard.Service;
 /// <summary>
 /// 5.9：每条命令执行时需要的上下文。
 ///
-/// 协议仍是 v2 的 <see cref="ServiceRequest"/>/<see cref="ServiceResponse"/>；
+/// 协议仍是 v2 的 <see cref="ServiceRequest"/>/<see cref="ActionResult"/>；
 /// 这里只把“请求 + 客户端令牌结果”打包，避免 Handler 再各自去猜提权状态。
 /// </summary>
 public readonly record struct CommandContext(
@@ -25,18 +25,18 @@ public interface ICommandHandler
 
     string Module { get; }
 
-    ServiceResponse Handle(CommandContext context);
+    ActionResult Handle(CommandContext context);
 }
 
 /// <summary>5.9：把委托包装成 Handler，避免为 70 多条命令各写一个类。</summary>
 public sealed class DelegateCommandHandler : ICommandHandler
 {
-    private readonly Func<CommandContext, ServiceResponse> _handler;
+    private readonly Func<CommandContext, ActionResult> _handler;
 
     public DelegateCommandHandler(
         string command,
         string module,
-        Func<CommandContext, ServiceResponse> handler)
+        Func<CommandContext, ActionResult> handler)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -57,7 +57,7 @@ public sealed class DelegateCommandHandler : ICommandHandler
 
     public string Module { get; }
 
-    public ServiceResponse Handle(CommandContext context) => _handler(context);
+    public ActionResult Handle(CommandContext context) => _handler(context);
 }
 
 /// <summary>
@@ -95,11 +95,11 @@ public sealed class CommandRouter
             .ThenBy(handler => handler.Command, StringComparer.Ordinal)
             .ToList();
 
-    public ServiceResponse Dispatch(CommandContext context)
+    public ActionResult Dispatch(CommandContext context)
     {
         if (!_handlers.TryGetValue(context.Request.Command, out var handler))
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = context.Request.Id,
                 Ok = false,

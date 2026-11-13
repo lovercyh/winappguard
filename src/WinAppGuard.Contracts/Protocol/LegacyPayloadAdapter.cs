@@ -6,7 +6,7 @@ namespace WinAppGuard.Contracts.Protocol;
 /// 5.11：v4 载荷与旧处理器/旧 UI 之间的临时适配层。
 ///
 /// 服务端用 <see cref="ToRequest"/> 把新载荷交给现有 Handler；
-/// 客户端用 <see cref="ToResponse"/> 把新响应还原成旧 UI 可用的 ServiceResponse。
+/// 客户端用 <see cref="ToResponse"/> 把新响应还原成旧 UI 可用的 ActionResult。
 /// 5.12 删除。
 /// </summary>
 public static class LegacyPayloadAdapter
@@ -35,7 +35,7 @@ public static class LegacyPayloadAdapter
 
     public static ResponsePayload CreateResponse(
         string command,
-        ServiceResponse response,
+        ActionResult response,
         long revision,
         string? revisionEpoch)
     {
@@ -175,12 +175,12 @@ public static class LegacyPayloadAdapter
         };
     }
 
-    public static ServiceResponse ToResponse(JsonElement data)
+    public static ActionResult ToResponse(JsonElement data)
     {
         if (data.TryGetProperty("legacy", out var legacy)
             && legacy.ValueKind == JsonValueKind.Object)
         {
-            var response = legacy.Deserialize<ServiceResponse>(ServiceProtocol.JsonOptions);
+            var response = legacy.Deserialize<ActionResult>(ServiceProtocol.JsonOptions);
 
             if (response is not null)
             {
@@ -188,8 +188,8 @@ public static class LegacyPayloadAdapter
             }
         }
 
-        return data.Deserialize<ServiceResponse>(ServiceProtocol.JsonOptions)
-               ?? new ServiceResponse
+        return data.Deserialize<ActionResult>(ServiceProtocol.JsonOptions)
+               ?? new ActionResult
                {
                    Ok = false,
                    Error = "v4 响应载荷无法解析。",

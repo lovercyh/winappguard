@@ -84,7 +84,7 @@ public sealed class CommandPolicyGuardTests
         Assert.Null(CommandPolicyGuard.Check(request, elevated: false, clientPid: 1));
     }
 
-    private static ServiceResponse? Check(string command, bool elevated)
+    private static ActionResult? Check(string command, bool elevated)
         => CommandPolicyGuard.Check(
             new ServiceRequest { Id = "1", Command = command },
             elevated,

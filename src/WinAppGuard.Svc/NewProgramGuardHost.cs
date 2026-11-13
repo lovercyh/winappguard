@@ -61,7 +61,7 @@ internal static class NewProgramGuardHost
         }
     }
 
-    internal static ServiceResponse Block(ServiceRequest request)
+    internal static ActionResult Block(ServiceRequest request)
     {
         var rawPath = request.Value;
 
@@ -90,7 +90,7 @@ internal static class NewProgramGuardHost
 
             if (Blocked.ContainsKey(fullPath))
             {
-                return new ServiceResponse
+                return new ActionResult
                 {
                     Id = request.Id,
                     Ok = true,
@@ -149,7 +149,7 @@ internal static class NewProgramGuardHost
             "WAG-GUARD-003",
             $"Temporary new-program block created: {fullPath}");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -157,7 +157,7 @@ internal static class NewProgramGuardHost
         };
     }
 
-    internal static ServiceResponse Release(ServiceRequest request)
+    internal static ActionResult Release(ServiceRequest request)
     {
         var path = request.Value?.Trim();
 
@@ -179,7 +179,7 @@ internal static class NewProgramGuardHost
         {
             if (!Blocked.TryGetValue(path, out var keys))
             {
-                return new ServiceResponse
+                return new ActionResult
                 {
                     Id = request.Id,
                     Ok = true,
@@ -209,7 +209,7 @@ internal static class NewProgramGuardHost
             "WAG-GUARD-005",
             $"Temporary new-program block released: {path}");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -240,7 +240,7 @@ internal static class NewProgramGuardHost
         _engine = null;
     }
 
-    private static ServiceResponse Error(ServiceRequest request, string message)
+    private static ActionResult Error(ServiceRequest request, string message)
         => new()
         {
             Id = request.Id,

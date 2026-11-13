@@ -572,7 +572,7 @@ internal sealed class ControlServer : IDisposable
     /// <summary>
     /// 3.5：批量 PID → 路径。只返回当前仍存在且服务能打开的进程。
     /// </summary>
-    internal static ServiceResponse ResolveProcessPaths(ServiceRequest request)
+    internal static ActionResult ResolveProcessPaths(ServiceRequest request)
     {
         var paths = new List<ProcessPathDto>();
         var pids = (request.Pids ?? new List<int>())
@@ -604,7 +604,7 @@ internal sealed class ControlServer : IDisposable
             }
         }
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -624,11 +624,11 @@ internal sealed class ControlServer : IDisposable
         }
     }
 
-    private ServiceResponse Dispatch(ServiceRequest request, bool elevated, uint clientPid)
+    private ActionResult Dispatch(ServiceRequest request, bool elevated, uint clientPid)
     {
         if (request.ProtocolVersion != ServiceProtocol.Version)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = false,
@@ -650,7 +650,7 @@ internal sealed class ControlServer : IDisposable
 
         if (router is null)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = false,
@@ -662,7 +662,7 @@ internal sealed class ControlServer : IDisposable
     }
 
     /// <summary>5.9：规则命令统一交给 RuleHandlers（与启动迁移、定时任务共用同一实例）。</summary>
-    internal static ServiceResponse HandleRuleCommand(ServiceRequest request) => Rules.Handle(request);
+    internal static ActionResult HandleRuleCommand(ServiceRequest request) => Rules.Handle(request);
 
     internal static ServiceStatus BuildStatus()
     {

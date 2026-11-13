@@ -65,13 +65,13 @@ public sealed class CommandRouterTests
         router.Register(new DelegateCommandHandler(
             ServiceProtocol.Commands.Ping,
             "one",
-            context => new ServiceResponse { Id = context.Request.Id }));
+            context => new ActionResult { Id = context.Request.Id }));
 
         var error = Assert.Throws<InvalidOperationException>(() =>
             router.Register(new DelegateCommandHandler(
                 ServiceProtocol.Commands.Ping,
                 "two",
-                context => new ServiceResponse { Id = context.Request.Id })));
+                context => new ActionResult { Id = context.Request.Id })));
 
         Assert.Contains(ServiceProtocol.Commands.Ping, error.Message, StringComparison.Ordinal);
     }
@@ -87,7 +87,7 @@ public sealed class CommandRouterTests
             router.Register(new DelegateCommandHandler(
                 command,
                 "test",
-                context => new ServiceResponse { Id = context.Request.Id }));
+                context => new ActionResult { Id = context.Request.Id }));
         }
 
         var error = Assert.Throws<InvalidOperationException>(router.Validate);
@@ -105,13 +105,13 @@ public sealed class CommandRouterTests
             router.Register(new DelegateCommandHandler(
                 command,
                 "test",
-                context => new ServiceResponse { Id = context.Request.Id }));
+                context => new ActionResult { Id = context.Request.Id }));
         }
 
         router.Register(new DelegateCommandHandler(
             "write.not-declared",
             "test",
-            context => new ServiceResponse { Id = context.Request.Id }));
+            context => new ActionResult { Id = context.Request.Id }));
 
         var error = Assert.Throws<InvalidOperationException>(router.Validate);
 

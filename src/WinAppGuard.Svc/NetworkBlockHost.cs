@@ -69,7 +69,7 @@ internal static class NetworkBlockHost
         }
     }
 
-    internal static ServiceResponse Add(
+    internal static ActionResult Add(
         ServiceRequest request,
         string kind,
         string target,
@@ -108,7 +108,7 @@ internal static class NetworkBlockHost
             if (existing is not null)
             {
                 existing.ExpiresUtc = DateTime.UtcNow.AddMinutes(duration);
-                return new ServiceResponse
+                return new ActionResult
                 {
                     Id = request.Id,
                     Ok = true,
@@ -155,7 +155,7 @@ internal static class NetworkBlockHost
                 $"Manual network block: id={block.Id}, kind={kind}, target={target}, " +
                 $"minutes={duration}, alert={alertId ?? "-"};");
 
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -164,7 +164,7 @@ internal static class NetworkBlockHost
         }
     }
 
-    internal static ServiceResponse Remove(ServiceRequest request, string blockId)
+    internal static ActionResult Remove(ServiceRequest request, string blockId)
     {
         lock (Gate)
         {
@@ -178,7 +178,7 @@ internal static class NetworkBlockHost
 
             RemoveLocked(block);
 
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -188,7 +188,7 @@ internal static class NetworkBlockHost
         }
     }
 
-    internal static ServiceResponse RemoveAll(ServiceRequest request)
+    internal static ActionResult RemoveAll(ServiceRequest request)
     {
         lock (Gate)
         {
@@ -203,7 +203,7 @@ internal static class NetworkBlockHost
                 "WAG-ND-013",
                 $"Released all manual network blocks ({removed}).");
 
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -394,7 +394,7 @@ internal static class NetworkBlockHost
         return true;
     }
 
-    private static ServiceResponse Error(ServiceRequest request, string message)
+    private static ActionResult Error(ServiceRequest request, string message)
         => new()
         {
             Id = request.Id,

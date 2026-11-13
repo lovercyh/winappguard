@@ -323,7 +323,7 @@ public static class DiagnosticBundle
         Dictionary<string, int> counts)    {
         foreach (var (command, fileName) in ServiceSnapshots)
         {
-            ServiceResponse? response = null;
+            ActionResult? response = null;
 
             try
             {
@@ -372,7 +372,7 @@ public static class DiagnosticBundle
     /// <summary>把服务响应当中的列表导出成可直接用 Excel 打开的 CSV。</summary>
     private static void AddServiceCsv(
         ZipArchive zip,
-        ServiceResponse response,
+        ActionResult response,
         string fileName)
     {
         switch (fileName)

@@ -173,7 +173,7 @@ public sealed class ServiceRequest
 }
 
 /// <summary>一条 IPC 响应。</summary>
-public sealed class ServiceResponse
+public sealed class ActionResult
 {
     public string Id { get; set; } = string.Empty;
 

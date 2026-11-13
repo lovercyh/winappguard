@@ -38,7 +38,7 @@ internal static class ServiceCatalog
         // auth.challenge 是握手命令，由连接循环在 Dispatch 之前单独处理（且免签名）。
         // 这里仍然登记一个防御性 Handler：万一它作为普通请求到达，明确拒绝，
         // 而不是让它落进“未知命令”或被别的模块误处理。
-        Route(router, ServiceProtocol.Commands.AuthChallenge, SystemModule, context => new ServiceResponse
+        Route(router, ServiceProtocol.Commands.AuthChallenge, SystemModule, context => new ActionResult
         {
             Id = context.Request.Id,
             Ok = false,
@@ -51,7 +51,7 @@ internal static class ServiceCatalog
                 "WAG-AUTH-004",
                 $"Auth probe: pid={context.ClientPid}, elevated={context.Elevated}.");
 
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = context.Request.Id,
                 Ok = context.Elevated,
@@ -120,14 +120,14 @@ internal static class ServiceCatalog
             context => TrafficCaptureHost.Configure(context.Request));
 
         // ------------------------------------------------------------------- DNS
-        Route(router, ServiceProtocol.Commands.QueryDns, DnsModule, context => new ServiceResponse
+        Route(router, ServiceProtocol.Commands.QueryDns, DnsModule, context => new ActionResult
         {
             Id = context.Request.Id,
             Ok = true,
             DnsRecords = DnsHost.Snapshot(500),
         });
 
-        Route(router, ServiceProtocol.Commands.ClearDns, DnsModule, context => new ServiceResponse
+        Route(router, ServiceProtocol.Commands.ClearDns, DnsModule, context => new ActionResult
         {
             Id = context.Request.Id,
             Ok = true,
@@ -422,7 +422,7 @@ internal static class ServiceCatalog
         return router;
     }
 
-    private static ServiceResponse StatusResponse(ServiceRequest request)
+    private static ActionResult StatusResponse(ServiceRequest request)
         => new()
         {
             Id = request.Id,
@@ -434,6 +434,6 @@ internal static class ServiceCatalog
         CommandRouter router,
         string command,
         string module,
-        Func<CommandContext, ServiceResponse> handler)
+        Func<CommandContext, ActionResult> handler)
         => router.Register(new DelegateCommandHandler(command, module, handler));
 }

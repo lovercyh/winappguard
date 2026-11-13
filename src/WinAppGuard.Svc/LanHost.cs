@@ -331,7 +331,7 @@ internal static class LanHost
         ServiceLog.Info("WAG-LAN-006", "LAN detection stopped.");
     }
 
-    internal static ServiceResponse Query(ServiceRequest request)
+    internal static ActionResult Query(ServiceRequest request)
     {
         LanAnalyzer? analyzer;
         NpcapLanCapture? capture;
@@ -350,7 +350,7 @@ internal static class LanHost
 
         if (analyzer is null)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -400,7 +400,7 @@ internal static class LanHost
             .Where(item => item.Kind.StartsWith("name_", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -435,7 +435,7 @@ internal static class LanHost
         };
     }
 
-    internal static ServiceResponse Configure(ServiceRequest request)
+    internal static ActionResult Configure(ServiceRequest request)
     {
         var dto = request.LanSettings;
 
@@ -476,7 +476,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse Clear(ServiceRequest request)
+    internal static ActionResult Clear(ServiceRequest request)
     {
         LanAnalyzer? analyzer;
         LanEventStore? store;
@@ -509,7 +509,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse Trust(ServiceRequest request)
+    internal static ActionResult Trust(ServiceRequest request)
     {
         LanAnalyzer? analyzer;
 
@@ -541,7 +541,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse ResetBaseline(ServiceRequest request)
+    internal static ActionResult ResetBaseline(ServiceRequest request)
     {
         LanAnalyzer? analyzer;
 
@@ -562,7 +562,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse Block(ServiceRequest request)
+    internal static ActionResult Block(ServiceRequest request)
     {
         LanAnalyzer? analyzer;
         var ip = request.LanBlockServerIp;
@@ -626,7 +626,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse QueryDns(ServiceRequest request)
+    internal static ActionResult QueryDns(ServiceRequest request)
     {
         DnsAnalyzer? dns;
         NpcapLanCapture? capture;
@@ -641,7 +641,7 @@ internal static class LanHost
 
         if (dns is null)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -673,7 +673,7 @@ internal static class LanHost
             _dnsEventCount = events.Count;
         }
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -692,7 +692,7 @@ internal static class LanHost
         };
     }
 
-    internal static ServiceResponse ClearDns(ServiceRequest request)
+    internal static ActionResult ClearDns(ServiceRequest request)
     {
         DnsAnalyzer? dns;
         LanEventStore? store;
@@ -721,7 +721,7 @@ internal static class LanHost
         return QueryDns(request);
     }
 
-    internal static ServiceResponse TrustDns(ServiceRequest request)
+    internal static ActionResult TrustDns(ServiceRequest request)
     {
         DnsAnalyzer? dns;
         var address = request.DnsTrustAddress;
@@ -753,7 +753,7 @@ internal static class LanHost
         return QueryDns(request);
     }
 
-    internal static ServiceResponse QueryIpv6(ServiceRequest request)
+    internal static ActionResult QueryIpv6(ServiceRequest request)
     {
         Ipv6Analyzer? ipv6;
         NpcapLanCapture? capture;
@@ -770,7 +770,7 @@ internal static class LanHost
 
         if (ipv6 is null)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -806,7 +806,7 @@ internal static class LanHost
             _ipv6EventCount = events.Count;
         }
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -834,7 +834,7 @@ internal static class LanHost
         };
     }
 
-    internal static ServiceResponse ClearIpv6(ServiceRequest request)
+    internal static ActionResult ClearIpv6(ServiceRequest request)
     {
         Ipv6Analyzer? ipv6;
         LanEventStore? store;
@@ -863,7 +863,7 @@ internal static class LanHost
         return QueryIpv6(request);
     }
 
-    internal static ServiceResponse TrustIpv6(ServiceRequest request)
+    internal static ActionResult TrustIpv6(ServiceRequest request)
     {
         Ipv6Analyzer? ipv6;
         Ipv6BlockRegistry? blocks;
@@ -937,7 +937,7 @@ internal static class LanHost
         return QueryIpv6(request);
     }
 
-    internal static ServiceResponse ClearName(ServiceRequest request)
+    internal static ActionResult ClearName(ServiceRequest request)
     {
         LanEventStore? store;
         NameResolutionAnalyzer? analyzer;
@@ -971,7 +971,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse BlockName(ServiceRequest request)
+    internal static ActionResult BlockName(ServiceRequest request)
     {
         NameResolutionAnalyzer? analyzer;
         NameBlockRegistry? blocks;
@@ -1039,7 +1039,7 @@ internal static class LanHost
         return Query(request);
     }
 
-    internal static ServiceResponse BlockIpv6(ServiceRequest request)    {
+    internal static ActionResult BlockIpv6(ServiceRequest request)    {
         Ipv6Analyzer? ipv6;
         Ipv6BlockRegistry? blocks;
         var addressText = request.Ipv6BlockAddress;
@@ -1139,7 +1139,7 @@ internal static class LanHost
         return QueryIpv6(request);
     }
 
-    internal static ServiceResponse ResetIpv6Baseline(ServiceRequest request)
+    internal static ActionResult ResetIpv6Baseline(ServiceRequest request)
     {
         Ipv6Analyzer? ipv6;
 
@@ -1732,7 +1732,7 @@ internal static class LanHost
         DhcpBlockEnabled = item.DhcpBlockEnabled,
     };
 
-    private static ServiceResponse Error(ServiceRequest request, string message) => new()
+    private static ActionResult Error(ServiceRequest request, string message) => new()
     {
         Id = request.Id,
         Ok = false,

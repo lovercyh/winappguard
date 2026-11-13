@@ -16,7 +16,7 @@ internal enum GatewayFailure
 }
 
 internal sealed record GatewayResult(
-    ServiceResponse? Response,
+    ActionResult? Response,
     string? Error,
     bool Cancelled,
     GatewayFailure Failure = GatewayFailure.None)
@@ -34,9 +34,9 @@ internal interface IApplicationGateway
 {
     bool IsRunningAsAdmin { get; }
 
-    ServiceResponse? TryRequest(ServiceRequest request, TimeSpan timeout, out string? error);
+    ActionResult? TryRequest(ServiceRequest request, TimeSpan timeout, out string? error);
 
-    ServiceResponse? TryElevatedRequest(ServiceRequest request, out string? error);
+    ActionResult? TryElevatedRequest(ServiceRequest request, out string? error);
 
     ServiceStatus? TryGetStatus(TimeSpan timeout);
 
@@ -63,11 +63,11 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
 {
     public bool IsRunningAsAdmin => AdminHelper.IsRunningAsAdmin();
 
-    public ServiceResponse? TryRequest(
+    public ActionResult? TryRequest(
         ServiceRequest request, TimeSpan timeout, out string? error)
         => ServiceClient.TryRequest(request, timeout, out error);
 
-    public ServiceResponse? TryElevatedRequest(ServiceRequest request, out string? error)
+    public ActionResult? TryElevatedRequest(ServiceRequest request, out string? error)
         => ElevatedClient.TryRequest(request, out error);
 
     public ServiceStatus? TryGetStatus(TimeSpan timeout)

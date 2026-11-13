@@ -535,7 +535,7 @@ public sealed partial class MainForm
 
         try
         {
-            ServiceResponse? response = null;
+            ActionResult? response = null;
 
             foreach (var address in trusted)
             {

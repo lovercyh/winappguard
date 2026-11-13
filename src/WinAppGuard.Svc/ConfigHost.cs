@@ -110,14 +110,14 @@ internal static class ConfigHost
         ServiceLog.Info("WAG-CONFIG-002", "Config integrity monitor stopped.");
     }
 
-    internal static ServiceResponse Query(ServiceRequest request)
+    internal static ActionResult Query(ServiceRequest request)
     {
         lock (Gate)
         {
             var items = BuildItemsLocked();
             var changed = items.Count(item => item.Changed);
 
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -136,7 +136,7 @@ internal static class ConfigHost
         }
     }
 
-    internal static ServiceResponse Clear(ServiceRequest request)
+    internal static ActionResult Clear(ServiceRequest request)
     {
         LanEventStore? store;
 
@@ -159,7 +159,7 @@ internal static class ConfigHost
         return Query(request);
     }
 
-    internal static ServiceResponse Rebaseline(ServiceRequest request)
+    internal static ActionResult Rebaseline(ServiceRequest request)
     {
         List<ConfigEntry> entries;
 

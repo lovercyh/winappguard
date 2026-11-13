@@ -314,7 +314,7 @@ internal static class IdsHost
 
     // ---------------- IPC ----------------
 
-    internal static ServiceResponse QueryAlerts(ServiceRequest request)
+    internal static ActionResult QueryAlerts(ServiceRequest request)
     {
         List<IdsAlertDto> alerts;
         List<IdsSuppressionDto> suppressions;
@@ -335,7 +335,7 @@ internal static class IdsHost
             status = BuildStatusLocked();
         }
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -346,7 +346,7 @@ internal static class IdsHost
         };
     }
 
-    internal static ServiceResponse Configure(ServiceRequest request)
+    internal static ActionResult Configure(ServiceRequest request)
     {
         var dto = request.IdsSettings;
 
@@ -397,7 +397,7 @@ internal static class IdsHost
             $"rules=beacon:{GetSettings().BeaconingRule}/scan:{GetSettings().ScanRule}/" +
             $"lateral:{GetSettings().LateralRule}/dns:{GetSettings().DnsRule}.");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -407,7 +407,7 @@ internal static class IdsHost
         };
     }
 
-    internal static ServiceResponse Ack(ServiceRequest request)
+    internal static ActionResult Ack(ServiceRequest request)
     {
         var id = request.IdsAlertId;
 
@@ -431,7 +431,7 @@ internal static class IdsHost
 
         PersistState();
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -440,7 +440,7 @@ internal static class IdsHost
     }
 
     /// <summary>5.8：把当前所有未读 IDS 告警一次性标记为已读。</summary>
-    internal static ServiceResponse AckAll(ServiceRequest request)
+    internal static ActionResult AckAll(ServiceRequest request)
     {
         var changed = 0;
 
@@ -461,7 +461,7 @@ internal static class IdsHost
 
         PersistState();
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -470,7 +470,7 @@ internal static class IdsHost
         };
     }
 
-    internal static ServiceResponse Suppress(ServiceRequest request)
+    internal static ActionResult Suppress(ServiceRequest request)
     {
         var dto = request.IdsSuppression;
 
@@ -505,7 +505,7 @@ internal static class IdsHost
                 "WAG-IDS-008",
                 $"IDS suppression removed: {dto.Id}.");
 
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -537,7 +537,7 @@ internal static class IdsHost
             $"process={suppression.ProcessPath ?? suppression.ProcessName ?? "*"}, " +
             $"target={suppression.Target ?? "*"}, until={suppression.UntilUtc?.ToString("O") ?? "never"}.");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -546,7 +546,7 @@ internal static class IdsHost
         };
     }
 
-    internal static ServiceResponse Clear(ServiceRequest request)
+    internal static ActionResult Clear(ServiceRequest request)
     {
         int cleared;
 
@@ -564,7 +564,7 @@ internal static class IdsHost
 
         ServiceLog.Operation("WAG-IDS-006", $"IDS alerts cleared ({cleared} in memory).");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -757,7 +757,7 @@ internal static class IdsHost
         }
     }
 
-    private static ServiceResponse Error(ServiceRequest request, string message) => new()
+    private static ActionResult Error(ServiceRequest request, string message) => new()
     {
         Id = request.Id,
         Ok = false,

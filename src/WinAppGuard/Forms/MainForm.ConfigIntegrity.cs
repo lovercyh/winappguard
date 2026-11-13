@@ -412,7 +412,7 @@ public sealed partial class MainForm
         }
     }
 
-    private void ApplyConfigResponse(ServiceResponse response)
+    private void ApplyConfigResponse(ActionResult response)
     {
         _configItemTable?.Invalidate();
         _configEventTable?.Invalidate();

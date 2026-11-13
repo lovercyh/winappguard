@@ -29,7 +29,7 @@ internal sealed class ServiceSession : IDisposable
         _signer = signer;
     }
 
-    internal static ServiceResponse? TryRequest(
+    internal static ActionResult? TryRequest(
         ServiceRequest request,
         TimeSpan timeout,
         IServiceSigner signer,
@@ -157,7 +157,7 @@ internal sealed class ServiceSession : IDisposable
         }
     }
 
-    private ServiceResponse? Send(
+    private ActionResult? Send(
         ServiceRequest request,
         TimeSpan timeout,
         out string? error)

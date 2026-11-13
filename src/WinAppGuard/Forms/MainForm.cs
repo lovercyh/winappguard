@@ -1311,7 +1311,7 @@ public partial class MainForm : Form
     /// 发一条写命令；失败时弹出原因并返回 null。
     /// 统一在这里处理"服务没起 / 未提权 / 服务拒绝"，避免每个调用点各写一遍。
     /// </summary>
-    private async Task<ServiceResponse?> CallServiceAsync(
+    private async Task<ActionResult?> CallServiceAsync(
         string command, ServiceRequest request, string actionName)
     {
         request.Command = command;
@@ -1378,7 +1378,7 @@ public partial class MainForm : Form
     /// 不碰 WFP、拦截和设置。服务端只对 <c>alert.*</c> 精确放行，
     /// 系统变更命令仍然必须提权。
     /// </summary>
-    private async Task<ServiceResponse?> CallAlertServiceAsync(
+    private async Task<ActionResult?> CallAlertServiceAsync(
         string command, ServiceRequest request, string actionName)
     {
         request.Command = command;

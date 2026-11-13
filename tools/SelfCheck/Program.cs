@@ -5845,7 +5845,7 @@ internal static class Program
 
             CheckAssertion(results, "超长请求被拒绝", oversizedPayloadRejected);
 
-            var challenge = new ServiceResponse
+            var challenge = new ActionResult
             {
                 Ok = true,
                 Nonce = Convert.ToBase64String(nonce),
@@ -5853,7 +5853,7 @@ internal static class Program
 
             var challengeJson = JsonSerializer.Serialize(
                 challenge, ServiceProtocol.JsonOptions);
-            var parsedChallenge = JsonSerializer.Deserialize<ServiceResponse>(
+            var parsedChallenge = JsonSerializer.Deserialize<ActionResult>(
                 challengeJson, ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "challenge nonce 能原样往返",
@@ -7257,7 +7257,7 @@ internal static class Program
                     .GetAwaiter().GetResult();
 
                 var response = PipeCodec
-                    .ReadAsync<ServiceResponse>(pipe, timeout.Token)
+                    .ReadAsync<ActionResult>(pipe, timeout.Token)
                     .GetAwaiter().GetResult();
 
                 if (response is not { Ok: true } || response.Nonce is null)
@@ -7286,7 +7286,7 @@ internal static class Program
                 return data;
             }
 
-            static ServiceResponse SendSigned(
+            static ActionResult SendSigned(
                 NamedPipeClientStream pipe,
                 byte[] nonce,
                 byte[] payload,
@@ -7295,9 +7295,9 @@ internal static class Program
             {
                 PipeCodec.WriteSignedAsync(pipe, signature, payload, token)
                     .GetAwaiter().GetResult();
-                return PipeCodec.ReadAsync<ServiceResponse>(pipe, token)
+                return PipeCodec.ReadAsync<ActionResult>(pipe, token)
                            .GetAwaiter().GetResult()
-                       ?? new ServiceResponse { Ok = false, Error = "无响应" };
+                       ?? new ActionResult { Ok = false, Error = "无响应" };
             }
 
             var payload = JsonSerializer.SerializeToUtf8Bytes(
@@ -7322,7 +7322,7 @@ internal static class Program
                     .GetAwaiter().GetResult();
 
                 var response = PipeCodec
-                    .ReadAsync<ServiceResponse>(pipe, timeout.Token)
+                    .ReadAsync<ActionResult>(pipe, timeout.Token)
                     .GetAwaiter().GetResult();
 
                 CheckAssertion(results, "无签名的请求被拒绝",
@@ -8609,7 +8609,7 @@ internal static class Program
     }
 
     /// <summary>发一条规则命令并取回响应（3 秒超时）。</summary>
-    private static ServiceResponse? Call(
+    private static ActionResult? Call(
         string command, ServiceRequest request, out string? error)
     {
         request.Command = command;
@@ -12274,7 +12274,7 @@ internal static class Program
             return;
         }
 
-        ServiceResponse? enabled = null;
+        ActionResult? enabled = null;
 
         try
         {
@@ -12536,7 +12536,7 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ServiceResponse? QueryAntiScanResponse(out string? error)
+    private static ActionResult? QueryAntiScanResponse(out string? error)
     {
         return ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryAntiScan },
@@ -12751,7 +12751,7 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ServiceResponse? QueryIdsResponse(out string? error)
+    private static ActionResult? QueryIdsResponse(out string? error)
     {
         return ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },
@@ -12915,7 +12915,7 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: true);
     }
 
-    private static ServiceResponse? QueryLanResponse(out string? error)
+    private static ActionResult? QueryLanResponse(out string? error)
     {
         return ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryLan },
@@ -13481,7 +13481,7 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ServiceResponse? QueryIpv6Response(out string? error)
+    private static ActionResult? QueryIpv6Response(out string? error)
     {
         return ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryIpv6Security },
@@ -13489,7 +13489,7 @@ internal static class Program
             out error);
     }
 
-    private static ServiceResponse? QueryDnsSecurityResponse(out string? error)
+    private static ActionResult? QueryDnsSecurityResponse(out string? error)
     {
         return ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryDnsSecurity },
@@ -13694,7 +13694,7 @@ internal static class Program
         PrintSummary(results, showFirewallResidue: false);
     }
 
-    private static ServiceResponse? QueryTrafficResponse(out string? error)
+    private static ActionResult? QueryTrafficResponse(out string? error)
     {
         return ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
@@ -14102,7 +14102,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(
-                new ServiceResponse { Ok = true, DnsRecords = new List<DnsDto> { dto } },
+                new ActionResult { Ok = true, DnsRecords = new List<DnsDto> { dto } },
                 ServiceProtocol.JsonOptions);
             W($"    DNS JSON = {json}");
             CheckAssertion(results, "响应 JSON 带 dnsRecords / queryName",
@@ -14462,7 +14462,7 @@ internal static class Program
                 broken.Settings.Enabled && broken.Settings.RetentionDays == 30);
 
             // ---- DTO 往返 ----
-            var response = new ServiceResponse
+            var response = new ActionResult
             {
                 Ok = true,
                 IdsAlerts = new List<IdsAlertDto>
@@ -14484,7 +14484,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-            var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+            var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "协议 DTO：告警 / 设置 / 状态往返",
                 back?.IdsAlerts is { Count: 1 }
@@ -14872,7 +14872,7 @@ internal static class Program
             beforeClear > 0 && cleared.Programs.Count == 0 && cleared.BytesIn.Count == 0);
 
         // 新增 DTO 的 JSON 往返。
-        var response = new ServiceResponse
+        var response = new ActionResult
         {
             Ok = true,
             Traffic = new List<TrafficDto>
@@ -14911,7 +14911,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：精确字段 / 曲线 / 状态往返",
             back?.Traffic is { Count: 1 }
@@ -15116,7 +15116,7 @@ internal static class Program
         }
 
         // 协议 DTO 往返。
-        var response = new ServiceResponse
+        var response = new ActionResult
         {
             Ok = true,
             LanSettings = new LanSettingsDto { RetentionDays = 15, DhcpBlockEnabled = true },
@@ -15148,7 +15148,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：局域网状态 / 事件 / 网关 / 服务器 / 阻断往返",
             back?.LanSettings is { RetentionDays: 15, DhcpBlockEnabled: true }
@@ -15607,7 +15607,7 @@ internal static class Program
         }
 
         // 协议 DTO 往返。
-        var response = new ServiceResponse
+        var response = new ActionResult
         {
             Ok = true,
             DnsSecurityStatus = new DnsSecurityStatusDto
@@ -15630,7 +15630,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：DNS 状态 / 服务器 / 事件往返",
             back?.DnsSecurityStatus is { Collecting: true, BaselineReady: true, ConfiguredCount: 1 }
@@ -16103,7 +16103,7 @@ internal static class Program
             }
         }
 
-        var response = new ServiceResponse
+        var response = new ActionResult
         {
             Ok = true,
             Ipv6SecurityStatus = new Ipv6SecurityStatusDto
@@ -16136,7 +16136,7 @@ internal static class Program
         };
 
         var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-        var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+        var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
 
         CheckAssertion(results, "协议 DTO：IPv6 状态 / 路由器 / DHCPv6 / 邻居 / 事件往返",
             back?.Ipv6SecurityStatus is { Collecting: true, BaselineReady: true, RouterCount: 1 }
@@ -16634,7 +16634,7 @@ internal static class Program
             CheckAssertion(results, "状态文件：坏文件回退默认值",
                 broken.Settings.Enabled && broken.Settings.BlockMinutes == 10);
 
-            var response = new ServiceResponse
+            var response = new ActionResult
             {
                 Ok = true,
                 AntiScanSettings = new AntiScanSettingsDto
@@ -16679,7 +16679,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(response, ServiceProtocol.JsonOptions);
-            var back = JsonSerializer.Deserialize<ServiceResponse>(json, ServiceProtocol.JsonOptions);
+            var back = JsonSerializer.Deserialize<ActionResult>(json, ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "协议 DTO：反扫描设置 / 状态 / 事件 / 封禁往返",
                 back?.AntiScanSettings is { AutoBlock: true, BlockMinutes: 10 }
@@ -17452,7 +17452,7 @@ internal static class Program
 
             var started = new DateTime(2026, 10, 26, 12, 34, 56, DateTimeKind.Utc);
             var metadataJson = JsonSerializer.Serialize(
-                new ServiceResponse { Ok = true, TrafficStartedUtc = started },
+                new ActionResult { Ok = true, TrafficStartedUtc = started },
                 ServiceProtocol.JsonOptions);
 
             CheckAssertion(results, "响应 JSON 带 trafficStartedUtc",
@@ -18085,7 +18085,7 @@ internal static class Program
             };
 
             var json = JsonSerializer.Serialize(
-                new ServiceResponse { Ok = true, Traffic = new List<TrafficDto> { dto } },
+                new ActionResult { Ok = true, Traffic = new List<TrafficDto> { dto } },
                 ServiceProtocol.JsonOptions);
             W($"    流量 JSON = {json}");
             CheckAssertion(results, "响应 JSON 带 traffic / bytesIn / bytesOut",
@@ -18283,7 +18283,7 @@ internal static class Program
             CheckAssertion(results, "请求 JSON 使用 camelCase 且带 pids",
                 requestJson.Contains("\"pids\":[1,2]", StringComparison.Ordinal));
 
-            var response = new ServiceResponse
+            var response = new ActionResult
             {
                 Ok = true,
                 ProcessPaths = new List<ProcessPathDto>

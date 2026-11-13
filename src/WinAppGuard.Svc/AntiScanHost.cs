@@ -186,11 +186,11 @@ internal static class AntiScanHost
         ServiceLog.Info("WAG-ANTISCAN-006", "Anti-scan stopped.");
     }
 
-    internal static ServiceResponse Query(ServiceRequest request)
+    internal static ActionResult Query(ServiceRequest request)
     {
         lock (Gate)
         {
-            return new ServiceResponse
+            return new ActionResult
             {
                 Id = request.Id,
                 Ok = true,
@@ -205,7 +205,7 @@ internal static class AntiScanHost
         }
     }
 
-    internal static ServiceResponse Configure(ServiceRequest request)
+    internal static ActionResult Configure(ServiceRequest request)
     {
         var dto = request.AntiScanSettings;
 
@@ -271,7 +271,7 @@ internal static class AntiScanHost
         return Query(request);
     }
 
-    internal static ServiceResponse Release(ServiceRequest request)
+    internal static ActionResult Release(ServiceRequest request)
     {
         var address = request.AntiScanAddress;
         var released = 0;
@@ -304,7 +304,7 @@ internal static class AntiScanHost
                 $"Released {released} anti-scan inbound block(s).");
         }
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -314,7 +314,7 @@ internal static class AntiScanHost
         };
     }
 
-    internal static ServiceResponse Clear(ServiceRequest request)
+    internal static ActionResult Clear(ServiceRequest request)
     {
         int released;
         int events;
@@ -334,7 +334,7 @@ internal static class AntiScanHost
             "WAG-ANTISCAN-009",
             $"Anti-scan cleared ({events} event(s), {released} block(s) released).");
 
-        return new ServiceResponse
+        return new ActionResult
         {
             Id = request.Id,
             Ok = true,
@@ -928,7 +928,7 @@ internal static class AntiScanHost
         }
     }
 
-    private static ServiceResponse Error(ServiceRequest request, string message) => new()
+    private static ActionResult Error(ServiceRequest request, string message) => new()
     {
         Id = request.Id,
         Ok = false,

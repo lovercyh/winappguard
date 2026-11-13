@@ -1909,7 +1909,7 @@ internal static class CliRunner
     /// <summary>5.7：列出服务采集到的最近 DNS 查询（只读）。</summary>
     private static int RunDns(CommandLineOptions options)
     {
-        ServiceResponse? response;
+        ActionResult? response;
 
         try
         {
@@ -2304,7 +2304,7 @@ internal static class CliRunner
             response.NetworkDetectionStatus);
     }
 
-    private static ServiceResponse? QueryIds(out string? error)
+    private static ActionResult? QueryIds(out string? error)
     {
         var response = ServiceClient.TryRequest(
             new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },

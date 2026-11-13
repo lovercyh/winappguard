@@ -24,7 +24,7 @@ public sealed class PayloadAdapterTests
             Assert.Equal("id", back.Id);
             Assert.Equal(ServiceProtocol.Version, back.ProtocolVersion);
 
-            var response = new ServiceResponse
+            var response = new ActionResult
             {
                 Id = "id",
                 Ok = true,
@@ -50,7 +50,7 @@ public sealed class PayloadAdapterTests
     [Fact]
     public void QueryViewCarriesTypedFeatureData()
     {
-        var response = new ServiceResponse
+        var response = new ActionResult
         {
             Ok = true,
             IdsAlerts = new List<IdsAlertDto>

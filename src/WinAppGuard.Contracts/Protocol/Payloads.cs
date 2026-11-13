@@ -233,6 +233,82 @@ public sealed class QueryView : ResponsePayload
 
     public QueryMeta? Meta { get; set; }
 
+    // ---- 12 个检测特性的真正响应载荷 ----
+
+    public List<WinAppGuard.Contracts.IdsAlertDto>? IdsAlerts { get; set; }
+
+    public List<WinAppGuard.Contracts.IdsSuppressionDto>? IdsSuppressions { get; set; }
+
+    public WinAppGuard.Contracts.IdsSettingsDto? IdsSettings { get; set; }
+
+    public WinAppGuard.Contracts.IdsStatusDto? IdsStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.NetworkAlertDto>? NetworkAlerts { get; set; }
+
+    public List<WinAppGuard.Contracts.NetworkBlockDto>? NetworkBlocks { get; set; }
+
+    public WinAppGuard.Contracts.NetworkDetectionSettingsDto? NetworkDetectionSettings { get; set; }
+
+    public WinAppGuard.Contracts.NetworkDetectionStatusDto? NetworkDetectionStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.AntiScanEventDto>? AntiScanEvents { get; set; }
+
+    public List<WinAppGuard.Contracts.AntiScanBlockDto>? AntiScanBlocks { get; set; }
+
+    public WinAppGuard.Contracts.AntiScanSettingsDto? AntiScanSettings { get; set; }
+
+    public WinAppGuard.Contracts.AntiScanStatusDto? AntiScanStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.LanEventDto>? LanEvents { get; set; }
+
+    public List<WinAppGuard.Contracts.LanGatewayDto>? LanGateways { get; set; }
+
+    public List<WinAppGuard.Contracts.LanDhcpServerDto>? LanDhcpServers { get; set; }
+
+    public List<WinAppGuard.Contracts.LanBlockDto>? LanBlocks { get; set; }
+
+    public WinAppGuard.Contracts.LanSettingsDto? LanSettings { get; set; }
+
+    public WinAppGuard.Contracts.LanStatusDto? LanStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.DnsSecurityServerDto>? DnsSecurityServers { get; set; }
+
+    public List<WinAppGuard.Contracts.LanEventDto>? DnsSecurityEvents { get; set; }
+
+    public WinAppGuard.Contracts.DnsSecurityStatusDto? DnsSecurityStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.Ipv6RouterDto>? Ipv6Routers { get; set; }
+
+    public List<WinAppGuard.Contracts.Ipv6DhcpServerDto>? Ipv6DhcpServers { get; set; }
+
+    public List<WinAppGuard.Contracts.Ipv6NeighborDto>? Ipv6Neighbors { get; set; }
+
+    public List<WinAppGuard.Contracts.LanEventDto>? Ipv6SecurityEvents { get; set; }
+
+    public WinAppGuard.Contracts.Ipv6SecurityStatusDto? Ipv6SecurityStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.ConfigItemDto>? ConfigItems { get; set; }
+
+    public List<WinAppGuard.Contracts.LanEventDto>? ConfigIntegrityEvents { get; set; }
+
+    public WinAppGuard.Contracts.ConfigIntegrityStatusDto? ConfigIntegrityStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.NameSourceDto>? NameSources { get; set; }
+
+    public List<WinAppGuard.Contracts.LanEventDto>? NameResolutionEvents { get; set; }
+
+    public WinAppGuard.Contracts.NameResolutionStatusDto? NameResolutionStatus { get; set; }
+
+    public List<WinAppGuard.Contracts.DnsDto>? DnsRecords { get; set; }
+
+    public List<WinAppGuard.Contracts.TrafficDto>? Traffic { get; set; }
+
+    public DateTime? TrafficStartedUtc { get; set; }
+
+    public WinAppGuard.Contracts.TrafficStatusDto? TrafficStatus { get; set; }
+
+    public WinAppGuard.Contracts.TrafficSeriesDto? TrafficSeries { get; set; }
+
     /// <summary>迁移期：旧 UI 仍需要的完整响应形状；5.12 删除。</summary>
     public JsonElement? Legacy { get; set; }
 }

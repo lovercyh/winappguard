@@ -46,4 +46,36 @@ public sealed class PayloadAdapterTests
             Assert.Equal("id", legacy.Id);
         }
     }
+
+    [Fact]
+    public void QueryViewCarriesTypedFeatureData()
+    {
+        var response = new ServiceResponse
+        {
+            Ok = true,
+            IdsAlerts = new List<IdsAlertDto>
+            {
+                new() { Id = "a1", RuleId = "beaconing" },
+            },
+            Ipv6Routers = new List<Ipv6RouterDto>
+            {
+                new() { LinkLocal = "fe80::1" },
+            },
+            NameSources = new List<NameSourceDto>
+            {
+                new() { Address = "192.0.2.1" },
+            },
+        };
+
+        var typed = LegacyPayloadAdapter.CreateResponse(
+            ServiceProtocol.Commands.QueryIdsAlerts, response, 3, "epoch");
+
+        var query = Assert.IsType<QueryView>(typed);
+
+        Assert.Single(query.IdsAlerts!);
+        Assert.Equal("a1", query.IdsAlerts![0].Id);
+        Assert.Single(query.Ipv6Routers!);
+        Assert.Single(query.NameSources!);
+        Assert.Equal(3, query.Revision);
+    }
 }

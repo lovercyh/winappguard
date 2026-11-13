@@ -407,6 +407,8 @@ internal sealed class ControlServer : IDisposable
             Protocol = ServiceProtocol.Version,
         }, timeout.Token);
 
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+
         var expectedSeq = 1L;
         var sessionExpiresUtc = DateTime.UtcNow.AddMinutes(5);
         var nonceBytes = Encoding.UTF8.GetBytes(serverNonce);
@@ -415,6 +417,7 @@ internal sealed class ControlServer : IDisposable
 
         while (!serverToken.IsCancellationRequested)
         {
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
             var now = DateTime.UtcNow;
 
             if (now - rateWindowStartUtc >= TimeSpan.FromSeconds(1))

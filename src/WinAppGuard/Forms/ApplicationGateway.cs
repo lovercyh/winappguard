@@ -4,10 +4,21 @@ using WinAppGuard.Core;
 namespace WinAppGuard.Forms;
 
 /// <summary>5.10：一次网关调用的结果；UI 用它区分成功、失败和取消。</summary>
+internal enum GatewayFailure
+{
+    None = 0,
+    Offline = 1,
+    Timeout = 2,
+    Unauthorized = 3,
+    VersionMismatch = 4,
+    Error = 5,
+}
+
 internal sealed record GatewayResult(
     ServiceResponse? Response,
     string? Error,
-    bool Cancelled)
+    bool Cancelled,
+    GatewayFailure Failure = GatewayFailure.None)
 {
     internal bool Ok => Response is { Ok: true };
 }
@@ -73,7 +84,7 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
                 () =>
                 {
                     var response = ServiceClient.TryRequest(request, timeout, out var error);
-                    return new GatewayResult(response, error, Cancelled: false);
+                    return Classify(new GatewayResult(response, error, Cancelled: false));
                 },
                 cancellationToken).ConfigureAwait(true);
         }
@@ -98,7 +109,7 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
                 () =>
                 {
                     var response = ElevatedClient.TryRequest(request, out var error);
-                    return new GatewayResult(response, error, Cancelled: false);
+                    return Classify(new GatewayResult(response, error, Cancelled: false));
                 },
                 cancellationToken).ConfigureAwait(true);
         }
@@ -127,5 +138,54 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
         {
             return null;
         }
+    }
+
+    private static GatewayResult Classify(GatewayResult result)
+    {
+        if (result.Cancelled)
+        {
+            return result with { Failure = GatewayFailure.Offline };
+        }
+
+        if (result.Ok)
+        {
+            return result with { Failure = GatewayFailure.None };
+        }
+
+        var code = result.Response?.ErrorCode;
+        var error = result.Error ?? result.Response?.Error ?? string.Empty;
+
+        if (string.Equals(code, "NotElevated", StringComparison.Ordinal)
+            || string.Equals(code, "NotOwner", StringComparison.Ordinal)
+            || error.Contains("签名密钥", StringComparison.Ordinal)
+            || error.Contains("认证失败", StringComparison.Ordinal)
+            || error.Contains("管理员权限", StringComparison.Ordinal))
+        {
+            return result with { Failure = GatewayFailure.Unauthorized };
+        }
+
+        if (string.Equals(code, "VersionMismatch", StringComparison.Ordinal)
+            || error.Contains("协议", StringComparison.Ordinal)
+            || error.Contains("版本", StringComparison.Ordinal))
+        {
+            return result with { Failure = GatewayFailure.VersionMismatch };
+        }
+
+        if (error.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("超时", StringComparison.Ordinal))
+        {
+            return result with { Failure = GatewayFailure.Timeout };
+        }
+
+        if (result.Response is null
+            && (error.Contains("管道", StringComparison.Ordinal)
+                || error.Contains("v4", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("连接", StringComparison.Ordinal)
+                || error.Contains("Offline", StringComparison.OrdinalIgnoreCase)))
+        {
+            return result with { Failure = GatewayFailure.Offline };
+        }
+
+        return result with { Failure = GatewayFailure.Error };
     }
 }

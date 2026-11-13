@@ -293,17 +293,17 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryDnsSecurity },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new DnsSecuritySnapshotResult(
-                    response.DnsSecurityStatus,
-                    response.DnsSecurityServers ?? new List<DnsSecurityServerDto>(),
-                    response.DnsSecurityEvents ?? new List<LanEventDto>())
-                : null;
+            return view is null
+                ? null
+                : new DnsSecuritySnapshotResult(
+                    view.DnsSecurityStatus,
+                    view.DnsSecurityServers ?? new List<DnsSecurityServerDto>(),
+                    view.DnsSecurityEvents ?? new List<LanEventDto>());
         }
         catch (Exception)
         {

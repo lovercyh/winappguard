@@ -387,6 +387,8 @@ public sealed class TrafficView : ResponsePayload
 {
     public List<WinAppGuard.Contracts.TrafficDto>? Programs { get; set; }
 
+    public DateTime? TrafficStartedUtc { get; set; }
+
     public WinAppGuard.Contracts.TrafficStatusDto? Status { get; set; }
 
     public WinAppGuard.Contracts.TrafficSeriesDto? Series { get; set; }

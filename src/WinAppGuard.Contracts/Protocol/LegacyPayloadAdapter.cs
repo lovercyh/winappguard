@@ -110,6 +110,7 @@ public static class LegacyPayloadAdapter
                 Revision = revision,
                 RevisionEpoch = revisionEpoch,
                 Programs = response.Traffic,
+                TrafficStartedUtc = response.TrafficStartedUtc,
                 Status = response.TrafficStatus,
                 Series = response.TrafficSeries,
                 Meta = Meta(revision, revisionEpoch),

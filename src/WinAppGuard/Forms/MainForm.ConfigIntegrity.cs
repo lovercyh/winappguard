@@ -215,17 +215,17 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryConfigIntegrity },
                 TimeSpan.FromSeconds(3),
                 out _);
 
-            return response is { Ok: true }
-                ? new ConfigSnapshotResult(
-                    response.ConfigIntegrityStatus,
-                    response.ConfigItems ?? new List<ConfigItemDto>(),
-                    response.ConfigIntegrityEvents ?? new List<LanEventDto>())
-                : null;
+            return view is null
+                ? null
+                : new ConfigSnapshotResult(
+                    view.ConfigIntegrityStatus,
+                    view.ConfigItems ?? new List<ConfigItemDto>(),
+                    view.ConfigIntegrityEvents ?? new List<LanEventDto>());
         }
         catch (Exception)
         {

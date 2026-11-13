@@ -767,18 +767,18 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryAntiScan },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new AntiScanSnapshot(
-                    response.AntiScanEvents ?? new List<AntiScanEventDto>(),
-                    response.AntiScanBlocks ?? new List<AntiScanBlockDto>(),
-                    response.AntiScanSettings,
-                    response.AntiScanStatus)
-                : null;
+            return view is null
+                ? null
+                : new AntiScanSnapshot(
+                    view.AntiScanEvents ?? new List<AntiScanEventDto>(),
+                    view.AntiScanBlocks ?? new List<AntiScanBlockDto>(),
+                    view.AntiScanSettings,
+                    view.AntiScanStatus);
         }
         catch (Exception)
         {

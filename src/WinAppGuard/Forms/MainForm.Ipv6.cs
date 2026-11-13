@@ -335,19 +335,19 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryIpv6Security },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new Ipv6SnapshotResult(
-                    response.Ipv6SecurityStatus,
-                    response.Ipv6Routers ?? new List<Ipv6RouterDto>(),
-                    response.Ipv6DhcpServers ?? new List<Ipv6DhcpServerDto>(),
-                    response.Ipv6Neighbors ?? new List<Ipv6NeighborDto>(),
-                    response.Ipv6SecurityEvents ?? new List<LanEventDto>())
-                : null;
+            return view is null
+                ? null
+                : new Ipv6SnapshotResult(
+                    view.Ipv6SecurityStatus,
+                    view.Ipv6Routers ?? new List<Ipv6RouterDto>(),
+                    view.Ipv6DhcpServers ?? new List<Ipv6DhcpServerDto>(),
+                    view.Ipv6Neighbors ?? new List<Ipv6NeighborDto>(),
+                    view.Ipv6SecurityEvents ?? new List<LanEventDto>());
         }
         catch (Exception)
         {

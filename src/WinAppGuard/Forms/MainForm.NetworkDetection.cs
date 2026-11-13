@@ -293,18 +293,18 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryNetworkDetection },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new NetworkDetectionSnapshot(
-                    response.NetworkAlerts ?? new List<NetworkAlertDto>(),
-                    response.NetworkBlocks ?? new List<NetworkBlockDto>(),
-                    response.NetworkDetectionSettings ?? new NetworkDetectionSettingsDto(),
-                    response.NetworkDetectionStatus)
-                : null;
+            return view is null
+                ? null
+                : new NetworkDetectionSnapshot(
+                    view.NetworkAlerts ?? new List<NetworkAlertDto>(),
+                    view.NetworkBlocks ?? new List<NetworkBlockDto>(),
+                    view.NetworkDetectionSettings ?? new NetworkDetectionSettingsDto(),
+                    view.NetworkDetectionStatus);
         }
         catch (Exception)
         {

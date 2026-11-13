@@ -211,17 +211,17 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryNameResolution },
                 TimeSpan.FromSeconds(3),
                 out _);
 
-            return response is { Ok: true }
-                ? new NameSnapshotResult(
-                    response.NameResolutionStatus,
-                    response.NameSources ?? new List<NameSourceDto>(),
-                    response.NameResolutionEvents ?? new List<LanEventDto>())
-                : null;
+            return view is null
+                ? null
+                : new NameSnapshotResult(
+                    view.NameResolutionStatus,
+                    view.NameSources ?? new List<NameSourceDto>(),
+                    view.NameResolutionEvents ?? new List<LanEventDto>());
         }
         catch (Exception)
         {

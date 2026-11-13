@@ -217,14 +217,12 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryDns },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true, DnsRecords: not null }
-                ? response.DnsRecords
-                : null;
+            return view?.DnsRecords;
         }
         catch (Exception)
         {

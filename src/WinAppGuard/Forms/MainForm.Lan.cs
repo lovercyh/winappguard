@@ -402,20 +402,20 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryLan },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new LanSnapshotResult(
-                    response.LanEvents ?? new List<LanEventDto>(),
-                    response.LanGateways ?? new List<LanGatewayDto>(),
-                    response.LanDhcpServers ?? new List<LanDhcpServerDto>(),
-                    response.LanBlocks ?? new List<LanBlockDto>(),
-                    response.LanStatus,
-                    response.LanSettings)
-                : null;
+            return view is null
+                ? null
+                : new LanSnapshotResult(
+                    view.LanEvents ?? new List<LanEventDto>(),
+                    view.LanGateways ?? new List<LanGatewayDto>(),
+                    view.LanDhcpServers ?? new List<LanDhcpServerDto>(),
+                    view.LanBlocks ?? new List<LanBlockDto>(),
+                    view.LanStatus,
+                    view.LanSettings);
         }
         catch (Exception)
         {

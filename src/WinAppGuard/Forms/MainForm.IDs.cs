@@ -344,18 +344,18 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryQuery(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryIdsAlerts },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new IdsSnapshot(
-                    response.IdsAlerts ?? new List<IdsAlertDto>(),
-                    response.IdsSuppressions ?? new List<IdsSuppressionDto>(),
-                    response.IdsSettings,
-                    response.IdsStatus)
-                : null;
+            return view is null
+                ? null
+                : new IdsSnapshot(
+                    view.IdsAlerts ?? new List<IdsAlertDto>(),
+                    view.IdsSuppressions ?? new List<IdsSuppressionDto>(),
+                    view.IdsSettings,
+                    view.IdsStatus);
         }
         catch (Exception)
         {

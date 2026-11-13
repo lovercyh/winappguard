@@ -1,4 +1,5 @@
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 
 namespace WinAppGuard.Forms;
@@ -39,6 +40,10 @@ internal interface IApplicationGateway
 
     ServiceStatus? TryGetStatus(TimeSpan timeout);
 
+    QueryView? TryQuery(ServiceRequest request, TimeSpan timeout, out string? error);
+
+    TrafficView? TryTraffic(ServiceRequest request, TimeSpan timeout, out string? error);
+
     Task<GatewayResult> TryRequestAsync(
         ServiceRequest request,
         TimeSpan timeout,
@@ -67,6 +72,41 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
 
     public ServiceStatus? TryGetStatus(TimeSpan timeout)
         => ServiceClient.TryGetStatus(timeout);
+
+    public QueryView? TryQuery(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+    {
+        var response = ServiceClient.TryRequest(request, timeout, out error);
+
+        if (response is null)
+        {
+            return null;
+        }
+
+        if (!response.Ok)
+        {
+            error = response.Error ?? error ?? "查询失败。";
+            return null;
+        }
+
+        return LegacyPayloadAdapter.CreateResponse(
+            request.Command, response, 0, null) as QueryView;
+    }
+
+    public TrafficView? TryTraffic(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+    {
+        var response = ServiceClient.TryRequest(request, timeout, out error);
+
+        if (response is null || !response.Ok)
+        {
+            error ??= response?.Error ?? "查询失败。";
+            return null;
+        }
+
+        return LegacyPayloadAdapter.CreateResponse(
+            request.Command, response, 0, null) as TrafficView;
+    }
 
     public async Task<GatewayResult> TryRequestAsync(
         ServiceRequest request,

@@ -308,18 +308,18 @@ public sealed partial class MainForm
     {
         try
         {
-            var response = Gateway.TryRequest(
+            var view = Gateway.TryTraffic(
                 new ServiceRequest { Command = ServiceProtocol.Commands.QueryTraffic },
                 TimeSpan.FromSeconds(2),
                 out _);
 
-            return response is { Ok: true }
-                ? new TrafficRecordsResult(
-                    response.Traffic ?? new List<TrafficDto>(),
-                    response.TrafficStartedUtc,
-                    response.TrafficSeries,
-                    response.TrafficStatus)
-                : null;
+            return view is null
+                ? null
+                : new TrafficRecordsResult(
+                    view.Programs ?? new List<TrafficDto>(),
+                    view.TrafficStartedUtc,
+                    view.Series,
+                    view.Status);
         }
         catch (Exception)
         {

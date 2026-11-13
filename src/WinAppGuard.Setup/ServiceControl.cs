@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace WinAppGuard.Setup;
@@ -47,6 +48,20 @@ internal static class ServiceControl
         public uint ServiceSpecificExitCode;
         public uint CheckPoint;
         public uint WaitHint;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceStatusProcess
+    {
+        public uint ServiceType;
+        public uint CurrentState;
+        public uint ControlsAccepted;
+        public uint Win32ExitCode;
+        public uint ServiceSpecificExitCode;
+        public uint CheckPoint;
+        public uint WaitHint;
+        public uint ProcessId;
+        public uint ServiceFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -106,6 +121,10 @@ internal static class ServiceControl
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool QueryServiceStatus(IntPtr service, ref ServiceStatus status);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool QueryServiceStatusEx(
+        IntPtr service, int infoLevel, IntPtr buffer, uint bufferSize, out uint bytesNeeded);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool DeleteService(IntPtr service);
@@ -235,7 +254,7 @@ internal static class ServiceControl
         }
     }
 
-    /// <summary>停止服务并等待（最多 15 秒）。</summary>
+    /// <summary>停止服务并等待（最多 15 秒），再等服务进程真正退出。</summary>
     internal static void Stop(string serviceName)
     {
         var scm = OpenScm();
@@ -251,6 +270,9 @@ internal static class ServiceControl
 
             try
             {
+                // 先记住 PID：SERVICE_STOPPED 只表示控制分发器已停，
+                // 进程可能还要几百毫秒才释放 exe 文件句柄。
+                var processId = GetProcessIdCore(service);
                 var status = new ServiceStatus();
                 _ = ControlService(service, ServiceControlStop, ref status);
 
@@ -261,6 +283,7 @@ internal static class ServiceControl
                     if (!QueryServiceStatus(service, ref status)
                         || status.CurrentState == ServiceStopped)
                     {
+                        WaitForProcessExit(processId, TimeSpan.FromSeconds(10));
                         return;
                     }
 
@@ -277,6 +300,82 @@ internal static class ServiceControl
         finally
         {
             _ = CloseServiceHandle(scm);
+        }
+    }
+
+    private static uint GetProcessIdCore(IntPtr service)
+    {
+        var size = Marshal.SizeOf<ServiceStatusProcess>();
+        var buffer = Marshal.AllocHGlobal(size);
+
+        try
+        {
+            if (!QueryServiceStatusEx(
+                    service, 0, buffer, (uint)size, out _))
+            {
+                return 0;
+            }
+
+            return Marshal.PtrToStructure<ServiceStatusProcess>(buffer).ProcessId;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static void WaitForProcessExit(uint processId, TimeSpan timeout)
+    {
+        if (processId == 0 || processId == Environment.ProcessId)
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById((int)processId);
+
+            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            {
+                throw new TimeoutException(
+                    $"服务进程 {processId} 没有在 {timeout.TotalSeconds:0} 秒内退出。");
+            }
+        }
+        catch (ArgumentException)
+        {
+            // 进程已经退出。
+        }
+    }
+
+    /// <summary>
+    /// 等服务 exe 的文件锁释放。SCM 报 STOPPED 之后，Windows 仍可能短暂持有镜像句柄；
+    /// 覆盖安装在慢速 VM 上就是因为这个窗口复制失败，留下旧服务。
+    /// </summary>
+    internal static void WaitForFileUnlock(string path, TimeSpan timeout)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var probe = new FileStream(
+                    path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(150);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Thread.Sleep(150);
+            }
         }
     }
 

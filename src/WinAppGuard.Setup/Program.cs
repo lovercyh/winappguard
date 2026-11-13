@@ -211,8 +211,26 @@ internal static class Program
         TryStopUiProcesses();
 
         Directory.CreateDirectory(InstallDirectory);
+        ServiceControl.WaitForFileUnlock(
+            Path.Combine(InstallDirectory, UiExeName), TimeSpan.FromSeconds(10));
 
-        CopyPayload(payload);
+        try
+        {
+            CopyPayload(payload);
+        }
+        catch (Exception ex)
+        {
+            Bilingual.Fail(
+                $"复制文件失败：{ex.Message}。请关闭界面后重新运行安装器；若仍失败，请重启 Windows 再试。",
+                $"Failed to copy files: {ex.Message}. Close the UI and run the installer again; if it still fails, reboot Windows and retry.");
+            return 7;
+        }
+
+        if (!VerifyInstalledVersions(payload))
+        {
+            return 7;
+        }
+
         InstallSuricataAssets(payload);
         Bilingual.Say($"已复制到：{InstallDirectory}", $"Copied to: {InstallDirectory}");
         ReportPathRegistration();
@@ -664,8 +682,35 @@ internal static class Program
             ServiceControl.Stop(ServiceProtocol.ServiceName);
         }
 
+        var servicePath = Path.Combine(InstallDirectory, ServiceExeName);
+        var uiPath = Path.Combine(InstallDirectory, UiExeName);
+
+        // 5.11.1：SERVICE_STOPPED 之后 exe 仍可能被短暂锁定。
+        // 不等待就覆盖会失败，旧版安装器正是因此留下 v3 服务。
+        ServiceControl.WaitForFileUnlock(servicePath, TimeSpan.FromSeconds(15));
+        ServiceControl.WaitForFileUnlock(uiPath, TimeSpan.FromSeconds(10));
+
         Directory.CreateDirectory(InstallDirectory);
-        CopyPayload(payload);
+
+        try
+        {
+            CopyPayload(payload);
+        }
+        catch (Exception ex)
+        {
+            Bilingual.Fail(
+                $"复制文件失败：{ex.Message}。请关闭界面后重新运行安装器；若仍失败，请重启 Windows 再试。",
+                $"Failed to copy files: {ex.Message}. Close the UI and run the installer again; if it still fails, reboot Windows and retry.");
+            RestartServiceAfterFailedUpgrade();
+            return 7;
+        }
+
+        if (!VerifyInstalledVersions(payload))
+        {
+            RestartServiceAfterFailedUpgrade();
+            return 7;
+        }
+
         InstallSuricataAssets(payload);
         ReportPathRegistration();
 
@@ -2153,8 +2198,11 @@ internal static class Program
 
     private static void CopyPayload(Payload payload)
     {
-        File.Copy(payload.Ui, Path.Combine(InstallDirectory, UiExeName), overwrite: true);
-        File.Copy(payload.Service, Path.Combine(InstallDirectory, ServiceExeName), overwrite: true);
+        // 5.11.1：先换服务，再换界面。
+        // 如果服务文件仍被旧进程占用，失败时用户仍然保留旧的“界面 + 服务”组合，
+        // 不会出现“新界面 + v3 服务”这种半升级状态。
+        CopyFileWithRetry(payload.Service, Path.Combine(InstallDirectory, ServiceExeName));
+        CopyFileWithRetry(payload.Ui, Path.Combine(InstallDirectory, UiExeName));
 
         // 安装器本体（base）装进 Program Files：
         //   - 作为 WinAppGuardSetup.exe → 界面「启动服务 / 修复」用；
@@ -2179,6 +2227,139 @@ internal static class Program
             CopyIfDifferent(
                 payload.NpcapSetup,
                 Path.Combine(InstallDirectory, NpcapInstaller.FileName));
+        }
+    }
+
+    /// <summary>
+    /// 先复制到 .new，再原子替换；遇到文件锁（旧服务进程尚未完全退出）时重试。
+    /// 这样即使最终失败，旧的 exe 也不会被截断成半个文件。
+    /// </summary>
+    private static void CopyFileWithRetry(string source, string target)
+    {
+        const int attempts = 32;
+        var temp = target + ".new";
+
+        try
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    File.Copy(source, temp, overwrite: true);
+                    break;
+                }
+                catch (Exception ex) when (
+                    attempt < attempts - 1
+                    && ex is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    File.Move(temp, target, overwrite: true);
+                    return;
+                }
+                catch (Exception ex) when (
+                    attempt < attempts - 1
+                    && ex is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch (Exception)
+            {
+                // 临时文件删不掉不影响结果。
+            }
+        }
+    }
+
+    /// <summary>读取 exe 的 ProductVersion（去掉 +commit 后缀）。</summary>
+    private static string? ProductVersionOf(string path)
+    {
+        try
+        {
+            var version = System.Diagnostics.FileVersionInfo
+                .GetVersionInfo(path).ProductVersion;
+
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                return null;
+            }
+
+            var plus = version.IndexOf('+', StringComparison.Ordinal);
+            return plus > 0 ? version[..plus] : version;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 5.11.1：复制完必须确认磁盘上真的是新版本。
+    /// 旧版本升级时曾经因为服务 exe 仍被占用而静默留下 v3。
+    /// </summary>
+    private static bool VerifyInstalledVersions(Payload payload)
+    {
+        var expectedService = ProductVersionOf(payload.Service);
+        var expectedUi = ProductVersionOf(payload.Ui);
+
+        var installedService = ProductVersionOf(
+            Path.Combine(InstallDirectory, ServiceExeName));
+        var installedUi = ProductVersionOf(
+            Path.Combine(InstallDirectory, UiExeName));
+
+        if (!string.Equals(expectedService, installedService, StringComparison.OrdinalIgnoreCase))
+        {
+            Bilingual.Fail(
+                $"服务文件升级失败：安装目录里仍是 {installedService ?? "未知版本"}，期望 {expectedService}。"
+                + "请关闭界面后重新运行安装器；若仍失败，请重启 Windows 再试。",
+                $"Service upgrade failed: installed {installedService ?? "unknown"}, expected {expectedService}. "
+                + "Close the UI and run the installer again; if it still fails, reboot Windows and retry.");
+            return false;
+        }
+
+        if (!string.Equals(expectedUi, installedUi, StringComparison.OrdinalIgnoreCase))
+        {
+            Bilingual.Fail(
+                $"界面文件升级失败：安装目录里仍是 {installedUi ?? "未知版本"}，期望 {expectedUi}。"
+                + "请关闭界面后重新运行安装器。",
+                $"UI upgrade failed: installed {installedUi ?? "unknown"}, expected {expectedUi}. "
+                + "Close the UI and run the installer again.");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>升级失败时尽量把旧服务重新拉起来，别让机器停在“无防护”状态。</summary>
+    private static void RestartServiceAfterFailedUpgrade()
+    {
+        try
+        {
+            if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName)
+                && !ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+            {
+                ServiceControl.Start(ServiceProtocol.ServiceName);
+            }
+        }
+        catch (Exception)
+        {
+            // 尽力而为；原始错误已经打印给用户。
         }
     }
 

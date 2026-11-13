@@ -132,6 +132,21 @@ public sealed class ExpiringBlockRegistry<TKey> where TKey : notnull
         }
     }
 
+    public bool TryGet(TKey key, out BlockEntry<TKey> entry)
+    {
+        lock (_gate)
+        {
+            if (_items.TryGetValue(key, out entry!)
+                && entry.ExpiresUtc > _clock.UtcNow)
+            {
+                return true;
+            }
+
+            entry = null!;
+            return false;
+        }
+    }
+
     public IReadOnlyList<BlockEntry<TKey>> Snapshot()
     {
         lock (_gate)
@@ -146,6 +161,9 @@ public sealed class ExpiringBlockRegistry<TKey> where TKey : notnull
     }
 
     public int PurgeExpired()
+        => PurgeExpiredKeys().Count;
+
+    public IReadOnlyList<TKey> PurgeExpiredKeys()
     {
         lock (_gate)
         {
@@ -160,7 +178,7 @@ public sealed class ExpiringBlockRegistry<TKey> where TKey : notnull
                 _items.Remove(key);
             }
 
-            return expired.Count;
+            return expired;
         }
     }
 }

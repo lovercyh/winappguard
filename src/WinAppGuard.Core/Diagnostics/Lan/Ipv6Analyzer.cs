@@ -1,4 +1,5 @@
 using System.Net;
+using WinAppGuard.Core.Features;
 
 namespace WinAppGuard.Core.Diagnostics.Lan;
 
@@ -22,6 +23,8 @@ public sealed class Ipv6Analyzer
 
     private readonly object _gate = new();
     private readonly Ipv6State _state;
+    private readonly Baseline<string> _trustedRouters;
+    private readonly Baseline<string> _trustedDhcpServers;
     private readonly List<LanEvent> _events = new();
     private readonly Dictionary<string, DateTime> _cooldown = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Queue<DateTime>> _raRate = new(StringComparer.OrdinalIgnoreCase);
@@ -36,6 +39,10 @@ public sealed class Ipv6Analyzer
     public Ipv6Analyzer(Ipv6State state, DateTime now)
     {
         _state = state;
+        _trustedRouters = new Baseline<string>(
+            state.TrustedRouters, StringComparer.OrdinalIgnoreCase);
+        _trustedDhcpServers = new Baseline<string>(
+            state.TrustedDhcpServers, StringComparer.OrdinalIgnoreCase);
         _learningStartedUtc = now;
     }
 
@@ -60,12 +67,12 @@ public sealed class Ipv6Analyzer
 
     public List<string> TrustedRouters
     {
-        get { lock (_gate) { return _state.TrustedRouters.ToList(); } }
+        get { lock (_gate) { return _trustedRouters.Items.ToList(); } }
     }
 
     public List<string> TrustedDhcpServers
     {
-        get { lock (_gate) { return _state.TrustedDhcpServers.ToList(); } }
+        get { lock (_gate) { return _trustedDhcpServers.Items.ToList(); } }
     }
 
     public void UpdateLocalAddresses(IEnumerable<string> addresses)
@@ -686,7 +693,7 @@ public sealed class Ipv6Analyzer
         lock (_gate)
         {
             var key = Ipv6TrustKeys.Router(address, NormalizeMac(mac));
-            SetTrustLocked(_state.TrustedRouters, key, enabled);
+            SetTrustLocked(_trustedRouters, _state.TrustedRouters, key, enabled);
             ClearCooldownLocked(key);
             StateChanged?.Invoke();
             return true;
@@ -703,7 +710,7 @@ public sealed class Ipv6Analyzer
         lock (_gate)
         {
             var key = Ipv6TrustKeys.Dhcp(serverId, NormalizeMac(mac));
-            SetTrustLocked(_state.TrustedDhcpServers, key, enabled);
+            SetTrustLocked(_trustedDhcpServers, _state.TrustedDhcpServers, key, enabled);
             ClearCooldownLocked(key);
             StateChanged?.Invoke();
             return true;
@@ -875,13 +882,13 @@ public sealed class Ipv6Analyzer
     private bool IsTrustedRouterLocked(string linkLocal, string mac)
     {
         var key = Ipv6TrustKeys.Router(linkLocal, mac);
-        return _state.TrustedRouters.Contains(key, StringComparer.OrdinalIgnoreCase);
+        return _trustedRouters.Contains(key);
     }
 
     private bool IsTrustedDhcpLocked(string serverId, string? mac)
     {
         var key = Ipv6TrustKeys.Dhcp(serverId, mac);
-        return _state.TrustedDhcpServers.Contains(key, StringComparer.OrdinalIgnoreCase);
+        return _trustedDhcpServers.Contains(key);
     }
 
     private void ClearCooldownLocked(string key)
@@ -894,19 +901,20 @@ public sealed class Ipv6Analyzer
         }
     }
 
-    private static void SetTrustLocked(List<string> list, string key, bool enabled)
+    private static void SetTrustLocked(
+        Baseline<string> baseline, List<string> stateList, string key, bool enabled)
     {
-        var index = list.FindIndex(item =>
-            string.Equals(item, key, StringComparison.OrdinalIgnoreCase));
+        if (enabled)
+        {
+            baseline.Trust(key);
+        }
+        else
+        {
+            baseline.Untrust(key);
+        }
 
-        if (enabled && index < 0)
-        {
-            list.Add(key);
-        }
-        else if (!enabled && index >= 0)
-        {
-            list.RemoveAt(index);
-        }
+        stateList.Clear();
+        stateList.AddRange(baseline.Items);
     }
 
     private static List<Ipv6PrefixInfo> ClonePrefixes(IEnumerable<Ipv6PrefixInfo> prefixes)

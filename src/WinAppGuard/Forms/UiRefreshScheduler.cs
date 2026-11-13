@@ -1,4 +1,5 @@
 using WinAppGuard.Core;
+using WinAppGuard.Core.Time;
 
 namespace WinAppGuard.Forms;
 
@@ -19,11 +20,13 @@ internal sealed class UiRefreshScheduler : IDisposable
     private readonly System.Windows.Forms.Timer _timer;
     private readonly List<Job> _jobs = new();
     private readonly Func<bool> _suppressed;
+    private readonly IClock _clock;
     private bool _disposed;
 
-    internal UiRefreshScheduler(Func<bool> suppressed)
+    internal UiRefreshScheduler(Func<bool> suppressed, IClock? clock = null)
     {
         _suppressed = suppressed;
+        _clock = clock ?? SystemClock.Instance;
         _timer = new System.Windows.Forms.Timer { Interval = 1000 };
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
@@ -79,7 +82,7 @@ internal sealed class UiRefreshScheduler : IDisposable
             jobs = _jobs.ToList();
         }
 
-        var now = DateTime.UtcNow;
+        var now = _clock.UtcNow;
 
         foreach (var job in jobs)
         {

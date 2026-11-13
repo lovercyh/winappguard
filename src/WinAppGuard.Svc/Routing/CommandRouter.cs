@@ -1,4 +1,6 @@
-namespace WinAppGuard.Contracts;
+using WinAppGuard.Contracts;
+
+namespace WinAppGuard.Service;
 
 /// <summary>
 /// 5.9：每条命令执行时需要的上下文。

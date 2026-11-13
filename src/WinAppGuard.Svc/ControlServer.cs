@@ -532,7 +532,7 @@ internal sealed class ControlServer : IDisposable
                 status.SublayerPresent = false;
             }
 
-            var rules = RuleEngine.GetRules();
+            var rules = Rules.GetRuleSnapshot();
             status.BlockRuleCount = rules.Count(rule => rule.Action == FirewallAction.Block);
             status.AllowRuleCount = rules.Count(rule => rule.Action == FirewallAction.Allow);
             status.IpRuleCount = rules.Count(rule => !string.IsNullOrEmpty(rule.IpAddress));

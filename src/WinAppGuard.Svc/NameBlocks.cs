@@ -1,4 +1,5 @@
 using System.Net;
+using WinAppGuard.Core.Features;
 using WinAppGuard.Core.Wfp;
 
 namespace WinAppGuard.Service;
@@ -14,7 +15,8 @@ internal sealed class NameBlockRegistry : IDisposable
     internal const int MaxMinutes = 10;
 
     private readonly object _gate = new();
-    private readonly Dictionary<string, DateTime> _blocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ExpiringBlockRegistry<string> _blocks =
+        new(256, TimeSpan.FromMinutes(MaxMinutes));
 
     private NameBlockHost? _host;
     private bool _disposed;
@@ -25,7 +27,7 @@ internal sealed class NameBlockRegistry : IDisposable
         {
             lock (_gate)
             {
-                return _blocks.Count;
+                return _blocks.Snapshot().Count;
             }
         }
     }
@@ -34,7 +36,14 @@ internal sealed class NameBlockRegistry : IDisposable
     {
         lock (_gate)
         {
-            return _blocks.TryGetValue(address, out expiresUtc);
+            if (_blocks.TryGet(address, out var entry))
+            {
+                expiresUtc = entry.ExpiresUtc;
+                return true;
+            }
+
+            expiresUtc = default;
+            return false;
         }
     }
 
@@ -68,7 +77,7 @@ internal sealed class NameBlockRegistry : IDisposable
                 return false;
             }
 
-            _blocks[text] = DateTime.UtcNow.Add(duration);
+            _blocks.TryAdd(text, duration, "name-resolution");
             return true;
         }
     }
@@ -77,7 +86,7 @@ internal sealed class NameBlockRegistry : IDisposable
     {
         lock (_gate)
         {
-            if (!_blocks.Remove(address))
+            if (!_blocks.Release(address))
             {
                 return false;
             }
@@ -102,15 +111,10 @@ internal sealed class NameBlockRegistry : IDisposable
     {
         lock (_gate)
         {
-            var expired = _blocks
-                .Where(item => item.Value <= nowUtc)
-                .Select(item => item.Key)
-                .ToList();
+            var expired = _blocks.PurgeExpiredKeys();
 
             foreach (var address in expired)
             {
-                _blocks.Remove(address);
-
                 try
                 {
                     if (IPAddress.TryParse(address, out var parsed))
@@ -124,7 +128,7 @@ internal sealed class NameBlockRegistry : IDisposable
                 }
             }
 
-            return expired;
+            return expired.ToList();
         }
     }
 
@@ -132,8 +136,7 @@ internal sealed class NameBlockRegistry : IDisposable
     {
         lock (_gate)
         {
-            var count = _blocks.Count;
-            _blocks.Clear();
+            var count = _blocks.ReleaseAll();
 
             try
             {
@@ -158,7 +161,7 @@ internal sealed class NameBlockRegistry : IDisposable
             }
 
             _disposed = true;
-            _blocks.Clear();
+            _blocks.ReleaseAll();
 
             try
             {

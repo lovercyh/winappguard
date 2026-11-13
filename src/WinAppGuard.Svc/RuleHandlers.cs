@@ -15,6 +15,7 @@ namespace WinAppGuard.Service;
 internal sealed class RuleHandlers
 {
     private readonly RuleGroupStore _groups = new(ServicePaths.RuleGroupsFile);
+    private readonly RuleSnapshotCache _cache = new();
 
     /// <summary>本次服务运行以来自动重建的规则条数。</summary>
     private int _tamperRebuilt;
@@ -48,6 +49,14 @@ internal sealed class RuleHandlers
         get { lock (Gate) { return _lastPurgedPrograms.ToList(); } }
     }
 
+    /// <summary>5.10：规则快照 revision；任何规则变化后单调递增。</summary>
+    internal long RuleRevision => _cache.Revision;
+
+    internal string RuleRevisionEpoch => _cache.Epoch;
+
+    internal IReadOnlyList<FirewallRuleItem> GetRuleSnapshot()
+        => _cache.Get(RuleEngine.GetRules);
+
     /// <summary>
     /// WFP / 规则文件都不是线程安全的：管道每个连接一个线程，必须串行化。
     /// 规则操作本身只有几毫秒，串行不会影响体验。
@@ -58,7 +67,15 @@ internal sealed class RuleHandlers
     {
         lock (Gate)
         {
-            return HandleCore(request);
+            var response = HandleCore(request);
+
+            if (response.Ok
+                && request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
+            {
+                _cache.Invalidate();
+            }
+
+            return response;
         }
     }
 
@@ -197,6 +214,7 @@ internal sealed class RuleHandlers
 
             if (result.Success)
             {
+                _cache.Invalidate();
                 ServiceLog.Operation(
                     "WAG-STRICT-008",
                     $"Timed lockdown expired at {expiresUtc:O}; network access restored.");
@@ -352,6 +370,7 @@ internal sealed class RuleHandlers
                 {
                     if (sublayerRecreated)
                     {
+                        _cache.Invalidate();
                         _lastTamperUtc = DateTime.UtcNow;
                     }
 
@@ -370,6 +389,7 @@ internal sealed class RuleHandlers
 
                 if (rebuilt > 0)
                 {
+                    _cache.Invalidate();
                     _groups.Save();
                     _tamperRebuilt += rebuilt;
                     _lastTamperUtc = DateTime.UtcNow;
@@ -408,7 +428,8 @@ internal sealed class RuleHandlers
                     return;
                 }
 
-                _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
+                _cache.Invalidate();
+                _groups.Prune(_cache.Get(RuleEngine.GetRules).Select(rule => rule.Name));
                 _groups.Save();
                 SaveSnapshotNow();
                 RecordPurged(removed);
@@ -594,7 +615,7 @@ internal sealed class RuleHandlers
     /// <summary>把当前规则 + 分组映射成 IPC 用的 DTO（列表与快照共用）。</summary>
     private List<RuleDto> BuildRuleDtos()
     {
-        var rules = RuleEngine.GetRules();
+        var rules = _cache.Get(RuleEngine.GetRules);
 
         return rules.Select(rule => new RuleDto
         {

@@ -5427,7 +5427,7 @@ public partial class MainForm : Form
     {
         _ = Task.Run(() =>
         {
-            var status = Gateway.TryGetStatus(TimeSpan.FromSeconds(1.5));
+            var status = Gateway.TryGetStatus(TimeSpan.FromSeconds(2.5));
 
             try
             {

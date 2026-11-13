@@ -67,8 +67,12 @@ public static class ServerIdentity
                     .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 var actualDirectory = Path.GetFullPath(Path.GetDirectoryName(serverPath) ?? string.Empty)
                     .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var serverFileName = Path.GetFileName(serverPath);
 
-                if (!string.Equals(expectedDirectory, actualDirectory, StringComparison.OrdinalIgnoreCase))
+                // 允许用户直接运行 dist 里的界面连接 Program Files 里的服务；
+                // 真正的安全边界是“必须是 SYSTEM 且镜像名是 WinAppGuardSvc.exe”。
+                if (!string.Equals(expectedDirectory, actualDirectory, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(serverFileName, "WinAppGuardSvc.exe", StringComparison.OrdinalIgnoreCase))
                 {
                     error = $"服务端镜像不在安装目录：{serverPath}";
                     return false;

@@ -87,7 +87,7 @@ public static class ServiceClient
 
             try
             {
-                pipe.Connect((int)Math.Max(1, Math.Min(1000, timeout.TotalMilliseconds)));
+                pipe.Connect((int)Math.Max(1, Math.Min(250, timeout.TotalMilliseconds)));
             }
             catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
             {

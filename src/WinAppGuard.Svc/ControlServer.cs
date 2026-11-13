@@ -4,8 +4,10 @@ using System.Security.Principal;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using WinAppGuard.Contracts;
+using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.ProtectedMode;
 using WinAppGuard.Core.Wfp;
@@ -34,7 +36,7 @@ internal sealed class ControlServer : IDisposable
     private bool _loggedReady;
     // 5.9：命令路由在 Start 里创建并校验；校验失败时不创建控制管道（失败关闭）。
     private static CommandRouter? _router;
-    private ModuleHost? _modules;
+    private static ModuleHost? _modules;
     // 服务进程里只有一个 ControlServer；BuildStatus 被 RuleHandlers 静态调用，
     // 所以这两项用 static，保证状态命令和规则命令看到同一份配置。
     private static ProtectedModeConfig? _protectedMode;
@@ -184,7 +186,7 @@ internal sealed class ControlServer : IDisposable
 
         ServiceLog.Info(
             "WAG-IPC-001",
-            $"IPC started: {ServiceProtocol.PipeName} (v2 signed authentication).");
+            $"IPC started: {ServiceProtocol.PipeName} (v3 signed session).");
     }
 
     internal void StopControlPlane()
@@ -283,123 +285,261 @@ internal sealed class ControlServer : IDisposable
                 out var clientSid, out var clientPath, out var reason))
         {
             ServiceLog.Warning("WAG-IPC-004", $"Rejected IPC connection (pid={clientPid}); client identity could not be verified.");
-            TryWrite(pipe, new ServiceResponse { Ok = false, Error = reason }, timeout.Token);
-            return;
-        }
-
-        ServiceRequest? challenge;
-
-        try
-        {
-            challenge = PipeCodec.ReadAsync<ServiceRequest>(pipe, timeout.Token)
-                .GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            ServiceLog.Warning("WAG-IPC-005", "IPC authentication challenge timed out.");
-            return;
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning("WAG-IPC-006", "IPC authentication challenge was malformed.", ex);
-            return;
-        }
-
-        if (challenge is null)
-        {
-            return;
-        }
-
-        if (challenge.ProtocolVersion != ServiceProtocol.Version
-            || !string.Equals(
-                challenge.Command, ServiceProtocol.Commands.AuthChallenge,
-                StringComparison.Ordinal))
-        {
-            ServiceLog.Warning(
-                "WAG-IPC-007",
-                $"Rejected IPC: the first command must be auth.challenge (pid={clientPid}, command={challenge.Command}).");
-            TryWrite(pipe, new ServiceResponse
+            TryWrite(pipe, new ProtocolMessage
             {
-                Id = challenge.Id,
+                Type = "error",
+                V = ServiceProtocol.Version,
                 Ok = false,
-                Error = "认证失败",
+                ErrorCode = nameof(ProtocolErrorCode.NotOwner),
+                Message = reason,
             }, timeout.Token);
             return;
         }
 
-        var nonce = RandomNumberGenerator.GetBytes(32);
-
-        TryWrite(pipe, new ServiceResponse
-        {
-            Id = challenge.Id,
-            Ok = true,
-            Nonce = Convert.ToBase64String(nonce),
-        }, timeout.Token);
-
-        SignedEnvelope envelope;
+        ProtocolMessage? hello;
 
         try
         {
-            envelope = PipeCodec.ReadSignedAsync(pipe, timeout.Token)
+            hello = PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
                 .GetAwaiter().GetResult();
         }
         catch (OperationCanceledException)
         {
-            ServiceLog.Warning("WAG-IPC-008", "IPC signed envelope timed out.");
+            ServiceLog.Warning("WAG-IPC-005", "IPC v3 hello timed out.");
             return;
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning("WAG-IPC-009", "IPC signed envelope was malformed.", ex);
+            ServiceLog.Warning("WAG-IPC-006", "IPC v3 hello was malformed.", ex);
             return;
         }
 
-        var signedData = new byte[nonce.Length + envelope.Payload.Length];
-        Buffer.BlockCopy(nonce, 0, signedData, 0, nonce.Length);
-        Buffer.BlockCopy(envelope.Payload, 0, signedData, nonce.Length, envelope.Payload.Length);
+        if (hello is null
+            || !string.Equals(hello.Type, "hello", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(hello.ClientNonce))
+        {
+            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.VersionMismatch, "协议握手无效。");
+            return;
+        }
+
+        if (hello.V != ServiceProtocol.Version)
+        {
+            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.VersionMismatch, "协议版本不匹配。");
+            return;
+        }
+
+        var serverNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var sessionId = Guid.NewGuid().ToString("N");
+        var capacities = new[] { "v3", "modules", "revision" };
+
+        TryWrite(pipe, new ProtocolMessage
+        {
+            Type = "challenge",
+            V = ServiceProtocol.Version,
+            SessionId = sessionId,
+            ServerNonce = serverNonce,
+            ServerTimeUtc = DateTime.UtcNow,
+            ToolVersion = BuildVersion(),
+            Protocol = ServiceProtocol.Version,
+            Capabilities = capacities,
+            MaxFrameBytes = ServiceProtocol.MaxMessageBytes,
+        }, timeout.Token);
+
+        ProtocolMessage? auth;
+
+        try
+        {
+            auth = PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            ServiceLog.Warning("WAG-IPC-008", "IPC v3 auth timed out.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-IPC-009", "IPC v3 auth was malformed.", ex);
+            return;
+        }
+
+        if (auth is null
+            || !string.Equals(auth.Type, "auth", StringComparison.Ordinal)
+            || !string.Equals(auth.SessionId, sessionId, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(auth.Signature))
+        {
+            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "认证失败。");
+            return;
+        }
+
+        var authBytes = Encoding.UTF8.GetBytes(
+            $"{serverNonce}|{hello.ClientNonce}|{sessionId}");
+
+        byte[] authSignature;
+
+        try
+        {
+            authSignature = Convert.FromBase64String(auth.Signature);
+        }
+        catch (FormatException)
+        {
+            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "认证失败。");
+            return;
+        }
 
         if (!OwnerKey.Verify(
-                _protectedMode.GetPublicKeyBytes(), signedData, envelope.Signature))
+                _protectedMode.GetPublicKeyBytes(), authBytes, authSignature))
         {
             var rejected = Interlocked.Increment(ref _authRejectedCount);
             ServiceLog.Warning(
                 "WAG-AUTH-003",
-                $"Rejected IPC: invalid signature (pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, total rejected={rejected}).");
-            TryWrite(pipe, new ServiceResponse
+                $"Rejected IPC v3 auth: invalid signature (pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, total rejected={rejected}).");
+            RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "认证失败。");
+            return;
+        }
+
+        TryWrite(pipe, new ProtocolMessage
+        {
+            Type = "welcome",
+            V = ServiceProtocol.Version,
+            SessionId = sessionId,
+            ExpiresUtc = DateTime.UtcNow.AddMinutes(5),
+            Protocol = ServiceProtocol.Version,
+        }, timeout.Token);
+
+        var expectedSeq = 1L;
+        var sessionExpiresUtc = DateTime.UtcNow.AddMinutes(5);
+        var nonceBytes = Encoding.UTF8.GetBytes(serverNonce);
+
+        while (!serverToken.IsCancellationRequested)
+        {
+            ProtocolMessage? frame;
+
+            try
             {
-                Id = challenge.Id,
-                Ok = false,
-                Error = "认证失败",
+                frame = PipeCodec.ReadAsync<ProtocolMessage>(pipe, timeout.Token)
+                    .GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-IPC-010", "IPC v3 request was malformed.", ex);
+                break;
+            }
+
+            if (frame is null)
+            {
+                break;
+            }
+
+            if (!string.Equals(frame.Type, "request", StringComparison.Ordinal)
+                || frame.Seq != expectedSeq
+                || string.IsNullOrWhiteSpace(frame.Command)
+                || frame.Payload is null)
+            {
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.InvalidArgument, "请求帧无效。");
+                break;
+            }
+
+            if (DateTime.UtcNow > sessionExpiresUtc)
+            {
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.Timeout, "会话已过期。");
+                break;
+            }
+
+            if (string.IsNullOrWhiteSpace(frame.Signature))
+            {
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "请求缺少签名。");
+                break;
+            }
+
+            var canonical = ProtocolSigning.CanonicalBytes(frame);
+            var signed = new byte[nonceBytes.Length + canonical.Length];
+            Buffer.BlockCopy(nonceBytes, 0, signed, 0, nonceBytes.Length);
+            Buffer.BlockCopy(canonical, 0, signed, nonceBytes.Length, canonical.Length);
+
+            byte[] requestSignature;
+
+            try
+            {
+                requestSignature = Convert.FromBase64String(frame.Signature);
+            }
+            catch (FormatException)
+            {
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "请求签名无效。");
+                break;
+            }
+
+            if (!OwnerKey.Verify(
+                    _protectedMode.GetPublicKeyBytes(), signed, requestSignature))
+            {
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.NotOwner, "请求签名无效。");
+                break;
+            }
+
+            ServiceRequest request;
+
+            try
+            {
+                request = frame.Payload.Value
+                    .Deserialize<ServiceRequest>(ServiceProtocol.JsonOptions)
+                    ?? new ServiceRequest();
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-IPC-011", "IPC v3 request payload was invalid.", ex);
+                RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.InvalidArgument, "请求载荷无效。");
+                break;
+            }
+
+            request.Id = frame.Id ?? request.Id;
+            request.Command = frame.Command;
+            request.ProtocolVersion = ServiceProtocol.Version;
+
+            if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
+            {
+                ServiceLog.Operation(
+                    "WAG-IPC-012",
+                    $"IPC v3 write operation: pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, command={request.Command}.");
+            }
+
+            var response = Dispatch(request, elevated, clientPid);
+
+            TryWrite(pipe, new ProtocolMessage
+            {
+                Type = "response",
+                V = ServiceProtocol.Version,
+                Id = request.Id,
+                Seq = frame.Seq,
+                Ok = response.Ok,
+                ErrorCode = response.ErrorCode
+                    ?? (response.Ok ? nameof(ProtocolErrorCode.None) : nameof(ProtocolErrorCode.Internal)),
+                Message = response.Error,
+                Revision = Rules.RuleRevision,
+                Data = JsonSerializer.SerializeToElement(response, ServiceProtocol.JsonOptions),
             }, timeout.Token);
-            return;
+
+            expectedSeq++;
         }
+    }
 
-        ServiceRequest? request;
-
-        try
+    private static void RejectProtocol(
+        NamedPipeServerStream pipe,
+        CancellationToken token,
+        ProtocolErrorCode code,
+        string message)
+    {
+        TryWrite(pipe, new ProtocolMessage
         {
-            request = JsonSerializer.Deserialize<ServiceRequest>(
-                envelope.Payload, ServiceProtocol.JsonOptions);
-        }
-        catch (Exception ex)
-        {
-            ServiceLog.Warning("WAG-IPC-010", "IPC request JSON was invalid.", ex);
-            return;
-        }
-
-        if (request is null)
-        {
-            return;
-        }
-
-        if (request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
-        {
-            ServiceLog.Operation(
-                "WAG-IPC-011",
-                $"IPC write operation: pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, command={request.Command}.");
-        }
-
-        TryWrite(pipe, Dispatch(request, elevated, clientPid), timeout.Token);
+            Type = "error",
+            V = ServiceProtocol.Version,
+            Ok = false,
+            ErrorCode = code.ToString(),
+            Message = message,
+        }, token);
     }
 
     /// <summary>
@@ -444,7 +584,8 @@ internal sealed class ControlServer : IDisposable
             ProcessPaths = paths,
         };
     }
-    private static void TryWrite(NamedPipeServerStream pipe, ServiceResponse response, CancellationToken token)
+    private static void TryWrite<T>(
+        NamedPipeServerStream pipe, T response, CancellationToken token)
     {
         try
         {
@@ -452,7 +593,7 @@ internal sealed class ControlServer : IDisposable
         }
         catch (Exception ex)
         {
-            ServiceLog.Warning("WAG-IPC-012", "Failed to write the IPC response.", ex);
+            ServiceLog.Warning("WAG-IPC-015", "Failed to write the IPC response.", ex);
         }
     }
 
@@ -516,6 +657,19 @@ internal sealed class ControlServer : IDisposable
             ProtectedModeOwnerSid = _protectedMode?.OwnerSid,
             ProtectedModeFingerprint = _protectedMode?.Fingerprint,
             AuthRejectedCount = Volatile.Read(ref _authRejectedCount),
+            Revision = Rules.RuleRevision,
+            RevisionEpoch = Rules.RuleRevisionEpoch,
+            Modules = _modules?.Snapshot()
+                .Select(item => new ModuleStatusDto
+                {
+                    Name = item.Name,
+                    Order = item.Order,
+                    State = item.State.ToString(),
+                    Detail = item.Detail,
+                    LastError = item.LastError,
+                    Restarts = item.RestartCount,
+                })
+                .ToList(),
         };
 
         try

@@ -1,5 +1,8 @@
 using System.IO.Pipes;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using WinAppGuard.Contracts.Protocol;
 
 namespace WinAppGuard.Contracts;
 
@@ -46,8 +49,6 @@ public static class ServiceClient
     public static ServiceResponse? TryRequest(
         ServiceRequest request, TimeSpan timeout, out string? error)
     {
-        error = null;
-
         var signer = Volatile.Read(ref _signer);
 
         if (signer is null)
@@ -56,11 +57,163 @@ public static class ServiceClient
             return null;
         }
 
+        var response = TryRequestV3(request, timeout, signer, out error, out var unavailable);
+
+        if (!unavailable)
+        {
+            return response;
+        }
+
+        // 5.10：升级过渡期兼容旧服务；同时安装的新版本永远走 v3。
+        request.ProtocolVersion = 2;
+        return TryRequestV2(request, timeout, signer, out error);
+    }
+
+    private static ServiceResponse? TryRequestV3(
+        ServiceRequest request,
+        TimeSpan timeout,
+        IServiceSigner signer,
+        out string? error,
+        out bool unavailable)
+    {
+        error = null;
+        unavailable = false;
+
         try
         {
             using var cancellation = new CancellationTokenSource(timeout);
             using var pipe = new NamedPipeClientStream(
                 ".", ServiceProtocol.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+            try
+            {
+                pipe.Connect((int)Math.Max(1, Math.Min(1000, timeout.TotalMilliseconds)));
+            }
+            catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
+            {
+                unavailable = true;
+                error = $"v3 管道不可用：{ex.GetType().Name}";
+                return null;
+            }
+
+            var clientNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+
+            PipeCodec.WriteAsync(pipe, new ProtocolMessage
+            {
+                Type = "hello",
+                V = ServiceProtocol.Version,
+                ClientNonce = clientNonce,
+            }, cancellation.Token).GetAwaiter().GetResult();
+
+            var challenge = PipeCodec.ReadAsync<ProtocolMessage>(pipe, cancellation.Token)
+                .GetAwaiter().GetResult();
+
+            if (challenge is null
+                || !string.Equals(challenge.Type, "challenge", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(challenge.ServerNonce)
+                || string.IsNullOrWhiteSpace(challenge.SessionId))
+            {
+                error = $"v3 握手失败：{challenge?.Message ?? "服务没有返回 challenge"}";
+                return null;
+            }
+
+            var authBytes = Encoding.UTF8.GetBytes(
+                $"{challenge.ServerNonce}|{clientNonce}|{challenge.SessionId}");
+
+            PipeCodec.WriteAsync(pipe, new ProtocolMessage
+            {
+                Type = "auth",
+                V = ServiceProtocol.Version,
+                SessionId = challenge.SessionId,
+                Signature = Convert.ToBase64String(signer.Sign(authBytes)),
+            }, cancellation.Token).GetAwaiter().GetResult();
+
+            var welcome = PipeCodec.ReadAsync<ProtocolMessage>(pipe, cancellation.Token)
+                .GetAwaiter().GetResult();
+
+            if (welcome is null
+                || !string.Equals(welcome.Type, "welcome", StringComparison.Ordinal))
+            {
+                error = $"v3 认证失败：{welcome?.Message ?? "服务没有返回 welcome"}";
+                return null;
+            }
+
+            var frame = new ProtocolMessage
+            {
+                Type = "request",
+                V = ServiceProtocol.Version,
+                Id = request.Id,
+                Seq = 1,
+                Command = request.Command,
+                Payload = JsonSerializer.SerializeToElement(request, ServiceProtocol.JsonOptions),
+            };
+
+            var canonical = ProtocolSigning.CanonicalBytes(frame);
+            var nonceBytes = Encoding.UTF8.GetBytes(challenge.ServerNonce);
+            var signed = new byte[nonceBytes.Length + canonical.Length];
+            Buffer.BlockCopy(nonceBytes, 0, signed, 0, nonceBytes.Length);
+            Buffer.BlockCopy(canonical, 0, signed, nonceBytes.Length, canonical.Length);
+            frame.Signature = Convert.ToBase64String(signer.Sign(signed));
+
+            PipeCodec.WriteAsync(pipe, frame, cancellation.Token)
+                .GetAwaiter().GetResult();
+
+            var reply = PipeCodec.ReadAsync<ProtocolMessage>(pipe, cancellation.Token)
+                .GetAwaiter().GetResult();
+
+            if (reply is null)
+            {
+                error = "服务没有返回 v3 响应。";
+                return null;
+            }
+
+            if (string.Equals(reply.Type, "error", StringComparison.Ordinal))
+            {
+                error = reply.Message ?? reply.ErrorCode ?? "v3 请求失败。";
+                return null;
+            }
+
+            if (reply.Data is null)
+            {
+                error = "v3 响应缺少 data。";
+                return null;
+            }
+
+            var response = reply.Data.Value.Deserialize<ServiceResponse>(
+                ServiceProtocol.JsonOptions);
+
+            if (response is null)
+            {
+                error = "v3 响应 data 无法解析。";
+                return null;
+            }
+
+            response.Ok = reply.Ok ?? response.Ok;
+            response.Error ??= reply.Message;
+            response.ErrorCode ??= reply.ErrorCode;
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+            return null;
+        }
+    }
+
+    private static ServiceResponse? TryRequestV2(
+        ServiceRequest request,
+        TimeSpan timeout,
+        IServiceSigner signer,
+        out string? error)
+    {
+        error = null;
+
+        try
+        {
+            using var cancellation = new CancellationTokenSource(timeout);
+            using var pipe = new NamedPipeClientStream(
+                ".", "WinAppGuard.Control.v2", PipeDirection.InOut, PipeOptions.Asynchronous);
 
             pipe.Connect((int)Math.Max(1, timeout.TotalMilliseconds));
 
@@ -68,6 +221,7 @@ public static class ServiceClient
             var challenge = new ServiceRequest
             {
                 Command = ServiceProtocol.Commands.AuthChallenge,
+                ProtocolVersion = 2,
             };
 
             PipeCodec.WriteAsync(pipe, challenge, cancellation.Token)

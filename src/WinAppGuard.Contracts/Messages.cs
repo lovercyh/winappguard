@@ -182,6 +182,9 @@ public sealed class ServiceResponse
     /// <summary>失败原因（只在 <see cref="Ok"/> 为 false 时非空）。</summary>
     public string? Error { get; set; }
 
+    /// <summary>5.10：v3 错误码名称；v2 兼容载荷里可能为 null。</summary>
+    public string? ErrorCode { get; set; }
+
     /// <summary>3.1：auth.challenge 返回的 32 字节 nonce（Base64）。</summary>
     public string? Nonce { get; set; }
 
@@ -1225,6 +1228,34 @@ public sealed class ServiceStatus
 
     /// <summary>本次服务运行以来签名验证失败的次数。</summary>
     public int AuthRejectedCount { get; set; }
+
+    // ---- 5.10：协议 v3 状态分层 ----
+
+    /// <summary>规则快照 revision；写操作/定时清理后递增。</summary>
+    public long Revision { get; set; }
+
+    /// <summary>服务启动生成的 revision epoch；重启后变化。</summary>
+    public string? RevisionEpoch { get; set; }
+
+    /// <summary>12 个服务模块的健康快照。</summary>
+    public List<ModuleStatusDto>? Modules { get; set; }
+}
+
+/// <summary>5.10：一个服务模块的健康状态。</summary>
+public sealed class ModuleStatusDto
+{
+    public string Name { get; set; } = string.Empty;
+
+    public int Order { get; set; }
+
+    /// <summary>NotStarted / Starting / Running / Stopped / Failed。</summary>
+    public string State { get; set; } = string.Empty;
+
+    public string? Detail { get; set; }
+
+    public string? LastError { get; set; }
+
+    public int Restarts { get; set; }
 }
 
 /// <summary>4.5：本机配置监控状态。</summary>

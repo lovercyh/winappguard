@@ -103,6 +103,7 @@ public sealed class CommandRouter
             {
                 Id = context.Request.Id,
                 Ok = false,
+                ErrorCode = "UnknownCommand",
                 Error = $"未知命令：{context.Request.Command}",
             };
         }

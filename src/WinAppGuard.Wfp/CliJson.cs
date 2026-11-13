@@ -12,7 +12,7 @@ namespace WinAppGuard.Core;
 /// </summary>
 internal static class CliJson
 {
-    internal const int SchemaVersion = 1;
+    internal const int SchemaVersion = 2;
 
     private static readonly JsonSerializerOptions Options = new()
     {

@@ -14,6 +14,33 @@
 >     断言清单（「已完成并可断言的部分」）、"尚未发布"这类当时的状态描述。
 >     断言数字请只写在 `docs/测试用例.md` 里。
 
+## [5.10.0] - 2026-11-13
+
+> 协议 v3 与内部收口：v3 管道、握手、错误码、模块健康、规则读缓存和分层修正。
+
+### 新增 / 变更
+
+- 跨进程协议升级到 v3：
+  - 管道名 `WinAppGuard.Control.v3`
+  - Hello / Challenge / Auth / Welcome 会话握手
+  - 严格递增 `seq`，重复/跳号断连
+  - 请求签名覆盖握手 nonce 与请求帧
+  - 响应带 `errorCode`、`revision`、`data`
+- 新增 `status.modules`：12 个服务模块的状态、错误和重启次数。
+- 新增 `revision` 与 `revisionEpoch`；规则快照变化后单调递增。
+- 新增规则读缓存：规则列表不再每次重新枚举 WFP。
+- `CommandRouter` 移入服务层，Contracts 恢复纯契约。
+- `NameBlockRegistry` 改用统一 `ExpiringBlockRegistry`；IPv6 信任列表改用 `Baseline<string>`；页面调度器改用 `IClock`。
+- CLI JSON `schemaVersion` 升为 2。
+- 新增 `WinAppGuardSetup.exe --doctor`，检查协议版本、revision 和模块健康。
+- 旧 v2 服务在过渡期仍可由客户端回退连接；新服务只监听 v3。
+
+### 说明
+
+- 磁盘数据格式不变；回滚到 5.9.2 只需替换二进制。
+- 仍保留 owner-only 管道 ACL 和写命令双闸。
+- 升级后请运行 `WinAppGuardSetup.exe --repair` 确保 UI/服务/CLI 同版本。
+
 ## [5.9.2] - 2026-11-11
 
 > 修复全新安装没有登记到 Windows「已安装的应用」的问题。

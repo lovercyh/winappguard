@@ -77,6 +77,11 @@ internal static class Program
                 return RegisterAppsOnly();
             }
 
+            if (args.Contains("--doctor", StringComparer.OrdinalIgnoreCase))
+            {
+                return RunDoctor();
+            }
+
             // 开发/发布验证用：把 Setup 末尾的内置载荷解出来（不安装、不改系统）。
             if (args.Contains("--extract-payload", StringComparer.OrdinalIgnoreCase))
             {
@@ -145,6 +150,7 @@ internal static class Program
         Console.WriteLine("  WinAppGuardSetup.exe --reset-owner 把当前提权账户设为新所有者（换新密钥）");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service 只启动服务（顺带修正为「自动（不延迟）」）");
         Console.WriteLine("  WinAppGuardSetup.exe --register-apps 只把已安装程序登记到 Windows「已安装的应用」");
+        Console.WriteLine("  WinAppGuardSetup.exe --doctor      检查协议版本、revision 和模块健康");
         Console.WriteLine("  WinAppGuardSetup.exe --uninstall   完整卸载（停止/删除服务 + 删除全部规则与数据）");
         Console.WriteLine("                       --keep-data  卸载时保留 %ProgramData%\\WinAppGuard（密钥始终删除）");
         Console.WriteLine();
@@ -167,6 +173,7 @@ internal static class Program
         Console.WriteLine("  WinAppGuardSetup.exe --reset-owner make the current elevated account the new owner (new key)");
         Console.WriteLine("  WinAppGuardSetup.exe --start-service start the service only (also fixes Automatic (Delayed Start))");
         Console.WriteLine("  WinAppGuardSetup.exe --register-apps add the installed app to Windows Settings → Installed apps");
+        Console.WriteLine("  WinAppGuardSetup.exe --doctor      check protocol version, revision and module health");
         Console.WriteLine("  WinAppGuardSetup.exe --uninstall   full uninstall (stop/delete service + delete all rules and data)");
         Console.WriteLine("                       --keep-data  keep %ProgramData%\\WinAppGuard (the key is always deleted)");
         Console.WriteLine();
@@ -550,6 +557,53 @@ internal static class Program
                 $"Failed to add the Installed apps entry (the app still works): {ex.Message}");
             return false;
         }
+    }
+
+    private static int RunDoctor()
+    {
+        if (!ProtectedModeClient.TryConfigureSigner(out _, out var signerError))
+        {
+            Bilingual.Fail(
+                $"无法加载所有者签名密钥：{signerError}",
+                $"Failed to load the owner signing key: {signerError}");
+            return 1;
+        }
+
+        var status = ServiceClient.TryGetStatus(TimeSpan.FromSeconds(3));
+
+        if (status is null)
+        {
+            Bilingual.Fail(
+                "服务没有响应；请确认 WinAppGuardSvc 正在运行，或运行 --repair。",
+                "The service did not respond; ensure WinAppGuardSvc is running or run --repair.");
+            return 1;
+        }
+
+        Console.WriteLine($"ServiceVersion  = {status.ServiceVersion}");
+        Console.WriteLine($"ProtocolVersion = {status.ProtocolVersion}");
+        Console.WriteLine($"Revision        = {status.Revision}");
+        Console.WriteLine($"RevisionEpoch   = {status.RevisionEpoch ?? "-"}");
+
+        if (status.Modules is { Count: > 0 })
+        {
+            foreach (var module in status.Modules)
+            {
+                Console.WriteLine(
+                    $"Module {module.Name,-20} {module.State,-10} restarts={module.Restarts}"
+                    + (string.IsNullOrWhiteSpace(module.LastError) ? string.Empty : $" error={module.LastError}"));
+            }
+        }
+        else
+        {
+            Bilingual.Fail(
+                "服务没有返回模块健康信息。",
+                "The service did not return module health.");
+        }
+
+        return status.ProtocolVersion == ServiceProtocol.Version
+               && status.Modules is { Count: > 0 }
+            ? 0
+            : 1;
     }
 
     /// <summary>只补写 Windows「已安装的应用」登记，不复制文件、不重启服务。</summary>

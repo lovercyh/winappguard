@@ -23,6 +23,7 @@ internal static class CommandPolicyGuard
             {
                 Id = request.Id,
                 Ok = false,
+                ErrorCode = "UnknownCommand",
                 Error = $"未知命令：{request.Command}",
             };
         }
@@ -38,6 +39,7 @@ internal static class CommandPolicyGuard
                 {
                     Id = request.Id,
                     Ok = false,
+                    ErrorCode = "NotElevated",
                     Error = "修改规则需要管理员权限（请从界面操作，会弹出 UAC）。",
                 };
 
@@ -61,6 +63,7 @@ internal static class CommandPolicyGuard
             {
                 Id = request.Id,
                 Ok = false,
+                ErrorCode = "NotElevated",
                 Error = "永久不再提醒需要管理员权限。",
             };
         }

@@ -1693,6 +1693,26 @@ internal static class CliRunner
                     : $"{CommandPolicyTable.DeclaredCommands().Count} 条命令都有 v4 强类型载荷。")
                 : string.Join("; ", contractErrors.Take(3))));
 
+        var pipes = ListWinAppGuardPipes();
+        checks.Add(new DoctorCheck(
+            "control-pipe",
+            pipes.Contains(ServiceProtocol.PipeName, StringComparer.OrdinalIgnoreCase)
+                ? "OK"
+                : pipes.Count > 0 ? "FAIL" : "WARN",
+            pipes.Count == 0
+                ? (Localizer.IsEnglish
+                    ? "No WinAppGuard control pipe is listening."
+                    : "没有 WinAppGuard 控制管道在监听。")
+                : string.Join(", ", pipes)));
+
+        var logHint = TryReadServiceLogHint(out var logPath);
+        checks.Add(new DoctorCheck(
+            "service-log",
+            logHint is null ? "OK" : "WARN",
+            logHint ?? (Localizer.IsEnglish
+                ? $"No recent service warnings. ({logPath ?? "log not found"})"
+                : $"没有最近的服务警告。（{logPath ?? "未找到日志"}）")));
+
         if (status is not null)
         {
             checks.Add(new DoctorCheck(
@@ -2410,6 +2430,70 @@ internal static class CliRunner
         List<NetworkBlockDto> Blocks,
         NetworkDetectionSettingsDto? Settings,
         NetworkDetectionStatusDto? Status);
+
+    private static List<string> ListWinAppGuardPipes()
+    {
+        try
+        {
+            return Directory
+                .GetFiles(@"\\.\pipe\")
+                .Select(Path.GetFileName)
+                .Where(name => name is not null
+                               && name.StartsWith("WinAppGuard", StringComparison.OrdinalIgnoreCase))
+                .Select(name => name!)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception)
+        {
+            return new List<string>();
+        }
+    }
+
+    /// <summary>读服务日志的最后一条 WAG-IPC/WAG-AUTH 警告，帮用户定位“服务在跑但连不上”。</summary>
+    private static string? TryReadServiceLogHint(out string? logPath)
+    {
+        logPath = null;
+
+        try
+        {
+            var directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "WinAppGuard",
+                "logs");
+
+            var file = new DirectoryInfo(directory)
+                .GetFiles("winappguard-*.log")
+                .OrderByDescending(item => item.LastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (file is null)
+            {
+                return null;
+            }
+
+            logPath = file.FullName;
+
+            var hint = File.ReadLines(file.FullName)
+                .Where(line => (line.Contains("[WARN]", StringComparison.Ordinal)
+                                || line.Contains("[ERR]", StringComparison.Ordinal))
+                               && (line.Contains("WAG-IPC-", StringComparison.Ordinal)
+                                   || line.Contains("WAG-AUTH-", StringComparison.Ordinal)
+                                   || line.Contains("WAG-SVC-", StringComparison.Ordinal)))
+                .LastOrDefault();
+
+            if (hint is null)
+            {
+                return null;
+            }
+
+            return hint.Length > 240 ? hint[..240] + "…" : hint;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     private sealed record DoctorCheck(string Name, string Status, string Detail);
 }

@@ -289,7 +289,24 @@ internal sealed class ControlServer : IDisposable
             };
         }
 
-        return router.Dispatch(new CommandContext(request, elevated, clientPid));
+        try
+        {
+            return router.Dispatch(new CommandContext(request, elevated, clientPid));
+        }
+        catch (Exception ex)
+        {
+            // 单条命令抛异常不能把整条 IPC 会话打断，否则界面会误判成“服务未运行”。
+            ServiceLog.Warning(
+                "WAG-IPC-016",
+                $"Command {request.Command} threw while dispatching.", ex);
+
+            return new ErrorView
+            {
+                Ok = false,
+                ErrorCode = nameof(ProtocolErrorCode.Internal),
+                Error = $"{ex.GetType().Name}: {ex.Message}",
+            };
+        }
     }
 
     /// <summary>5.9：规则命令统一交给 RuleHandlers（与启动迁移、定时任务共用同一实例）。</summary>

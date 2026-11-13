@@ -182,8 +182,32 @@ internal sealed class ServiceSession : IDisposable
         }
     }
 
-    /// <summary>本机是否还有 5.10/v3 的控制管道（只读探测，不连接）。</summary>
+    private static readonly object LegacyGate = new();
+    private static DateTime _legacyCheckedUtc = DateTime.MinValue;
+    private static bool _legacyPresent;
+
+    /// <summary>
+    /// 本机是否还有 5.10/v3 的控制管道。
+    ///
+    /// 结果缓存 10 秒：状态刷新很频繁，不能每次都去碰旧服务的管道。
+    /// 优先枚举 <c>\\.\pipe\</c>；枚举被拒绝时才做一次短连接探测（不发送任何帧）。
+    /// </summary>
     private static bool LegacyServicePresent()
+    {
+        lock (LegacyGate)
+        {
+            if (DateTime.UtcNow - _legacyCheckedUtc < TimeSpan.FromSeconds(10))
+            {
+                return _legacyPresent;
+            }
+
+            _legacyCheckedUtc = DateTime.UtcNow;
+            _legacyPresent = DetectLegacyService();
+            return _legacyPresent;
+        }
+    }
+
+    private static bool DetectLegacyService()
     {
         try
         {
@@ -191,6 +215,19 @@ internal sealed class ServiceSession : IDisposable
                 .GetFiles(@"\\.\pipe\")
                 .Any(path => path.EndsWith(
                     ServiceProtocol.LegacyPipeName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception)
+        {
+            // 有些环境不允许枚举管道目录，退回一次短连接。
+        }
+
+        try
+        {
+            using var probe = new NamedPipeClientStream(
+                ".", ServiceProtocol.LegacyPipeName,
+                PipeDirection.InOut, PipeOptions.None);
+            probe.Connect(80);
+            return true;
         }
         catch (Exception)
         {

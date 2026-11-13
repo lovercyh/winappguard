@@ -5574,22 +5574,40 @@ public partial class MainForm : Form
             }
 
             var installed = ServiceIsInstalled();
+            var detail = string.IsNullOrWhiteSpace(error) ? null : error.Trim();
 
             _serviceStatusLabel.Text = Localizer.T(installed
                 ? "服务：未运行（离线模式）—— 点击启动"
                 : "服务：未运行（离线模式）");
             _serviceStatusLabel.ForeColor = Color.FromArgb(150, 90, 0);
             _serviceStatusLabel.IsLink = installed;
-            _serviceStatusLabel.ToolTipText = Localizer.T(installed
-                ? "防护服务没有运行：点击这里启动。\n" +
-                  "规则页面在服务恢复前只读；查看连接和导出仍然可用。"
-                : "防护服务未安装：规则页面只读。\n" +
-                  "请运行 WinAppGuardSetup.exe --install 安装服务。");
+            _serviceStatusLabel.ToolTipText = detail
+                ?? Localizer.T(installed
+                    ? "防护服务没有运行：点击这里启动。\n" +
+                      "规则页面在服务恢复前只读；查看连接和导出仍然可用。"
+                    : "防护服务未安装：规则页面只读。\n" +
+                      "请运行 WinAppGuardSetup.exe --install 安装服务。");
 
-            // 服务停了要**立刻**反映到规则页，不能等用户去点刷新。
+            if (detail is not null)
+            {
+                // 把真实连接原因留在日志里，界面上只给一句短的。
+                LocalLog.Warning(LocalLog.Pick(
+                    $"服务状态读取失败：{detail}",
+                    $"Failed to read service status: {detail}"));
+
+                var shortDetail = detail.Length > 70 ? detail[..70] + "…" : detail;
+                _statusRulesLabel.Text = Localizer.F(
+                    "防护服务连接失败（规则只读）：{0}", shortDetail);
+                MarkRulesReadOnly("防护服务连接失败");
+            }
+            else
+            {
+                // 服务停了要**立刻**反映到规则页，不能等用户去点刷新。
+                _statusRulesLabel.Text = Localizer.T("防护服务未运行（规则只读）");
+                MarkRulesReadOnly("防护服务未运行");
+            }
+
             _serviceAvailable = false;
-            _statusRulesLabel.Text = Localizer.T("防护服务未运行（规则只读）");
-            MarkRulesReadOnly("防护服务未运行");
             UpdateRulesActionState();
             UpdateWhitelistActionState();
             UpdateActionState();

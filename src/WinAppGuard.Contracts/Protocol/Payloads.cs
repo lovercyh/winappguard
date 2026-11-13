@@ -1,0 +1,321 @@
+using System.Text.Json;
+
+namespace WinAppGuard.Contracts.Protocol;
+
+/// <summary>
+/// 5.11：v4 请求载荷。
+///
+/// 只放对应命令真正需要的字段；属性名与旧 `ServiceRequest` 保持兼容，
+/// 迁移期由 `LegacyPayloadAdapter` 转成旧处理器可读的请求。
+/// </summary>
+public abstract class RequestPayload
+{
+}
+
+public sealed class EmptyPayload : RequestPayload
+{
+}
+
+public sealed class RulesQuery : RequestPayload
+{
+    public long? SinceRevision { get; set; }
+
+    public int? Page { get; set; }
+
+    public int? Size { get; set; }
+}
+
+public sealed class RuleAdd : RequestPayload
+{
+    public string? Value { get; set; }
+
+    public string? Action { get; set; }
+
+    public string? Expiry { get; set; }
+
+    public string? Scope { get; set; }
+
+    public string? Group { get; set; }
+}
+
+public sealed class RuleDelete : RequestPayload
+{
+    public string? RuleName { get; set; }
+}
+
+public sealed class RuleDeleteForProgram : RequestPayload
+{
+    public string? Value { get; set; }
+}
+
+public sealed class RuleClear : RequestPayload
+{
+    public string? Action { get; set; }
+}
+
+public sealed class RuleImport : RequestPayload
+{
+    public string? Json { get; set; }
+
+    public bool FreshLogonSession { get; set; }
+}
+
+public sealed class RuleSetGroup : RequestPayload
+{
+    public string? RuleName { get; set; }
+
+    public string? Group { get; set; }
+}
+
+public sealed class StrictCommand : RequestPayload
+{
+    public bool Enable { get; set; }
+
+    public bool? ExtraPrograms { get; set; }
+
+    public int? LockdownSeconds { get; set; }
+
+    public string? Value { get; set; }
+}
+
+public sealed class PidsQuery : RequestPayload
+{
+    public List<int>? Pids { get; set; }
+}
+
+public sealed class AuditSettings : RequestPayload
+{
+    public bool? Enabled { get; set; }
+
+    public bool? DomainLookup { get; set; }
+
+    public int? RetentionDays { get; set; }
+}
+
+public sealed class TrafficConfig : RequestPayload
+{
+    public bool? Paused { get; set; }
+}
+
+public sealed class IdsSettings : RequestPayload
+{
+    public WinAppGuard.Contracts.IdsSettingsDto? Settings { get; set; }
+
+    public string? AlertId { get; set; }
+
+    public WinAppGuard.Contracts.IdsSuppressionDto? Suppression { get; set; }
+
+    public bool RemoveSuppression { get; set; }
+
+    public List<string>? RemoveSuppressionIds { get; set; }
+}
+
+public sealed class NetworkSettings : RequestPayload
+{
+    public WinAppGuard.Contracts.NetworkDetectionSettingsDto? Settings { get; set; }
+
+    public string? AlertId { get; set; }
+
+    public string? BlockKind { get; set; }
+
+    public string? BlockTarget { get; set; }
+
+    public int BlockMinutes { get; set; } = 10;
+
+    public string? BlockId { get; set; }
+
+    public bool BlockReleaseAll { get; set; }
+}
+
+public sealed class GuardDecision : RequestPayload
+{
+    public string? Path { get; set; }
+
+    public bool Deny { get; set; }
+}
+
+public sealed class AntiScanSettings : RequestPayload
+{
+    public WinAppGuard.Contracts.AntiScanSettingsDto? Settings { get; set; }
+
+    public string? Address { get; set; }
+
+    public bool ReleaseAll { get; set; }
+}
+
+public sealed class LanSettings : RequestPayload
+{
+    public WinAppGuard.Contracts.LanSettingsDto? Settings { get; set; }
+
+    public string? TrustKind { get; set; }
+
+    public string? TrustValue { get; set; }
+
+    public string? BlockServerIp { get; set; }
+
+    public bool BlockEnabled { get; set; }
+
+    public bool ResetBaseline { get; set; }
+}
+
+public sealed class DnsTrust : RequestPayload
+{
+    public string? Address { get; set; }
+
+    public bool Enabled { get; set; }
+}
+
+public sealed class Ipv6Trust : RequestPayload
+{
+    public string? TrustKind { get; set; }
+
+    public string? TrustValue { get; set; }
+
+    public string? TrustMac { get; set; }
+
+    public bool TrustEnabled { get; set; }
+
+    public string? BlockKind { get; set; }
+
+    public string? BlockAddress { get; set; }
+
+    public int BlockMinutes { get; set; } = 10;
+
+    public bool BlockEnabled { get; set; }
+}
+
+public sealed class NameBlock : RequestPayload
+{
+    public string? Address { get; set; }
+
+    public int Minutes { get; set; } = 10;
+
+    public bool Enabled { get; set; }
+}
+
+public sealed class ClearOnly : RequestPayload
+{
+    public string? Scope { get; set; }
+}
+
+public sealed class Rebaseline : RequestPayload
+{
+    public string? Scope { get; set; }
+}
+
+// ---------------------------------------------------------------- responses
+
+public abstract class ResponsePayload
+{
+    public long Revision { get; set; }
+
+    public string? RevisionEpoch { get; set; }
+}
+
+public sealed class WriteResult : ResponsePayload
+{
+    public int Affected { get; set; }
+
+    public string? Detail { get; set; }
+}
+
+public sealed class QueryView : ResponsePayload
+{
+    public QueryStatus? Status { get; set; }
+
+    public JsonElement? Settings { get; set; }
+
+    public List<JsonElement>? Events { get; set; }
+
+    public List<JsonElement>? Blocks { get; set; }
+
+    public JsonElement? Baseline { get; set; }
+
+    public QueryMeta? Meta { get; set; }
+
+    /// <summary>迁移期：旧 UI 仍需要的完整响应形状；5.12 删除。</summary>
+    public JsonElement? Legacy { get; set; }
+}
+
+public sealed class QueryStatus
+{
+    public string Health { get; set; } = "unknown";
+
+    public bool Collecting { get; set; }
+
+    public string? Detail { get; set; }
+}
+
+public sealed class QueryMeta
+{
+    public DateTime GeneratedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public long Revision { get; set; }
+
+    public string? RevisionEpoch { get; set; }
+
+    public bool Truncated { get; set; }
+
+    public int? Total { get; set; }
+
+    public bool NotModified { get; set; }
+}
+
+public sealed class StatusView : ResponsePayload
+{
+    public StatusCore? Core { get; set; }
+
+    public JsonElement? Rules { get; set; }
+
+    public JsonElement? Counters { get; set; }
+
+    public List<WinAppGuard.Contracts.ModuleStatusDto>? Modules { get; set; }
+
+    public JsonElement? Legacy { get; set; }
+}
+
+public sealed class StatusCore
+{
+    public string ServiceVersion { get; set; } = "0.0.0";
+
+    public int Protocol { get; set; }
+
+    public long Revision { get; set; }
+
+    public string? RevisionEpoch { get; set; }
+
+    public bool SublayerPresent { get; set; }
+
+    public long UptimeSeconds { get; set; }
+}
+
+public sealed class RulesView : ResponsePayload
+{
+    public List<WinAppGuard.Contracts.RuleDto>? Rules { get; set; }
+
+    public JsonElement? Groups { get; set; }
+
+    public QueryMeta? Meta { get; set; }
+
+    public JsonElement? Legacy { get; set; }
+}
+
+public sealed class ProcessPathsView : ResponsePayload
+{
+    public List<WinAppGuard.Contracts.ProcessPathDto>? Paths { get; set; }
+
+    public JsonElement? Legacy { get; set; }
+}
+
+public sealed class TrafficView : ResponsePayload
+{
+    public List<WinAppGuard.Contracts.TrafficDto>? Programs { get; set; }
+
+    public WinAppGuard.Contracts.TrafficStatusDto? Status { get; set; }
+
+    public WinAppGuard.Contracts.TrafficSeriesDto? Series { get; set; }
+
+    public QueryMeta? Meta { get; set; }
+
+    public JsonElement? Legacy { get; set; }
+}

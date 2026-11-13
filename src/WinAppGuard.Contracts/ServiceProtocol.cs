@@ -11,10 +11,10 @@ namespace WinAppGuard.Contracts;
 public static class ServiceProtocol
 {
     /// <summary>管道名（不带 <c>\\.\pipe\</c> 前缀）。</summary>
-    public const string PipeName = "WinAppGuard.Control.v3";
+    public const string PipeName = "WinAppGuard.Control.v4";
 
-    /// <summary>协议版本。5.10 起为 v3；不兼容的字段变化还必须继续 +1。</summary>
-    public const int Version = 3;
+    /// <summary>协议版本。5.11 起为 v4；不兼容的字段变化还必须继续 +1。</summary>
+    public const int Version = 4;
 
     /// <summary>单条消息上限（64 KB）。正常请求只有几百字节。</summary>
     /// <summary>

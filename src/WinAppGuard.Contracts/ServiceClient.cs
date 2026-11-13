@@ -141,7 +141,8 @@ public static class ServiceClient
                 Id = request.Id,
                 Seq = 1,
                 Command = request.Command,
-                Payload = JsonSerializer.SerializeToElement(request, ServiceProtocol.JsonOptions),
+                Payload = LegacyPayloadAdapter.CreateRequestPayload(
+                    request.Command, request),
             };
 
             var canonical = ProtocolSigning.CanonicalBytes(frame);
@@ -175,8 +176,7 @@ public static class ServiceClient
                 return null;
             }
 
-            var response = reply.Data.Value.Deserialize<ServiceResponse>(
-                ServiceProtocol.JsonOptions);
+            var response = LegacyPayloadAdapter.ToResponse(reply.Data.Value);
 
             if (response is null)
             {

@@ -92,9 +92,9 @@ public sealed class ProtocolMessageTests
     }
 
     [Fact]
-    public void ProtocolVersionIsThreeAndPipeIsV3()
+    public void ProtocolVersionIsFourAndPipeIsV4()
     {
-        Assert.Equal(3, ServiceProtocol.Version);
-        Assert.Equal("WinAppGuard.Control.v3", ServiceProtocol.PipeName);
+        Assert.Equal(4, ServiceProtocol.Version);
+        Assert.Equal("WinAppGuard.Control.v4", ServiceProtocol.PipeName);
     }
 }

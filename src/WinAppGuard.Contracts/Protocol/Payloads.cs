@@ -85,112 +85,110 @@ public sealed class PidsQuery : RequestPayload
 
 public sealed class AuditSettings : RequestPayload
 {
-    public bool? Enabled { get; set; }
+    public bool? AuditEnabled { get; set; }
 
-    public bool? DomainLookup { get; set; }
+    public bool? AuditDomainLookup { get; set; }
 
-    public int? RetentionDays { get; set; }
+    public int? AuditRetentionDays { get; set; }
 }
 
 public sealed class TrafficConfig : RequestPayload
 {
-    public bool? Paused { get; set; }
+    public bool? TrafficPaused { get; set; }
 }
 
-public sealed class IdsSettings : RequestPayload
+public sealed class IdsCommand : RequestPayload
 {
-    public WinAppGuard.Contracts.IdsSettingsDto? Settings { get; set; }
+    public WinAppGuard.Contracts.IdsSettingsDto? IdsSettings { get; set; }
 
-    public string? AlertId { get; set; }
+    public string? IdsAlertId { get; set; }
 
-    public WinAppGuard.Contracts.IdsSuppressionDto? Suppression { get; set; }
+    public WinAppGuard.Contracts.IdsSuppressionDto? IdsSuppression { get; set; }
 
-    public bool RemoveSuppression { get; set; }
+    public bool IdsRemoveSuppression { get; set; }
 
-    public List<string>? RemoveSuppressionIds { get; set; }
+    public List<string>? IdsRemoveSuppressionIds { get; set; }
 }
 
 public sealed class NetworkSettings : RequestPayload
 {
-    public WinAppGuard.Contracts.NetworkDetectionSettingsDto? Settings { get; set; }
+    public WinAppGuard.Contracts.NetworkDetectionSettingsDto? NetworkDetectionSettings { get; set; }
 
-    public string? AlertId { get; set; }
+    public string? NetworkAlertId { get; set; }
 
-    public string? BlockKind { get; set; }
+    public string? NetworkBlockKind { get; set; }
 
-    public string? BlockTarget { get; set; }
+    public string? NetworkBlockTarget { get; set; }
 
-    public int BlockMinutes { get; set; } = 10;
+    public int NetworkBlockMinutes { get; set; } = 10;
 
-    public string? BlockId { get; set; }
+    public string? NetworkBlockId { get; set; }
 
-    public bool BlockReleaseAll { get; set; }
+    public bool NetworkBlockReleaseAll { get; set; }
 }
 
 public sealed class GuardDecision : RequestPayload
 {
-    public string? Path { get; set; }
-
-    public bool Deny { get; set; }
+    public string? Value { get; set; }
 }
 
-public sealed class AntiScanSettings : RequestPayload
+public sealed class AntiScanCommand : RequestPayload
 {
-    public WinAppGuard.Contracts.AntiScanSettingsDto? Settings { get; set; }
+    public WinAppGuard.Contracts.AntiScanSettingsDto? AntiScanSettings { get; set; }
 
-    public string? Address { get; set; }
+    public string? AntiScanAddress { get; set; }
 
-    public bool ReleaseAll { get; set; }
+    public bool AntiScanReleaseAll { get; set; }
 }
 
-public sealed class LanSettings : RequestPayload
+public sealed class LanCommand : RequestPayload
 {
-    public WinAppGuard.Contracts.LanSettingsDto? Settings { get; set; }
+    public WinAppGuard.Contracts.LanSettingsDto? LanSettings { get; set; }
 
-    public string? TrustKind { get; set; }
+    public string? LanTrustKind { get; set; }
 
-    public string? TrustValue { get; set; }
+    public string? LanTrustValue { get; set; }
 
-    public string? BlockServerIp { get; set; }
+    public string? LanBlockServerIp { get; set; }
 
-    public bool BlockEnabled { get; set; }
+    public bool LanBlockEnabled { get; set; }
 
-    public bool ResetBaseline { get; set; }
+    public bool LanResetBaseline { get; set; }
 }
 
 public sealed class DnsTrust : RequestPayload
 {
-    public string? Address { get; set; }
+    public string? DnsTrustAddress { get; set; }
 
-    public bool Enabled { get; set; }
+    public bool DnsTrustEnabled { get; set; }
 }
 
 public sealed class Ipv6Trust : RequestPayload
 {
-    public string? TrustKind { get; set; }
+    public string? Ipv6TrustKind { get; set; }
 
-    public string? TrustValue { get; set; }
+    public string? Ipv6TrustValue { get; set; }
 
-    public string? TrustMac { get; set; }
+    public string? Ipv6TrustMac { get; set; }
 
-    public bool TrustEnabled { get; set; }
+    public bool Ipv6TrustEnabled { get; set; }
 
-    public string? BlockKind { get; set; }
+    public string? Ipv6BlockKind { get; set; }
 
-    public string? BlockAddress { get; set; }
+    public string? Ipv6BlockAddress { get; set; }
 
-    public int BlockMinutes { get; set; } = 10;
+    public int Ipv6BlockMinutes { get; set; } = 10;
 
-    public bool BlockEnabled { get; set; }
+    public bool Ipv6BlockEnabled { get; set; }
 }
 
 public sealed class NameBlock : RequestPayload
 {
-    public string? Address { get; set; }
+    public string? NameBlockAddress { get; set; }
 
-    public int Minutes { get; set; } = 10;
+    public int NameBlockMinutes { get; set; } = 10;
 
-    public bool Enabled { get; set; }
+    public bool NameBlockEnabled { get; set; }
 }
 
 public sealed class ClearOnly : RequestPayload
@@ -217,6 +215,8 @@ public sealed class WriteResult : ResponsePayload
     public int Affected { get; set; }
 
     public string? Detail { get; set; }
+
+    public JsonElement? Legacy { get; set; }
 }
 
 public sealed class QueryView : ResponsePayload

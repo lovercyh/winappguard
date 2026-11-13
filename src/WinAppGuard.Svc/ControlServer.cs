@@ -500,13 +500,12 @@ internal sealed class ControlServer : IDisposable
 
             try
             {
-                request = frame.Payload.Value
-                    .Deserialize<ServiceRequest>(ServiceProtocol.JsonOptions)
-                    ?? new ServiceRequest();
+                request = LegacyPayloadAdapter.ToRequest(
+                    frame.Command, frame.Id, frame.Payload.Value);
             }
             catch (Exception ex)
             {
-                ServiceLog.Warning("WAG-IPC-011", "IPC v3 request payload was invalid.", ex);
+                ServiceLog.Warning("WAG-IPC-011", "IPC v4 request payload was invalid.", ex);
                 RejectProtocol(pipe, timeout.Token, ProtocolErrorCode.InvalidArgument, "请求载荷无效。");
                 break;
             }
@@ -524,6 +523,12 @@ internal sealed class ControlServer : IDisposable
 
             var response = Dispatch(request, elevated, clientPid);
 
+            var responsePayload = LegacyPayloadAdapter.CreateResponse(
+                request.Command,
+                response,
+                Rules.RuleRevision,
+                Rules.RuleRevisionEpoch);
+
             TryWrite(pipe, new ProtocolMessage
             {
                 Type = "response",
@@ -535,7 +540,10 @@ internal sealed class ControlServer : IDisposable
                     ?? (response.Ok ? nameof(ProtocolErrorCode.None) : nameof(ProtocolErrorCode.Internal)),
                 Message = response.Error,
                 Revision = Rules.RuleRevision,
-                Data = JsonSerializer.SerializeToElement(response, ServiceProtocol.JsonOptions),
+                Data = JsonSerializer.SerializeToElement(
+                    responsePayload,
+                    responsePayload.GetType(),
+                    ServiceProtocol.JsonOptions),
             }, timeout.Token);
 
             expectedSeq++;

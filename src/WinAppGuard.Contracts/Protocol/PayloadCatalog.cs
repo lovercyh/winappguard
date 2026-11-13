@@ -64,7 +64,7 @@ public static class PayloadCatalog
             or ServiceProtocol.Commands.IdsSuppress or ServiceProtocol.Commands.IdsClear
             or ServiceProtocol.Commands.AlertIdsAck or ServiceProtocol.Commands.AlertIdsAckAll
             or ServiceProtocol.Commands.AlertIdsSuppress or ServiceProtocol.Commands.AlertIdsClear
-            => typeof(IdsSettings),
+            => typeof(IdsCommand),
 
         ServiceProtocol.Commands.NetworkDetectionConfigure
             or ServiceProtocol.Commands.NetworkDetectionAck
@@ -84,12 +84,12 @@ public static class PayloadCatalog
         ServiceProtocol.Commands.ConfigureAntiScan
             or ServiceProtocol.Commands.ReleaseAntiScanBlock
             or ServiceProtocol.Commands.ClearAntiScan
-            => typeof(AntiScanSettings),
+            => typeof(AntiScanCommand),
 
         ServiceProtocol.Commands.ConfigureLan or ServiceProtocol.Commands.ClearLan
             or ServiceProtocol.Commands.TrustLan or ServiceProtocol.Commands.BlockLanDhcp
             or ServiceProtocol.Commands.ResetLanBaseline
-            => typeof(LanSettings),
+            => typeof(LanCommand),
 
         ServiceProtocol.Commands.TrustDnsServer
             => typeof(DnsTrust),
@@ -139,9 +139,9 @@ public static class PayloadCatalog
         typeof(EmptyPayload), typeof(RulesQuery), typeof(RuleAdd), typeof(RuleDelete),
         typeof(RuleDeleteForProgram), typeof(RuleClear), typeof(RuleImport),
         typeof(RuleSetGroup), typeof(StrictCommand), typeof(PidsQuery),
-        typeof(AuditSettings), typeof(TrafficConfig), typeof(IdsSettings),
-        typeof(NetworkSettings), typeof(GuardDecision), typeof(AntiScanSettings),
-        typeof(LanSettings), typeof(DnsTrust), typeof(Ipv6Trust), typeof(NameBlock),
+        typeof(AuditSettings), typeof(TrafficConfig), typeof(IdsCommand),
+        typeof(NetworkSettings), typeof(GuardDecision), typeof(AntiScanCommand),
+        typeof(LanCommand), typeof(DnsTrust), typeof(Ipv6Trust), typeof(NameBlock),
         typeof(ClearOnly), typeof(Rebaseline),
     };
 

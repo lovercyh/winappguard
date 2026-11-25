@@ -135,6 +135,7 @@ internal static class Program
         //   --ui-check 只构造窗体量控件矩形，不碰系统状态（会短暂显示窗口）。
         // 这样它们都能在 CI（无法弹 UAC）里跑起来。
         var needsAdmin = !args.Contains("--audit", StringComparer.OrdinalIgnoreCase)
+                         && !args.Contains("--perf", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ownership-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--ownership-core-test", StringComparer.OrdinalIgnoreCase)
                          && !args.Contains("--connection-filter-test", StringComparer.OrdinalIgnoreCase)

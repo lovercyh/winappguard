@@ -219,6 +219,11 @@ internal static class PerfRunner
             Console.WriteLine(
                 $"S8 空载 {seconds}s: cpu={cpu:0.0}ms, workingSet={workingSet:0.0}MB");
         }
+        catch (Exception ex)
+        {
+            // 读取 SYSTEM 服务进程的 CPU 需要管理员权限；只读场景不应让整个 perf 失败。
+            Console.WriteLine($"S8 空载：跳过（{ex.GetType().Name}: {ex.Message}）");
+        }
         finally
         {
             process.Dispose();

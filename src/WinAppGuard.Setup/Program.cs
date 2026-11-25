@@ -186,6 +186,8 @@ internal static class Program
 
     private static int Install(bool allowOwnerMismatch)
     {
+        SetupLog.Info($"Install start, version={System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
+
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
             Bilingual.Say("检测到已安装：按修复处理（保留现有密钥与所有者）。", "Already installed: repairing (existing key and owner are kept).");
@@ -664,6 +666,7 @@ internal static class Program
     }
     private static int Repair(bool allowOwnerMismatch)
     {
+        SetupLog.Info($"Repair/upgrade start, version={System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         using var payload = LocatePayload();
 
         // 4.1：修复/升级同样要求 Npcap；顺序放在停服务之前，避免"拒绝安装却把服务停了"。
@@ -679,7 +682,9 @@ internal static class Program
         if (ServiceControl.IsInstalled(ServiceProtocol.ServiceName))
         {
             Bilingual.Say("停止服务…", "Stopping the service…");
+            SetupLog.Info("Stopping the service before replacing files.");
             ServiceControl.Stop(ServiceProtocol.ServiceName);
+            SetupLog.Info("Service stopped.");
         }
 
         var servicePath = Path.Combine(InstallDirectory, ServiceExeName);
@@ -2323,8 +2328,13 @@ internal static class Program
         var installedUi = ProductVersionOf(
             Path.Combine(InstallDirectory, UiExeName));
 
+        SetupLog.Info(
+            $"Version check: service {installedService ?? "?"} (expected {expectedService ?? "?"}), "
+            + $"UI {installedUi ?? "?"} (expected {expectedUi ?? "?"}).");
+
         if (!string.Equals(expectedService, installedService, StringComparison.OrdinalIgnoreCase))
         {
+            SetupLog.Error($"Service version mismatch: installed {installedService ?? "?"}, expected {expectedService ?? "?"}.");
             Bilingual.Fail(
                 $"服务文件升级失败：安装目录里仍是 {installedService ?? "未知版本"}，期望 {expectedService}。"
                 + "请关闭界面后重新运行安装器；若仍失败，请重启 Windows 再试。",
@@ -2335,6 +2345,7 @@ internal static class Program
 
         if (!string.Equals(expectedUi, installedUi, StringComparison.OrdinalIgnoreCase))
         {
+            SetupLog.Error($"UI version mismatch: installed {installedUi ?? "?"}, expected {expectedUi ?? "?"}.");
             Bilingual.Fail(
                 $"界面文件升级失败：安装目录里仍是 {installedUi ?? "未知版本"}，期望 {expectedUi}。"
                 + "请关闭界面后重新运行安装器。",

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -412,7 +413,17 @@ internal sealed class PipeHost : IDisposable
                     $"IPC v4 write operation: pid={clientPid}, sid={clientSid ?? "?"}, path={clientPath ?? "?"}, command={request.Command}.");
             }
 
+            var dispatchWatch = Stopwatch.StartNew();
             var response = ControlServer.DispatchRequest(request, elevated, clientPid);
+            dispatchWatch.Stop();
+
+            if (dispatchWatch.ElapsedMilliseconds > 200)
+            {
+                ServiceLog.Warning(
+                    "WAG-PERF-IPC",
+                    $"Slow IPC command: {request.Command} took {dispatchWatch.ElapsedMilliseconds} ms.");
+            }
+
             response.Revision = ControlServer.RuleRevision;
             response.RevisionEpoch = ControlServer.RuleRevisionEpoch;
 

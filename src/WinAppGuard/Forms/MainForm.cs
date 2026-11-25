@@ -5430,7 +5430,8 @@ public partial class MainForm : Form
     {
         _ = Task.Run(() =>
         {
-            var status = Gateway.TryGetStatus(TimeSpan.FromSeconds(2.5), out var statusError);
+            var status = Gateway.TryGetStatusBackground(
+                TimeSpan.FromSeconds(4), out var statusError);
 
             try
             {

@@ -44,6 +44,17 @@ public static class ServiceClient
         return response is { Ok: true } ? response.Status : null;
     }
 
+    /// <summary>5.12：后台状态探测，使用共享后台会话。</summary>
+    public static ServiceStatus? TryGetStatusBackground(TimeSpan timeout, out string? error)
+    {
+        var response = TryRequestAsBackground<StatusView>(
+            new ServiceRequest { Command = ServiceProtocol.Commands.Status },
+            timeout,
+            out error);
+
+        return response is { Ok: true } ? response.Status : null;
+    }
+
     public static ResponsePayload? TryRequest(ServiceRequest request, TimeSpan timeout)
         => TryRequest(request, timeout, out _);
 
@@ -63,6 +74,45 @@ public static class ServiceClient
         }
 
         return ServiceSession.TrySend(request, timeout, signer, out error);
+    }
+
+    /// <summary>
+    /// 5.12：后台刷新专用请求。后台线程共用一条会话，避免重复握手。
+    /// </summary>
+    public static ResponsePayload? TryRequestBackground(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+    {
+        var signer = Volatile.Read(ref _signer);
+
+        if (signer is null)
+        {
+            error = "未配置签名密钥（当前账户不是所有者，或密钥不可用）。";
+            return null;
+        }
+
+        return ServiceSession.TrySendBackground(request, timeout, signer, out error);
+    }
+
+    public static T? TryRequestAsBackground<T>(
+        ServiceRequest request, TimeSpan timeout, out string? error)
+        where T : ResponsePayload
+    {
+        var payload = TryRequestBackground(request, timeout, out error);
+
+        if (payload is null)
+        {
+            return null;
+        }
+
+        if (payload is T typed)
+        {
+            return typed;
+        }
+
+        error = payload.Ok
+            ? $"服务返回了 {payload.GetType().Name}，但客户端期望 {typeof(T).Name}。"
+            : payload.Error ?? $"服务返回了 {payload.GetType().Name}，但客户端期望 {typeof(T).Name}。";
+        return null;
     }
 
     /// <summary>发一条请求，并断言响应是 <typeparamref name="T"/>。</summary>

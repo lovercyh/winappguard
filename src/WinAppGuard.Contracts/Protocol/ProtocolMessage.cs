@@ -82,8 +82,10 @@ public static class ProtocolSigning
 
         try
         {
+            // 签名必须使用与 5.11.1 完全一致的序列化选项：
+            // 不能跟随线上 JSON 的 null 省略，否则跨版本签名不兼容。
             return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
-                message, ServiceProtocol.JsonOptions);
+                message, ServiceProtocol.CanonicalJsonOptions);
         }
         finally
         {

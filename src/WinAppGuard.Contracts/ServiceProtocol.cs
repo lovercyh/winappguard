@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace WinAppGuard.Contracts;
 
@@ -311,8 +312,26 @@ public static class ServiceProtocol
            && !request.IdsRemoveSuppression
            && request.IdsSuppression is { UntilUtc: null };
 
-    /// <summary>JSON 序列化选项（双方必须一致）。</summary>
+    /// <summary>
+    /// 线上 JSON 序列化选项（双方必须一致）。
+    ///
+    /// 5.12：省略 null 字段，减少响应体积。反序列化仍然兼容旧版完整载荷。
+    /// 注意：签名用的规范字节不能使用这个选项，见 <see cref="CanonicalJsonOptions"/>。
+    /// </summary>
     public static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>
+    /// 5.12：签名规范字节专用的选项。
+    ///
+    /// 必须与 5.11.1 的 <see cref="JsonOptions"/> 完全一致（不省略 null），
+    /// 否则 5.12 客户端与 5.11.1 服务端会对同一帧算出不同字节，签名直接失败。
+    /// </summary>
+    public static readonly JsonSerializerOptions CanonicalJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,

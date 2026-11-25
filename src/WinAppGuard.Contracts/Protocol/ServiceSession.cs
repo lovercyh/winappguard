@@ -18,6 +18,10 @@ internal sealed class ServiceSession : IDisposable
     [ThreadStatic]
     private static ServiceSession? _current;
 
+    // 5.12：后台刷新共用一条会话，避免线程池换线程就重新握手。
+    private static readonly SemaphoreSlim BackgroundGate = new(1, 1);
+    private static ServiceSession? _background;
+
     private readonly IServiceSigner _signer;
     private NamedPipeClientStream? _pipe;
     private string? _serverNonce;
@@ -93,6 +97,86 @@ internal sealed class ServiceSession : IDisposable
         }
 
         return payload;
+    }
+
+    /// <summary>
+    /// 5.12：后台刷新专用。所有后台线程共用一条会话，串行发送；
+    /// 避免线程池换线程就重新握手，也避免后台请求把 UI 会话占满。
+    /// </summary>
+    internal static ResponsePayload? TrySendBackground(
+        ServiceRequest request,
+        TimeSpan timeout,
+        IServiceSigner signer,
+        out string? error)
+    {
+        error = null;
+
+        if (!BackgroundGate.Wait(timeout))
+        {
+            error = "后台 IPC 排队超时（前一个后台请求仍未完成）。";
+            return null;
+        }
+
+        try
+        {
+            var session = _background;
+
+            if (session is null
+                || session._pipe is null
+                || !session._pipe.IsConnected
+                || DateTime.UtcNow >= session._expiresUtc)
+            {
+                session?.Dispose();
+                session = new ServiceSession(signer);
+
+                if (!session.Connect(timeout, out error))
+                {
+                    session.Dispose();
+                    _background = null;
+                    return null;
+                }
+
+                _background = session;
+            }
+
+            var payload = session.Send(request, timeout, out error, out var retryable);
+
+            if (payload is not null)
+            {
+                return payload;
+            }
+
+            if (!retryable)
+            {
+                return null;
+            }
+
+            session.Dispose();
+            _background = null;
+
+            var retry = new ServiceSession(signer);
+
+            if (!retry.Connect(timeout, out error))
+            {
+                retry.Dispose();
+                return null;
+            }
+
+            _background = retry;
+            payload = retry.Send(request, timeout, out error, out _);
+
+            if (payload is null)
+            {
+                retry.Dispose();
+                _background = null;
+            }
+
+            return payload;
+        }
+        finally
+        {
+            BackgroundGate.Release();
+        }
     }
 
     private bool Connect(TimeSpan timeout, out string? error)

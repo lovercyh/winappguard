@@ -19,12 +19,20 @@ internal static class RuleEngine
     internal static List<FirewallRuleItem> GetRules()
     {
         using var engine = OpenEngine();
+        return GetRules(engine);
+    }
 
+    /// <summary>5.12：在一个已打开的引擎上读取规则，供导入批处理复用。</summary>
+    internal static List<FirewallRuleItem> GetRules(WfpEngine engine)
+    {
         var items = WfpRuleStore.List(engine).Select(ToRuleItem).ToList();
         items.AddRange(WfpRuleStore.ListIpRules(engine).Select(ToRuleItem));
 
         return items;
     }
+
+    /// <summary>5.12：导入等批处理复用一个引擎，避免每条规则一次 BFE 会话。</summary>
+    internal static WfpEngine OpenBatchEngine() => OpenEngine();
 
     /// <summary>这个程序当前是不是被阻止。</summary>
     internal static bool IsProgramBlocked(string programPath)
@@ -266,6 +274,18 @@ internal static class RuleEngine
     private static string Save(
         string programPath, FirewallAction action, RuleExpiry expiry, RuleScope? scope = null)
     {
+        using var engine = OpenEngine();
+        return Save(engine, programPath, action, expiry, scope);
+    }
+
+    /// <summary>5.12：在已打开的引擎上创建规则，供导入批处理复用。</summary>
+    private static string Save(
+        WfpEngine engine,
+        string programPath,
+        FirewallAction action,
+        RuleExpiry expiry,
+        RuleScope? scope)
+    {
         // 路径合法性、自我保护、系统关键进程保护都在这里统一把关 ——
         // 2.0 换掉了存储方式，但**这些安全闸一条都没有放宽**。
         var fullPath = FirewallManager.ValidateProgramPath(
@@ -273,10 +293,23 @@ internal static class RuleEngine
             forBlocking: action == FirewallAction.Block);
 
         var rule = new WfpRule(fullPath, action, expiry, scope);
-
-        using var engine = OpenEngine();
         WfpRuleStore.Add(engine, rule);
 
+        return rule.DisplayName;
+    }
+
+    internal static string CreateBlockRule(
+        WfpEngine engine, string programPath, RuleExpiry expiry, RuleScope scope)
+        => Save(engine, programPath, FirewallAction.Block, expiry, scope);
+
+    internal static string CreateAllowRule(
+        WfpEngine engine, string programPath, RuleExpiry expiry, RuleScope scope)
+        => Save(engine, programPath, FirewallAction.Allow, expiry, scope);
+
+    internal static string CreateIpBlockRule(WfpEngine engine, string address)
+    {
+        var rule = new WfpIpRule(address);
+        WfpRuleStore.AddIp(engine, rule);
         return rule.DisplayName;
     }
 

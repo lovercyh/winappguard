@@ -26,6 +26,46 @@ public sealed class RuleSnapshotCacheTests
     }
 
     [Fact]
+    public void BumpRevisionKeepsFreshSnapshot()
+    {
+        var cache = new RuleSnapshotCache();
+        var calls = 0;
+
+        _ = cache.Get(Load);
+        cache.BumpRevision();
+        var again = cache.Get(Load);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(1, cache.Revision);
+        Assert.NotNull(again);
+
+        IReadOnlyList<FirewallRuleItem> Load()
+        {
+            calls++;
+            return Array.Empty<FirewallRuleItem>();
+        }
+    }
+
+    [Fact]
+    public void ReloadReplacesSnapshotWithoutExtraLoaderCall()
+    {
+        var cache = new RuleSnapshotCache();
+        var loads = 0;
+
+        var loaded = cache.Reload(Load);
+        var reused = cache.Get(Load);
+
+        Assert.Same(loaded, reused);
+        Assert.Equal(1, loads);
+
+        IReadOnlyList<FirewallRuleItem> Load()
+        {
+            loads++;
+            return Array.Empty<FirewallRuleItem>();
+        }
+    }
+
+    [Fact]
     public void InvalidateDropsCacheAndBumpsRevision()
     {
         var cache = new RuleSnapshotCache();

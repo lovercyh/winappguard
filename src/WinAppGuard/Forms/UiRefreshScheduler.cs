@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Time;
 
@@ -120,6 +121,8 @@ internal sealed class UiRefreshScheduler : IDisposable
 
     private static async Task RunAsync(Job job)
     {
+        var stopwatch = Stopwatch.StartNew();
+
         try
         {
             await job.Refresh().ConfigureAwait(true);
@@ -135,6 +138,15 @@ internal sealed class UiRefreshScheduler : IDisposable
         finally
         {
             job.Running = false;
+            stopwatch.Stop();
+
+            // 5.12：慢刷新留一条证据，便于定位是 IPC、反序列化还是表格绑定。
+            if (stopwatch.ElapsedMilliseconds > 200)
+            {
+                LocalLog.Warning(LocalLog.Pick(
+                    $"慢刷新：{job.Key} 用了 {stopwatch.ElapsedMilliseconds} ms",
+                    $"Slow UI refresh: {job.Key} took {stopwatch.ElapsedMilliseconds} ms"));
+            }
         }
     }
 

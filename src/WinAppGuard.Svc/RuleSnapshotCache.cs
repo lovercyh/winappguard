@@ -54,4 +54,22 @@ internal sealed class RuleSnapshotCache
             }
         }
     }
+
+    /// <summary>5.12：只推进 revision，不丢弃刚在写命令里刷新过的快照。</summary>
+    internal void BumpRevision()
+        => Interlocked.Increment(ref _revision);
+
+    /// <summary>5.12：强制从 WFP 重新读取，供写命令落盘前使用。</summary>
+    internal IReadOnlyList<FirewallRuleItem> Reload(
+        Func<IReadOnlyList<FirewallRuleItem>> loader)
+    {
+        var snapshot = loader().ToList();
+
+        lock (_gate)
+        {
+            Volatile.Write(ref _snapshot, snapshot);
+        }
+
+        return snapshot;
+    }
 }

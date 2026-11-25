@@ -1713,6 +1713,20 @@ internal static class CliRunner
                 ? $"No recent service warnings. ({logPath ?? "log not found"})"
                 : $"没有最近的服务警告。（{logPath ?? "未找到日志"}）")));
 
+        var (installedUi, installedService) = GetInstalledVersions();
+        var versionsMatch = installedUi is not null
+                            && installedService is not null
+                            && string.Equals(
+                                installedUi, installedService,
+                                StringComparison.OrdinalIgnoreCase);
+
+        checks.Add(new DoctorCheck(
+            "installed-versions",
+            installedService is null ? "WARN" : versionsMatch ? "OK" : "FAIL",
+            Localizer.IsEnglish
+                ? $"UI {installedUi ?? "not installed"} / service {installedService ?? "not installed"}"
+                : $"界面 {installedUi ?? "未安装"} / 服务 {installedService ?? "未安装"}"));
+
         if (status is not null)
         {
             checks.Add(new DoctorCheck(
@@ -2430,6 +2444,43 @@ internal static class CliRunner
         List<NetworkBlockDto> Blocks,
         NetworkDetectionSettingsDto? Settings,
         NetworkDetectionStatusDto? Status);
+
+    private static (string? Ui, string? Service) GetInstalledVersions()
+    {
+        var directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "WinAppGuard");
+
+        return (
+            ProductVersionOf(Path.Combine(directory, "WinAppGuard.exe")),
+            ProductVersionOf(Path.Combine(directory, "WinAppGuardSvc.exe")));
+    }
+
+    private static string? ProductVersionOf(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var version = System.Diagnostics.FileVersionInfo
+                .GetVersionInfo(path).ProductVersion;
+
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                return null;
+            }
+
+            var plus = version.IndexOf('+', StringComparison.Ordinal);
+            return plus > 0 ? version[..plus] : version;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     private static List<string> ListWinAppGuardPipes()
     {

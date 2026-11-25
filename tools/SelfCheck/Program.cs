@@ -254,6 +254,10 @@ internal static class Program
             {
                 RunAudit(args);
             }
+            else if (args.Contains("--perf", StringComparer.OrdinalIgnoreCase))
+            {
+                PerfRunner.Run(args);
+            }
             else if (args.Contains("--ownership-test", StringComparer.OrdinalIgnoreCase))
             {
                 RunOwnershipTest();

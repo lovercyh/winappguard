@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Wfp;
@@ -11,8 +12,17 @@ namespace WinAppGuard.Service;
 /// </summary>
 internal static class StatusBuilder
 {
+    private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(1);
+    private static readonly object CacheGate = new();
+
+    private static DateTime _sublayerCheckedUtc = DateTime.MinValue;
+    private static bool _sublayerPresent;
+    private static DateTime _modulesCheckedUtc = DateTime.MinValue;
+    private static IReadOnlyList<ModuleHealth>? _modules;
+
     internal static ServiceStatus Build()
     {
+        var watch = Stopwatch.StartNew();
         var protectedMode = ControlServer.CurrentProtectedMode;
         var rules = ControlServer.RuleHandler;
 
@@ -27,33 +37,15 @@ internal static class StatusBuilder
             AuthRejectedCount = ControlServer.AuthRejectedCount,
             Revision = rules.RuleRevision,
             RevisionEpoch = rules.RuleRevisionEpoch,
-            Modules = ControlServer.CurrentModules?.Snapshot()
-                .Select(item => new ModuleStatusDto
-                {
-                    Name = item.Name,
-                    Order = item.Order,
-                    State = item.State.ToString(),
-                    Detail = item.Detail,
-                    LastError = item.LastError,
-                    Restarts = item.RestartCount,
-                })
-                .ToList(),
+            Modules = GetModules(),
         };
+
+        // 5.12：规则计数来自 RuleSnapshotCache（缓存命中时不开 WFP），
+        // 子层存在性单独缓存 1 秒，避免每个 status 都打开 BFE 会话。
+        status.SublayerPresent = GetSublayerPresent();
 
         try
         {
-            using var engine = WfpEngine.Open();
-
-            try
-            {
-                _ = engine.ReadSublayer();
-                status.SublayerPresent = true;
-            }
-            catch (WfpException)
-            {
-                status.SublayerPresent = false;
-            }
-
             var snapshot = rules.GetRuleSnapshot();
             status.BlockRuleCount = snapshot.Count(rule => rule.Action == FirewallAction.Block);
             status.AllowRuleCount = snapshot.Count(rule => rule.Action == FirewallAction.Allow);
@@ -114,6 +106,63 @@ internal static class StatusBuilder
         status.ExpiredPurgedCount = rules.ExpiredPurgedCount;
         status.LastPurgedPrograms = rules.LastPurgedPrograms;
 
+        watch.Stop();
+
+        if (watch.ElapsedMilliseconds > 40)
+        {
+            ServiceLog.Warning("WAG-PERF-STATUS", $"Status build took {watch.ElapsedMilliseconds} ms.");
+        }
+
         return status;
     }
+
+    private static bool GetSublayerPresent()
+    {
+        lock (CacheGate)
+        {
+            if (DateTime.UtcNow - _sublayerCheckedUtc < CacheLifetime)
+            {
+                return _sublayerPresent;
+            }
+
+            _sublayerCheckedUtc = DateTime.UtcNow;
+
+            try
+            {
+                using var engine = WfpEngine.Open();
+                _ = engine.ReadSublayer();
+                _sublayerPresent = true;
+            }
+            catch (Exception)
+            {
+                _sublayerPresent = false;
+            }
+
+            return _sublayerPresent;
+        }
+    }
+
+    private static List<ModuleStatusDto>? GetModules()
+    {
+        lock (CacheGate)
+        {
+            if (DateTime.UtcNow - _modulesCheckedUtc >= CacheLifetime)
+            {
+                _modulesCheckedUtc = DateTime.UtcNow;
+                _modules = ControlServer.CurrentModules?.Snapshot();
+            }
+
+            return _modules?.Select(ToDto).ToList();
+        }
+    }
+
+    private static ModuleStatusDto ToDto(ModuleHealth item) => new()
+    {
+        Name = item.Name,
+        Order = item.Order,
+        State = item.State.ToString(),
+        Detail = item.Detail,
+        LastError = item.LastError,
+        Restarts = item.RestartCount,
+    };
 }

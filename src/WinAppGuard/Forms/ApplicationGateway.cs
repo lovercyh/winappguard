@@ -46,6 +46,8 @@ internal interface IApplicationGateway
 
     ServiceStatus? TryGetStatus(TimeSpan timeout, out string? error);
 
+    ServiceStatus? TryGetStatusBackground(TimeSpan timeout, out string? error);
+
     QueryView? TryQuery(ServiceRequest request, TimeSpan timeout, out string? error);
 
     TrafficView? TryTraffic(ServiceRequest request, TimeSpan timeout, out string? error);
@@ -90,13 +92,16 @@ internal sealed class ServiceApplicationGateway : IApplicationGateway
     public ServiceStatus? TryGetStatus(TimeSpan timeout, out string? error)
         => ServiceClient.TryGetStatus(timeout, out error);
 
+    public ServiceStatus? TryGetStatusBackground(TimeSpan timeout, out string? error)
+        => ServiceClient.TryGetStatusBackground(timeout, out error);
+
     public QueryView? TryQuery(
         ServiceRequest request, TimeSpan timeout, out string? error)
-        => ServiceClient.TryRequestAs<QueryView>(request, timeout, out error);
+        => ServiceClient.TryRequestAsBackground<QueryView>(request, timeout, out error);
 
     public TrafficView? TryTraffic(
         ServiceRequest request, TimeSpan timeout, out string? error)
-        => ServiceClient.TryRequestAs<TrafficView>(request, timeout, out error);
+        => ServiceClient.TryRequestAsBackground<TrafficView>(request, timeout, out error);
 
     public RulesView? TryRules(
         ServiceRequest request, TimeSpan timeout, out string? error)

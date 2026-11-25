@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Contracts.Protocol;
@@ -17,6 +18,10 @@ internal sealed class RuleHandlers
 {
     private readonly RuleGroupStore _groups = new(ServicePaths.RuleGroupsFile);
     private readonly RuleSnapshotCache _cache = new();
+
+    // 5.12：权威规则副本常驻内存，巡检不再每 10 秒读磁盘。
+    private IReadOnlyList<RuleDto>? _authoritativeRules;
+    private readonly object _authoritativeGate = new();
 
     /// <summary>本次服务运行以来自动重建的规则条数。</summary>
     private int _tamperRebuilt;
@@ -68,12 +73,20 @@ internal sealed class RuleHandlers
     {
         lock (Gate)
         {
+            var isWrite = request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase);
+
+            // 5.12：先清掉旧缓存（不推进 revision），让 SaveSnapshotNow 能从 WFP 读到本次写入后的结果；
+            // 成功后再只推进 revision，避免丢掉刚刷新过的快照。
+            if (isWrite)
+            {
+                _cache.Invalidate(bumpRevision: false);
+            }
+
             var response = HandleCore(request);
 
-            if (response.Ok
-                && request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
+            if (isWrite && response.Ok)
             {
-                _cache.Invalidate();
+                _cache.BumpRevision();
             }
 
             return response;
@@ -315,60 +328,79 @@ internal sealed class RuleHandlers
     /// </summary>
     internal void CheckTamper()
     {
-        lock (Gate)
+        var watch = Stopwatch.StartNew();
+
+        try
         {
+            var expected = GetAuthoritativeRules();
+
+            if (expected.Count == 0)
+            {
+                return;
+            }
+
+            // 5.12：读 WFP 与 diff 都在锁外完成；只有真正需要重建时才进锁。
+            var sublayerPresent = true;
+
             try
             {
-                var sublayerRecreated = false;
+                using var probe = WfpEngine.Open();
+                probe.ReadSublayer();
+            }
+            catch (Exception)
+            {
+                sublayerPresent = false;
+            }
 
-                try
-                {
-                    using var probe = WfpEngine.Open();
-                    probe.ReadSublayer();
-                }
-                catch (Exception)
-                {
-                    using var probe = WfpEngine.Open();
-                    probe.EnsureSublayer(persistent: true);
-                    sublayerRecreated = true;
-                    ServiceLog.Warning("WAG-RULE-910", "Tamper protection: sublayer was missing and has been recreated.");
-                }
+            // 捕获读 WFP 之前的规则 revision：如果期间服务自己写过规则，
+            // 本次结果就作废，下一轮再看，避免误删刚加上的规则。
+            var revision = RuleRevision;
+            List<FirewallRuleItem> actual;
 
-                var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
+            try
+            {
+                actual = RuleEngine.GetRules();
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-RULE-911", "Tamper protection: failed to read the actual rules.", ex);
+                return;
+            }
 
-                if (snapshot is null || snapshot.Rules.Count == 0)
+            var names = new HashSet<string>(
+                actual.Select(rule => rule.Name), StringComparer.OrdinalIgnoreCase);
+
+            var missing = expected
+                .Where(rule => !names.Contains(rule.Name))
+                .ToList();
+
+            if (missing.Count == 0 && sublayerPresent)
+            {
+                return;
+            }
+
+            lock (Gate)
+            {
+                if (RuleRevision != revision)
                 {
                     return;
                 }
 
-                List<FirewallRuleItem> actual;
-
-                try
+                if (!sublayerPresent)
                 {
-                    actual = RuleEngine.GetRules();
-                }
-                catch (Exception ex)
-                {
-                    ServiceLog.Warning("WAG-RULE-911", "Tamper protection: failed to read the actual rules.", ex);
-                    return;
-                }
-
-                var names = new HashSet<string>(
-                    actual.Select(rule => rule.Name), StringComparer.OrdinalIgnoreCase);
-
-                var missing = snapshot.Rules
-                    .Where(rule => !names.Contains(rule.Name))
-                    .ToList();
-
-                if (missing.Count == 0)
-                {
-                    if (sublayerRecreated)
+                    try
                     {
-                        _cache.Invalidate();
-                        _lastTamperUtc = DateTime.UtcNow;
+                        using var probe = WfpEngine.Open();
+                        probe.EnsureSublayer(persistent: true);
+                        ServiceLog.Warning(
+                            "WAG-RULE-910",
+                            "Tamper protection: sublayer was missing and has been recreated.");
                     }
-
-                    return;
+                    catch (Exception ex)
+                    {
+                        ServiceLog.Warning("WAG-RULE-915", "Tamper protection: failed to recreate the sublayer.", ex);
+                        return;
+                    }
                 }
 
                 var rebuilt = 0;
@@ -396,11 +428,69 @@ internal sealed class RuleHandlers
                         "WAG-RULE-913",
                         $"Tamper protection: {missing.Count} rules were deleted externally; {rebuilt} rebuilt.");
                 }
+                else if (!sublayerPresent)
+                {
+                    _cache.Invalidate();
+                    _lastTamperUtc = DateTime.UtcNow;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ServiceLog.Warning("WAG-RULE-914", "Tamper protection check failed.", ex);
+        }
+        finally
+        {
+            watch.Stop();
+
+            if (watch.ElapsedMilliseconds > 50)
+            {
+                ServiceLog.Warning(
+                    "WAG-PERF-TAMPER",
+                    $"Tamper check took {watch.ElapsedMilliseconds} ms.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 5.12：权威规则副本。优先使用内存缓存；首次从磁盘快照加载，
+    /// 之后每次规则写入都由 <see cref="SaveSnapshotNow"/> 更新。
+    /// </summary>
+    private IReadOnlyList<RuleDto> GetAuthoritativeRules()
+    {
+        var cached = Volatile.Read(ref _authoritativeRules);
+
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        lock (_authoritativeGate)
+        {
+            cached = Volatile.Read(ref _authoritativeRules);
+
+            if (cached is not null)
+            {
+                return cached;
+            }
+
+            IReadOnlyList<RuleDto> rules;
+
+            try
+            {
+                var snapshot = RuleSnapshotFile.TryRead(ServicePaths.RulesSnapshotFile);
+                rules = snapshot is { Rules.Count: > 0 }
+                    ? snapshot.Rules
+                    : BuildRuleDtos();
             }
             catch (Exception ex)
             {
-                ServiceLog.Warning("WAG-RULE-914", "Tamper protection check failed.", ex);
+                ServiceLog.Warning("WAG-RULE-916", "Failed to load the authoritative rule snapshot.", ex);
+                rules = BuildRuleDtos();
             }
+
+            Volatile.Write(ref _authoritativeRules, rules);
+            return rules;
         }
     }
 
@@ -608,9 +698,10 @@ internal sealed class RuleHandlers
 
     /// <summary>把当前规则 + 分组映射成 IPC 用的 DTO（列表与快照共用）。</summary>
     private List<RuleDto> BuildRuleDtos()
-    {
-        var rules = _cache.Get(RuleEngine.GetRules);
+        => BuildRuleDtos(_cache.Get(RuleEngine.GetRules));
 
+    private List<RuleDto> BuildRuleDtos(IReadOnlyList<FirewallRuleItem> rules)
+    {
         return rules.Select(rule => new RuleDto
         {
             Name = rule.Name,
@@ -653,9 +744,15 @@ internal sealed class RuleHandlers
         {
             try
             {
+                // 5.12：强制从 WFP 重新读取（写命令开始前缓存已被清空），
+                // 同时更新内存权威副本，巡检不再依赖每 10 秒读磁盘。
+                var rules = _cache.Reload(RuleEngine.GetRules);
+                var dtos = BuildRuleDtos(rules);
+                Volatile.Write(ref _authoritativeRules, dtos);
+
                 RuleSnapshotFile.Write(
                     ServicePaths.RulesSnapshotFile,
-                    new RuleSnapshot { Rules = BuildRuleDtos() });
+                    new RuleSnapshot { Rules = dtos });
             }
             catch (Exception ex)
             {
@@ -862,6 +959,7 @@ internal sealed class RuleHandlers
 
     private WriteResult Import(ServiceRequest request)
     {
+        var watch = Stopwatch.StartNew();
         var expected = ParseAction(request.Action, out var actionError);
 
         if (expected is null)
@@ -879,8 +977,11 @@ internal sealed class RuleHandlers
             return Fail(request, scopeError);
         }
 
+        // 5.12：整个导入复用一个 WFP 引擎，避免每条规则一次 BFE 会话。
+        using var engine = RuleEngine.OpenBatchEngine();
+
         var existing = new HashSet<string>(
-            RuleEngine.GetRules().Select(rule => rule.Name), StringComparer.OrdinalIgnoreCase);
+            RuleEngine.GetRules(engine).Select(rule => rule.Name), StringComparer.OrdinalIgnoreCase);
 
         var created = 0;
         var skipped = 0;
@@ -902,7 +1003,7 @@ internal sealed class RuleHandlers
                         continue;
                     }
 
-                    RuleEngine.CreateIpBlockRule(entry.Value);
+                    RuleEngine.CreateIpBlockRule(engine, entry.Value);
                 }
                 else
                 {
@@ -927,11 +1028,11 @@ internal sealed class RuleHandlers
 
                     if (expected.Value == FirewallAction.Block)
                     {
-                        RuleEngine.CreateBlockRule(entry.Value, expiry, scope);
+                        RuleEngine.CreateBlockRule(engine, entry.Value, expiry, scope);
                     }
                     else
                     {
-                        RuleEngine.CreateAllowRule(entry.Value, expiry, scope);
+                        RuleEngine.CreateAllowRule(engine, entry.Value, expiry, scope);
                     }
                 }
 
@@ -957,7 +1058,11 @@ internal sealed class RuleHandlers
         }
 
         SaveSnapshotNow();
-        ServiceLog.Operation("WAG-RULE-031", $"Rules imported: created {created}, skipped {skipped}, failed {failed}.");
+        watch.Stop();
+        ServiceLog.Operation(
+            "WAG-RULE-031",
+            $"Rules imported: created {created}, skipped {skipped}, failed {failed}, "
+            + $"engineOpens=1, elapsed={watch.ElapsedMilliseconds}ms.");
 
         return new WriteResult
         {

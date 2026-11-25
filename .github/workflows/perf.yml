@@ -1,0 +1,47 @@
+name: Perf
+
+# 5.12：性能基线需要真实服务、WFP、管理员权限和稳定的 VM，
+# GitHub 托管的 windows-latest 不适合。这里只跑在自托管 VM runner 上。
+#
+# 配置 runner 标签：self-hosted, windows, wag-perf
+# 没有 runner 时不会自动跑（只保留手动触发）。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  perf:
+    name: 性能基线
+    runs-on: [self-hosted, windows, wag-perf]
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 构建
+        run: dotnet build WinAppGuard.sln -c Release -warnaserror
+
+      - name: 构建自检工具
+        run: dotnet build tools/SelfCheck/SelfCheck.csproj -c Debug -warnaserror
+
+      - name: 运行性能场景
+        run: |
+          dotnet run --project tools/SelfCheck/SelfCheck.csproj -c Debug --no-build -- `
+            --perf --perf-iterations 300 --perf-threads 10 --perf-requests 100 `
+            --perf-out perf-result.json
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-result
+          path: perf-result.json
+          retention-days: 90

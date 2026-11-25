@@ -57,6 +57,12 @@ function Add-Result {
     Write-Host ("[{0}] {1,-30} {2}" -f $Status, $Name, $Detail) -ForegroundColor $color
 }
 
+function Pause-IfNeeded {
+    if (-not $env:WAG_NO_PAUSE) {
+        [void](Read-Host 'Press Enter to exit')
+    }
+}
+
 function Get-ProductVersion {
     param([string]$Path)
 
@@ -97,6 +103,7 @@ if ($null -eq $service) {
     Add-Result 'service-installed' 'FAIL' 'WinAppGuardSvc is not installed'
     Write-Host ''
     Write-Host ("PASS={0} FAIL={1} WARN={2} SKIP={3}" -f $script:pass, $script:fail, $script:warn, $script:skip)
+    Pause-IfNeeded
     exit 1
 }
 
@@ -403,8 +410,10 @@ Write-Host ("PASS={0}  FAIL={1}  WARN={2}  SKIP={3}" -f $script:pass, $script:fa
 
 if ($script:fail -gt 0) {
     Write-Host 'Result: FAILED.' -ForegroundColor Red
+    Pause-IfNeeded
     exit 1
 }
 
 Write-Host 'Result: PASSED.' -ForegroundColor Green
+Pause-IfNeeded
 exit 0

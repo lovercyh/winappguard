@@ -109,6 +109,26 @@ public sealed class ResponseSemanticsTests
     }
 
     [Fact]
+    public void WriteResultAffectedRoundTrips()
+    {
+        var result = new WriteResult
+        {
+            Affected = 3,
+            Skipped = 2,
+            Failed = 1,
+        };
+
+        var element = JsonSerializer.SerializeToElement(
+            result, result.GetType(), ServiceProtocol.JsonOptions);
+        var back = element.Deserialize<WriteResult>(ServiceProtocol.JsonOptions);
+
+        Assert.NotNull(back);
+        Assert.Equal(3, back!.Affected);
+        Assert.Equal(2, back.Skipped);
+        Assert.Equal(1, back.Failed);
+    }
+
+    [Fact]
     public void WriteCommandsDoNotExposeFeatureCollections()
     {
         // 写命令只带 Affected / Message，不再回传整套检测数据。

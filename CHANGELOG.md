@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 本文件记录所有值得注意的变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
@@ -35,6 +35,12 @@
 
 ### 修复
 
+- **普通权限下写操作显示 0 条**：界面以普通权限运行时，写命令会交给提权助手执行，
+  助手把响应写成 camelCase，界面却用默认（PascalCase）选项读回，导致
+  `affected` / `skipped` / `failed` / `error` 全部丢失。表现就是
+  「已添加 0 条规则」「删除 0 条阻止规则」，即使规则已经写入。
+  现在请求和响应统一通过 `ElevatedIpcFile` + `ServiceProtocol.JsonOptions` 读写。
+- 文件夹添加和清空黑名单的统计增加刷新后兜底，即使服务版本较旧也不会再显示 0。
 - `RuleImport` 请求载荷补回 `Action` 字段。5.11/5.12 中导入命令的 `Action`
   会在客户端投影时被丢掉，导致服务端不知道导入到黑名单还是白名单。
 - `WriteResult` 增加 `Skipped` / `Failed`，批量导入页面可以显示完整统计。
@@ -43,7 +49,7 @@
 
 - 新增文件夹扫描测试：递归、上限、隐藏 exe、非 exe、缺失目录、UNC。
 - 新增导入文档往返测试（block / allow）。
-- 架构测试 108 项通过。
+- 架构测试 112 项通过。
 
 ## [5.12.0] - 2026-11-25
 

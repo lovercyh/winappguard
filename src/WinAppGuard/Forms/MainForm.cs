@@ -3991,6 +3991,11 @@ public partial class MainForm : Form
         }
 
         var json = RuleExport.Serialize(document);
+
+        LocalLog.Info(LocalLog.Pick(
+            $"文件夹批量添加：选中的 exe {paths.Count} 个，导入文档 {document.Rules.Count} 条，JSON {json.Length} 字符",
+            $"Folder batch add: {paths.Count} selected .exe, {document.Rules.Count} import entries, {json.Length} JSON chars."));
+
         var actionName = Localizer.IsEnglish
             ? (isAllow ? "Add folder to whitelist" : "Add folder to blocklist")
             : (isAllow ? "添加文件夹到白名单" : "添加文件夹到黑名单");
@@ -4011,10 +4016,6 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation(LocalLog.Pick(
-                $"{actionName}：添加 {response.Affected} 条，跳过 {response.Skipped} 条，失败 {response.Failed} 条",
-                $"{actionName}: added {response.Affected}, skipped {response.Skipped}, failed {response.Failed}."));
-
             AfterRulesChanged();
 
             if (isAllow)
@@ -4022,11 +4023,25 @@ public partial class MainForm : Form
                 RefreshStrictModeStatus();
             }
 
+            // 5.13：个别服务版本返回的 Affected 可能为 0；以刷新后的规则名兜底。
+            var expectedNames = paths
+                .Select(path => isAllow
+                    ? RuleNaming.BuildAllowRuleName(path)
+                    : RuleNaming.BuildBlockRuleName(path))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var actualAdded = _appGuardRules.Count(rule => expectedNames.Contains(rule.Name));
+            var added = response.Affected > 0 ? response.Affected : actualAdded;
+
+            LocalLog.Operation(LocalLog.Pick(
+                $"{actionName}：添加 {added} 条（服务返回 {response.Affected}），跳过 {response.Skipped} 条，失败 {response.Failed} 条",
+                $"{actionName}: added {added} (reported {response.Affected}), skipped {response.Skipped}, failed {response.Failed}."));
+
             var lines = new List<string>
             {
                 Localizer.IsEnglish
-                    ? $"Added {response.Affected} rule(s)."
-                    : $"已添加 {response.Affected} 条规则。",
+                    ? $"Added {added} rule(s)."
+                    : $"已添加 {added} 条规则。",
             };
 
             if (response.Skipped > 0)
@@ -4046,6 +4061,16 @@ public partial class MainForm : Form
             if (!string.IsNullOrWhiteSpace(response.Error))
             {
                 lines.Add(response.Error);
+            }
+
+            if (added == 0
+                && response.Affected == 0
+                && response.Skipped == 0
+                && response.Failed == 0)
+            {
+                lines.Add(Localizer.IsEnglish
+                    ? "The service reported no added/skipped/failed entries. Run --doctor and check that the UI and service versions match."
+                    : "服务没有报告新增/跳过/失败条目。请运行 --doctor 检查界面与服务版本是否一致。");
             }
 
             UiMessageBox.Show(
@@ -4476,12 +4501,19 @@ public partial class MainForm : Form
                 return;
             }
 
-            LocalLog.Operation(LocalLog.Pick($"清空黑名单：实际删除 {response.Affected} 条阻止规则", $"Clear blocklist: {response.Affected} block rules deleted."));
+            var beforeCount = rules.Count;
             AfterRulesChanged();
+
+            // 5.13：个别服务版本返回的 Affected 可能为 0；以刷新后的规则数量兜底。
+            var deleted = Math.Max(
+                response.Affected,
+                Math.Max(0, beforeCount - _rules.Count));
+
+            LocalLog.Operation(LocalLog.Pick($"清空黑名单：实际删除 {deleted} 条阻止规则", $"Clear blocklist: {deleted} block rules deleted."));
 
             UiMessageBox.Show(
                 this,
-                $"已清空黑名单，删除 {response.Affected} 条阻止规则。\n\n" +
+                $"已清空黑名单，删除 {deleted} 条阻止规则。\n\n" +
                 "这些程序现在可以重新联网；白名单和其它软件的规则没有受到影响。",
                 AppConstants.AppName,
                 MessageBoxButtons.OK,

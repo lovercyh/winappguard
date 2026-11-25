@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
@@ -37,8 +35,7 @@ internal static class ElevatedIpc
 
         try
         {
-            var request = JsonSerializer.Deserialize<ServiceRequest>(
-                File.ReadAllText(requestPath, Encoding.UTF8));
+            var request = ElevatedIpcFile.ReadRequest(requestPath);
 
             if (request is null
                 || !request.Command.StartsWith("write.", StringComparison.OrdinalIgnoreCase))
@@ -79,11 +76,7 @@ internal static class ElevatedIpc
 
         try
         {
-            File.WriteAllText(
-                responsePath,
-                JsonSerializer.Serialize(
-                    response, response.GetType(), ServiceProtocol.JsonOptions),
-                new UTF8Encoding(false));
+            ElevatedIpcFile.WriteResponse(responsePath, response);
         }
         catch (Exception)
         {

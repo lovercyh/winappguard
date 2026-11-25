@@ -1,9 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Text;
-using System.Text.Json;
 using WinAppGuard.Contracts;
 using WinAppGuard.Contracts.Protocol;
+using WinAppGuard.Core;
 
 namespace WinAppGuard;
 
@@ -52,10 +51,7 @@ internal static class ElevatedClient
 
         try
         {
-            File.WriteAllText(
-                requestPath,
-                JsonSerializer.Serialize(request),
-                new UTF8Encoding(false));
+            ElevatedIpcFile.WriteRequest(requestPath, request);
 
             var startInfo = new ProcessStartInfo(helper)
             {
@@ -86,10 +82,9 @@ internal static class ElevatedClient
                 return null;
             }
 
-            var type = PayloadCatalog.ResponseTypeFor(request.Command);
-            var response = JsonSerializer.Deserialize(
-                File.ReadAllText(responsePath, Encoding.UTF8), type)
-                as ResponsePayload;
+            // 必须用与助手相同的 JsonOptions 读回：助手写的是 camelCase。
+            var response = ElevatedIpcFile.ReadResponse(
+                responsePath, PayloadCatalog.ResponseTypeFor(request.Command));
 
             if (response is null)
             {

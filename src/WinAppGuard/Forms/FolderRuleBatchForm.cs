@@ -342,8 +342,8 @@ internal sealed class FolderRuleBatchForm : Form
         }
 
         var message = T(
-            $"找到 {result.Files.Count} 个 exe",
-            $"{result.Files.Count} .exe file(s) found");
+            $"找到 {result.Files.Count} 个 exe；只添加当前扫描到的文件",
+            $"{result.Files.Count} .exe file(s) found; only the files scanned now are added");
 
         if (result.Truncated)
         {

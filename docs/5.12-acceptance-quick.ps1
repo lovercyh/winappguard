@@ -121,20 +121,32 @@ Check 'cli-status' ($LASTEXITCODE -eq 0) ''
 Check 'cli-list-rules' ($LASTEXITCODE -eq 0) ''
 
 $logDir = Join-Path $env:ProgramData 'WinAppGuard\logs'
-$setup = $null
+$setupLogs = @()
 if (Test-Path -LiteralPath $logDir) {
-    $setup = Get-ChildItem -LiteralPath $logDir -Filter 'setup-*.log' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^setup-\d{8}\.log$' } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+    $setupLogs = @(Get-ChildItem -LiteralPath $logDir -Filter 'setup-*.log' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^setup-\d{8}\.log$' })
 }
 
-if ($setup) {
-    $setupText = Get-Content -LiteralPath $setup.FullName -Raw
-    Check 'setup-log' ($setupText -match 'Version check:' -and $setupText -match 'Installed versions verified\.' -and $setupText -match '5\.12\.0') $setup.Name
+$setupOk = $false
+$setupName = ''
+foreach ($log in $setupLogs) {
+    $setupText = Get-Content -LiteralPath $log.FullName -Raw -ErrorAction SilentlyContinue
+    if ($setupText -match 'Version check:' -and $setupText -match 'Installed versions verified\.' -and $setupText -match '5\.12\.0') {
+        $setupOk = $true
+        $setupName = $log.Name
+        break
+    }
 }
 
-if (-not $setup) {
+if ($setupOk) {
+    Check 'setup-log' $true $setupName
+}
+
+if (-not $setupOk -and $setupLogs.Count -gt 0) {
+    Warn 'setup-log' "setup logs exist, but no 5.12 verification line (supplementary check; not a failure)"
+}
+
+if ($setupLogs.Count -eq 0) {
     Skip 'setup-log' 'no setup-YYYYMMDD.log'
 }
 

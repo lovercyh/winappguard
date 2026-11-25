@@ -124,6 +124,29 @@ public sealed class PayloadContractTests
     }
 
     [Fact]
+    public void ImportRequestKeepsActionAndJson()
+    {
+        var request = new ServiceRequest
+        {
+            Command = ServiceProtocol.Commands.ImportRules,
+            Action = "allow",
+            Json = "{\"Format\":\"WinAppGuard.Rules\"}",
+        };
+
+        var type = PayloadCatalog.RequestTypeFor(ServiceProtocol.Commands.ImportRules);
+        var element = JsonSerializer.SerializeToElement(request, ServiceProtocol.JsonOptions);
+        var typed = element.Deserialize(type, ServiceProtocol.JsonOptions);
+        var payload = JsonSerializer.SerializeToElement(
+            typed, type, ServiceProtocol.JsonOptions);
+
+        Assert.Equal("allow", payload.GetProperty("action").GetString());
+        Assert.Contains(
+            "WinAppGuard.Rules",
+            payload.GetProperty("json").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RequestPayloadDropsFieldsNotDeclaredForCommand()
     {
         var request = new ServiceRequest

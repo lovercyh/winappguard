@@ -1285,12 +1285,14 @@ public partial class MainForm : Form
             : $"⚠ {reason}\r\n规则页面只读；启动或修复防护服务后即可恢复编辑，导出仍可使用。";
 
         _rulesAddButton.Enabled = false;
+        _rulesAddFolderButton.Enabled = false;
         _rulesGroupButton.Enabled = false;
         _rulesImportButton.Enabled = false;
         _rulesDeleteButton.Enabled = false;
         _rulesDeleteAllButton.Enabled = false;
 
         _whitelistAddButton.Enabled = false;
+        _whitelistAddFolderButton.Enabled = false;
         _whitelistGroupButton.Enabled = false;
         _whitelistRemoveButton.Enabled = false;
         _whitelistClearButton.Enabled = false;
@@ -1304,8 +1306,10 @@ public partial class MainForm : Form
     {
         _rulesNoticeLabel.Text = _rulesNoticeDefault;
         _rulesAddButton.Enabled = true;
+        _rulesAddFolderButton.Enabled = true;
         _rulesImportButton.Enabled = true;
         _whitelistAddButton.Enabled = true;
+        _whitelistAddFolderButton.Enabled = true;
     }
 
     /// <summary>
@@ -3926,6 +3930,137 @@ public partial class MainForm : Form
         catch (Exception ex)
         {
             ShowError("加入黑名单失败", ex, "Failed to add to the blocklist");
+        }
+    }
+
+    private async void OnRulesAddFolderButtonClick(object? sender, EventArgs e)
+        => await AddFolderRulesAsync(FirewallAction.Block);
+
+    private async void OnWhitelistAddFolderButtonClick(object? sender, EventArgs e)
+        => await AddFolderRulesAsync(FirewallAction.Allow);
+
+    /// <summary>
+    /// 5.13：文件夹批量添加。扫描在对话框里完成，这里只负责把选中的 exe
+    /// 组装成现有的导入文档，走服务端已有的批量导入路径（单引擎、分组、严格模式刷新）。
+    /// </summary>
+    private async Task AddFolderRulesAsync(FirewallAction action)
+    {
+        if (!_serviceAvailable)
+        {
+            UiMessageBox.Show(
+                this,
+                Localizer.T("服务未运行，无法添加规则。"),
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var isAllow = action == FirewallAction.Allow;
+
+        using var dialog = new FolderRuleBatchForm(
+            action,
+            _appGuardRules.Select(rule => rule.Name));
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var paths = dialog.SelectedPaths;
+
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        var scope = isAllow ? "allow" : "block";
+        var document = new RuleExportDocument { Scope = scope };
+
+        foreach (var path in paths)
+        {
+            document.Rules.Add(new RuleExportEntry
+            {
+                Kind = "program",
+                Value = path,
+                Action = scope,
+                Expiry = dialog.ExpiryEncoded,
+                Group = dialog.Group,
+                Scope = string.Empty,
+            });
+        }
+
+        var json = RuleExport.Serialize(document);
+        var actionName = Localizer.IsEnglish
+            ? (isAllow ? "Add folder to whitelist" : "Add folder to blocklist")
+            : (isAllow ? "添加文件夹到白名单" : "添加文件夹到黑名单");
+
+        try
+        {
+            var response = await CallServiceAsync<WriteResult>(
+                ServiceProtocol.Commands.ImportRules,
+                new ServiceRequest
+                {
+                    Action = scope,
+                    Json = json,
+                },
+                actionName);
+
+            if (response is null)
+            {
+                return;
+            }
+
+            LocalLog.Operation(LocalLog.Pick(
+                $"{actionName}：添加 {response.Affected} 条，跳过 {response.Skipped} 条，失败 {response.Failed} 条",
+                $"{actionName}: added {response.Affected}, skipped {response.Skipped}, failed {response.Failed}."));
+
+            AfterRulesChanged();
+
+            if (isAllow)
+            {
+                RefreshStrictModeStatus();
+            }
+
+            var lines = new List<string>
+            {
+                Localizer.IsEnglish
+                    ? $"Added {response.Affected} rule(s)."
+                    : $"已添加 {response.Affected} 条规则。",
+            };
+
+            if (response.Skipped > 0)
+            {
+                lines.Add(Localizer.IsEnglish
+                    ? $"Skipped {response.Skipped} (already exists / protected / invalid)."
+                    : $"跳过 {response.Skipped} 条（已存在 / 受保护 / 不合法）。");
+            }
+
+            if (response.Failed > 0)
+            {
+                lines.Add(Localizer.IsEnglish
+                    ? $"Failed {response.Failed}; see the service log."
+                    : $"失败 {response.Failed} 条，详见服务日志。");
+            }
+
+            if (!string.IsNullOrWhiteSpace(response.Error))
+            {
+                lines.Add(response.Error);
+            }
+
+            UiMessageBox.Show(
+                this,
+                string.Join(Environment.NewLine, lines),
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                response.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            ShowError(
+                Localizer.IsEnglish ? "Adding folder rules failed" : "添加文件夹规则失败",
+                ex,
+                "Failed to add folder rules");
         }
     }
 

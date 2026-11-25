@@ -53,6 +53,9 @@ public sealed class RuleClear : RequestPayload
 
 public sealed class RuleImport : RequestPayload
 {
+    /// <summary>block / allow。导入必须带上，否则服务端不知道要导入哪一页。</summary>
+    public string? Action { get; set; }
+
     public string? Json { get; set; }
 
     public bool FreshLogonSession { get; set; }
@@ -236,6 +239,12 @@ public sealed class WriteResult : ResponsePayload
     public string? Detail { get; set; }
 
     public string? Message { get; set; }
+
+    /// <summary>批量写入时跳过的条数（已存在 / 受保护 / 不合法）。</summary>
+    public int Skipped { get; set; }
+
+    /// <summary>批量写入时失败的条数。</summary>
+    public int Failed { get; set; }
 }
 
 /// <summary>服务状态、严格模式、审计设置等命令的结果。</summary>

@@ -1068,6 +1068,8 @@ internal sealed class RuleHandlers
         {
             Ok = true,
             Affected = created,
+            Skipped = skipped,
+            Failed = failed,
             Error = failed > 0 ? $"有 {failed} 条失败（详见服务日志）。" : null,
         };
     }

@@ -67,6 +67,7 @@ partial class MainForm
     private Label _rulesSummaryLabel = null!;
     private Button _rulesDeleteButton = null!;
     private Button _rulesAddButton = null!;
+    private Button _rulesAddFolderButton = null!;
     private ComboBox _rulesGroupCombo = null!;
     private Button _rulesGroupButton = null!;
     private Button _rulesExportButton = null!;
@@ -91,6 +92,7 @@ partial class MainForm
     private Button _whitelistImportButton = null!;
     private Button _whitelistRemoveButton = null!;
     private Button _whitelistAddButton = null!;
+    private Button _whitelistAddFolderButton = null!;
     private Label _whitelistHintLabel = null!;
     private Button _whitelistClearButton = null!;
 
@@ -229,6 +231,7 @@ partial class MainForm
         _rulesSummaryLabel = new Label();
         _rulesDeleteButton = new Button();
         _rulesAddButton = new Button();
+        _rulesAddFolderButton = new Button();
         _rulesGroupCombo = new ComboBox();
         _rulesGroupButton = new Button();
         _rulesExportButton = new Button();
@@ -248,6 +251,7 @@ partial class MainForm
         _whitelistImportButton = new Button();
         _whitelistRemoveButton = new Button();
         _whitelistAddButton = new Button();
+        _whitelistAddFolderButton = new Button();
         _whitelistHintLabel = new Label();
         _whitelistClearButton = new Button();
         _whitelistGrid = new DataGridViewBuffered();
@@ -691,8 +695,9 @@ partial class MainForm
         _rulesNoticeLabel.TextAlign = ContentAlignment.TopLeft;
 
         _rulesToolPanel.Dock = DockStyle.Top;
-        _rulesToolPanel.Height = 76;
+        _rulesToolPanel.Height = 110;
         _rulesToolPanel.Name = "_rulesToolPanel";
+        _rulesToolPanel.Controls.Add(_rulesAddFolderButton);
         _rulesToolPanel.Controls.Add(_rulesRefreshButton);
         _rulesToolPanel.Controls.Add(_rulesSummaryLabel);
         _rulesToolPanel.Controls.Add(_rulesDeleteButton);
@@ -739,6 +744,14 @@ partial class MainForm
         _rulesAddButton.Text = "添加程序…";
         _rulesAddButton.UseVisualStyleBackColor = true;
         _rulesAddButton.Click += OnRulesAddButtonClick;
+
+        _rulesAddFolderButton.Location = new Point(0, 76);
+        _rulesAddFolderButton.Name = "_rulesAddFolderButton";
+        _rulesAddFolderButton.Size = new Size(160, 28);
+        _rulesAddFolderButton.TabIndex = 12;
+        _rulesAddFolderButton.Text = "添加文件夹…";
+        _rulesAddFolderButton.UseVisualStyleBackColor = true;
+        _rulesAddFolderButton.Click += OnRulesAddFolderButtonClick;
 
         _rulesGroupButton.Enabled = false;
         _rulesGroupButton.Location = new Point(316, 42);
@@ -852,8 +865,9 @@ partial class MainForm
         _whitelistNoticeLabel.TextAlign = ContentAlignment.TopLeft;
 
         _whitelistToolPanel.Dock = DockStyle.Top;
-        _whitelistToolPanel.Height = 76;
+        _whitelistToolPanel.Height = 110;
         _whitelistToolPanel.Name = "_whitelistToolPanel";
+        _whitelistToolPanel.Controls.Add(_whitelistAddFolderButton);
         _whitelistToolPanel.Controls.Add(_whitelistRefreshButton);
         _whitelistToolPanel.Controls.Add(_whitelistSummaryLabel);
         _whitelistToolPanel.Controls.Add(_whitelistSearchBox);
@@ -939,6 +953,14 @@ partial class MainForm
         _whitelistAddButton.Text = "添加程序…";
         _whitelistAddButton.UseVisualStyleBackColor = true;
         _whitelistAddButton.Click += OnWhitelistAddButtonClick;
+
+        _whitelistAddFolderButton.Location = new Point(0, 76);
+        _whitelistAddFolderButton.Name = "_whitelistAddFolderButton";
+        _whitelistAddFolderButton.Size = new Size(160, 28);
+        _whitelistAddFolderButton.TabIndex = 10;
+        _whitelistAddFolderButton.Text = "添加文件夹…";
+        _whitelistAddFolderButton.UseVisualStyleBackColor = true;
+        _whitelistAddFolderButton.Click += OnWhitelistAddFolderButtonClick;
 
         _whitelistHintLabel.AutoSize = true;
         _whitelistHintLabel.ForeColor = SystemColors.GrayText;

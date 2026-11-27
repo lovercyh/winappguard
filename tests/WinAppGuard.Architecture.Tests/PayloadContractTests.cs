@@ -147,6 +147,26 @@ public sealed class PayloadContractTests
     }
 
     [Fact]
+    public void DeleteForProgramKeepsAction()
+    {
+        var request = new ServiceRequest
+        {
+            Command = ServiceProtocol.Commands.DeleteRulesForProgram,
+            Value = @"C:\Tools\a.exe",
+            Action = "allow",
+        };
+
+        var type = PayloadCatalog.RequestTypeFor(ServiceProtocol.Commands.DeleteRulesForProgram);
+        var element = JsonSerializer.SerializeToElement(request, ServiceProtocol.JsonOptions);
+        var typed = element.Deserialize(type, ServiceProtocol.JsonOptions);
+        var payload = JsonSerializer.SerializeToElement(
+            typed, type, ServiceProtocol.JsonOptions);
+
+        Assert.Equal("allow", payload.GetProperty("action").GetString());
+        Assert.Equal(@"C:\Tools\a.exe", payload.GetProperty("value").GetString());
+    }
+
+    [Fact]
     public void RequestPayloadDropsFieldsNotDeclaredForCommand()
     {
         var request = new ServiceRequest

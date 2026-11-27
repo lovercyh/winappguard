@@ -856,11 +856,12 @@ partial class MainForm
 
         _whitelistNoticeLabel.Dock = DockStyle.Top;
         _whitelistNoticeLabel.ForeColor = Color.FromArgb(191, 87, 0);
-        _whitelistNoticeLabel.Height = 64;
+        _whitelistNoticeLabel.Height = 80;
         _whitelistNoticeLabel.Name = "_whitelistNoticeLabel";
         _whitelistNoticeLabel.Padding = new Padding(0, 2, 0, 0);
         _whitelistNoticeLabel.Text = "白名单只在「严格模式」下起作用：严格模式开着时，只有这里列出的程序" +
                                      "（以及系统必需程序）能上网。\r\n" +
+                                     "规则里的「范围」会一起生效：例如 TCP 443 只放行 443，不会放行整个程序。\r\n" +
                                      "严格模式没开时，这些规则不会限制任何东西。";
         _whitelistNoticeLabel.TextAlign = ContentAlignment.TopLeft;
 

@@ -44,6 +44,9 @@ public sealed class RuleDelete : RequestPayload
 public sealed class RuleDeleteForProgram : RequestPayload
 {
     public string? Value { get; set; }
+
+    /// <summary>5.15：block（默认）/ allow；用于按程序删除某一类规则。</summary>
+    public string? Action { get; set; }
 }
 
 public sealed class RuleClear : RequestPayload
@@ -219,6 +222,12 @@ public abstract class ResponsePayload
     public string? Error { get; set; }
 
     public string? ErrorCode { get; set; }
+
+    /// <summary>
+    /// 5.15：操作成功但有非致命问题时的提醒（例如规则已保存、严格模式刷新失败）。
+    /// 可选字段，旧客户端会忽略。
+    /// </summary>
+    public string? Warning { get; set; }
 
     /// <summary>本次操作影响的条数（删除 / 导入 / 清空）。</summary>
     public int Affected { get; set; }

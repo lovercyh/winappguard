@@ -129,6 +129,24 @@ public sealed class ResponseSemanticsTests
     }
 
     [Fact]
+    public void WriteResultWarningRoundTrips()
+    {
+        var result = new WriteResult
+        {
+            Ok = true,
+            Affected = 1,
+            Warning = "规则已保存，但严格模式刷新失败。",
+        };
+
+        var element = JsonSerializer.SerializeToElement(
+            result, result.GetType(), ServiceProtocol.JsonOptions);
+        var back = element.Deserialize<WriteResult>(ServiceProtocol.JsonOptions);
+
+        Assert.NotNull(back);
+        Assert.Equal("规则已保存，但严格模式刷新失败。", back!.Warning);
+    }
+
+    [Fact]
     public void NetworkAlertRuleCategoryRoundTrips()
     {
         var dto = new NetworkAlertDto

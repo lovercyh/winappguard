@@ -67,13 +67,9 @@ internal sealed record WfpRule
     {
         get
         {
-            var baseName = Action == FirewallAction.Block
-                ? RuleNaming.BuildBlockRuleName(ApplicationPath)
-                : RuleNaming.BuildAllowRuleName(ApplicationPath);
-
-            // 同一程序可以有多条不同范围的规则，名字必须能区分开。
-            var suffix = Scope.NameSuffix();
-            return suffix.Length == 0 ? baseName : $"{baseName}_{suffix}";
+            return Action == FirewallAction.Block
+                ? RuleNaming.BuildBlockRuleName(ApplicationPath, Scope)
+                : RuleNaming.BuildAllowRuleName(ApplicationPath, Scope);
         }
     }
 

@@ -10791,7 +10791,8 @@ internal static class Program
             W("  ⚠️ 基线就不通，本轮跳过「真的能拦住」的断言（只验证过滤器结构）。");
         }
 
-        using (var session = WfpStrictSession.Start(new[] { targetExe }))
+        using (var session = WfpStrictSession.Start(
+                   new[] { new StrictAllowEntry(targetExe, RuleScope.Any) }))
         {
             W();
             W("===== 1. 会话建立 =====");

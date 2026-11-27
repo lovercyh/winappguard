@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using WinAppGuard.Models;
 
 namespace WinAppGuard.Core;
 
@@ -22,12 +23,23 @@ internal static class RuleNaming
     internal static string BuildBlockRuleName(string programPath)
         => Build(AppConstants.RulePrefixBlock, programPath);
 
+    /// <summary>5.15：带范围的阻止规则名（不同范围不会同名）。</summary>
+    internal static string BuildBlockRuleName(string programPath, RuleScope scope)
+        => Build(AppConstants.RulePrefixBlock, programPath, scope);
+
     /// <summary>允许规则名。</summary>
     internal static string BuildAllowRuleName(string programPath)
         => Build(AppConstants.RulePrefixAllow, programPath);
 
+    /// <summary>5.15：带范围的允许规则名。</summary>
+    internal static string BuildAllowRuleName(string programPath, RuleScope scope)
+        => Build(AppConstants.RulePrefixAllow, programPath, scope);
+
     /// <summary>按指定前缀生成规则名。</summary>
     internal static string Build(string prefix, string programPath)
+        => Build(prefix, programPath, scope: null);
+
+    private static string Build(string prefix, string programPath, RuleScope? scope)
     {
         var fileName = Path.GetFileName(programPath);
         var safeName = SanitizeForRuleName(fileName);
@@ -37,7 +49,10 @@ internal static class RuleNaming
             safeName = safeName[..40];
         }
 
-        return $"{prefix}{safeName}_{ShortHash(programPath)}";
+        var baseName = $"{prefix}{safeName}_{ShortHash(programPath)}";
+        var suffix = scope?.NameSuffix() ?? string.Empty;
+
+        return suffix.Length == 0 ? baseName : $"{baseName}_{suffix}";
     }
 
     /// <summary>

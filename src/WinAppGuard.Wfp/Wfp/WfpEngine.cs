@@ -995,6 +995,74 @@ internal sealed class WfpEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// 5.15：在一个 WFP 事务里执行一组增删。
+    /// 任何一步抛异常都会 Abort，系统状态回到事务开始前。
+    /// </summary>
+    internal void RunInTransaction(Action action, Action? rollback = null)
+    {
+        ThrowIfDisposed();
+
+        var rc = WfpNativeMethods.FwpmTransactionBegin0(_handle, 0);
+
+        if (rc != WfpNativeMethods.ERROR_SUCCESS)
+        {
+            // 动态会话在极老的系统上可能不支持事务：退化成直接执行。
+            // 调用方如果提供了 rollback，就在失败时手工恢复。
+            LocalLog.Warning(
+                $"[WAG-WFP-020] WFP transaction unavailable (0x{rc:X8}); using direct write.");
+
+            try
+            {
+                action();
+            }
+            catch
+            {
+                if (rollback is not null)
+                {
+                    try
+                    {
+                        rollback();
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        LocalLog.Error(
+                            "[WAG-WFP-021] Manual rollback after WFP write failure also failed.",
+                            rollbackError);
+                    }
+                }
+
+                throw;
+            }
+
+            return;
+        }
+
+        var committed = false;
+
+        try
+        {
+            action();
+
+            rc = WfpNativeMethods.FwpmTransactionCommit0(_handle);
+
+            if (rc != WfpNativeMethods.ERROR_SUCCESS)
+            {
+                throw new WfpException("提交 WFP 事务", rc);
+            }
+
+            committed = true;
+        }
+        finally
+        {
+            if (!committed)
+            {
+                // Abort 失败也没法再做更多；保留原始异常更重要。
+                _ = WfpNativeMethods.FwpmTransactionAbort0(_handle);
+            }
+        }
+    }
+
     /// <summary>按 key 删除一条过滤器。不存在时抛 <see cref="WfpException"/>。</summary>
     internal void DeleteFilter(Guid filterKey)
     {

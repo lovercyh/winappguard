@@ -73,16 +73,20 @@ internal static class StrictModeHost
     }
 
     /// <summary>白名单变化后重建会话（没开严格模式时什么都不做）。</summary>
-    internal static void RefreshIfEnabled()
+    internal static StrictModeChangeResult? RefreshIfEnabled()
     {
         lock (Gate)
         {
             var result = StrictModeManager.RefreshIfEnabled();
 
-            if (result is not null)
+            if (result is { Success: false })
             {
-                ServiceLog.Info("WAG-STRICT-003", $"Strict mode session rebuilt after allowlist change: {(result.Success ? "ok" : "failed")}.");
+                ServiceLog.Warning(
+                    "WAG-STRICT-003",
+                    $"Strict mode session rebuild failed; old session kept: {result.Message}");
             }
+
+            return result;
         }
     }
 

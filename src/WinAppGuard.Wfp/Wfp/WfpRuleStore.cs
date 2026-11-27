@@ -65,40 +65,47 @@ internal static class WfpRuleStore
 
         var written = 0;
 
-        foreach (var layer in OutboundLayers)
+        // 5.15：两层写入放在一个事务里。任何一层失败都回滚，
+        // 不会再留下“界面显示已阻止、但只挡了 IPv4”的半条规则。
+        engine.RunInTransaction(() =>
         {
-            var key = FilterKeyFor(rule, layer);
+            written = 0;
 
-            engine.TryDeleteFilter(key);
-
-            if (rule.Scope.IsAny)
+            foreach (var layer in OutboundLayers)
             {
-                engine.AddAppIdFilter(
-                    key,
-                    rule.DisplayName,
-                    rule.Description,
-                    rule.ApplicationPath,
-                    layer,
-                    action,
-                    weight,
-                    persistent);
-            }
-            else
-            {
-                engine.AddScopedAppIdFilter(
-                    key,
-                    rule.DisplayName,
-                    rule.Description,
-                    rule.ApplicationPath,
-                    layer,
-                    action,
-                    weight,
-                    persistent,
-                    rule.Scope);
-            }
+                var key = FilterKeyFor(rule, layer);
 
-            written++;
-        }
+                engine.TryDeleteFilter(key);
+
+                if (rule.Scope.IsAny)
+                {
+                    engine.AddAppIdFilter(
+                        key,
+                        rule.DisplayName,
+                        rule.Description,
+                        rule.ApplicationPath,
+                        layer,
+                        action,
+                        weight,
+                        persistent);
+                }
+                else
+                {
+                    engine.AddScopedAppIdFilter(
+                        key,
+                        rule.DisplayName,
+                        rule.Description,
+                        rule.ApplicationPath,
+                        layer,
+                        action,
+                        weight,
+                        persistent,
+                        rule.Scope);
+                }
+
+                written++;
+            }
+        });
 
         return written;
     }
@@ -135,13 +142,18 @@ internal static class WfpRuleStore
     {
         var removed = 0;
 
-        foreach (var layer in OutboundLayers)
+        engine.RunInTransaction(() =>
         {
-            if (engine.TryDeleteFilter(FilterKeyFor(rule, layer)))
+            removed = 0;
+
+            foreach (var layer in OutboundLayers)
             {
-                removed++;
+                if (engine.TryDeleteFilter(FilterKeyFor(rule, layer)))
+                {
+                    removed++;
+                }
             }
-        }
+        });
 
         return removed;
     }

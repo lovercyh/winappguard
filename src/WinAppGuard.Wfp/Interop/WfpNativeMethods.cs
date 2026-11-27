@@ -331,6 +331,21 @@ internal static class WfpNativeMethods
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static extern uint FwpmEngineClose0(IntPtr engineHandle);
 
+    // ---------------- 5.15：WFP 事务 ----------------
+
+    /// <summary>开始事务：期间的所有增删在 Commit 前都不会真正生效。</summary>
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmTransactionBegin0(IntPtr engineHandle, uint flags);
+
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmTransactionCommit0(IntPtr engineHandle);
+
+    [DllImport("fwpuclnt.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    internal static extern uint FwpmTransactionAbort0(IntPtr engineHandle);
+
     [DllImport("fwpuclnt.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static extern uint FwpmSubLayerAdd0(

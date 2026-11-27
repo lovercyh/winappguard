@@ -142,7 +142,10 @@ internal static class RuleEngine
         return deleted;
     }
 
-    /// <summary>删除作用于指定程序的全部规则（阻止 + 允许），返回删除的规则条数。</summary>
+    /// <summary>
+    /// 5.15：删除作用于指定程序的**阻止**规则（不动允许/白名单规则）。
+    /// 「解除阻止」只应该解除阻止，不能顺手把程序踢出白名单。
+    /// </summary>
     internal static int DeleteRulesForProgram(string programPath)
     {
         var fullPath = TryGetFullPath(programPath);
@@ -154,7 +157,8 @@ internal static class RuleEngine
         using var engine = OpenEngine();
 
         var targets = WfpRuleStore.List(engine)
-            .Where(rule => PathsEqual(rule.ApplicationPath, fullPath))
+            .Where(rule => rule.Action == FirewallAction.Block
+                           && PathsEqual(rule.ApplicationPath, fullPath))
             .ToList();
 
         var deleted = 0;
@@ -265,6 +269,13 @@ internal static class RuleEngine
         => GetRules()
             .Where(rule => rule.Action == FirewallAction.Allow)
             .Select(rule => rule.ApplicationPath)
+            .ToList();
+
+    /// <summary>5.15：带范围的允许规则，严格模式用它生成放行过滤器。</summary>
+    internal static List<(string Path, RuleScope Scope)> GetAllowRules()
+        => GetRules()
+            .Where(rule => rule.Action == FirewallAction.Allow)
+            .Select(rule => (rule.ApplicationPath, rule.Scope))
             .ToList();
 
     // ------------------------------------------------------------------

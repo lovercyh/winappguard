@@ -96,12 +96,12 @@ public static class StrictModeManager
                 .ToList();
         }
 
-        // ---- 收集白名单 ----
-        List<string> candidates;
+        // ---- 收集白名单（5.15：连范围一起收集）----
+        List<StrictAllowEntry> entries;
 
         try
         {
-            candidates = RuleEngine.GetAllowRulePrograms();
+            entries = BuildAllowEntries();
         }
         catch (Exception ex)
         {
@@ -109,21 +109,10 @@ public static class StrictModeManager
             return new StrictModeChangeResult(false, $"读取白名单失败：{ex.Message}");
         }
 
-        var selfPath = Environment.ProcessPath;
-        if (!string.IsNullOrEmpty(selfPath))
-        {
-            candidates.Add(selfPath);
-        }
-
-        candidates.AddRange(_extraPrograms);
-
-        var systemPaths = SystemAllowList.GetPaths();
-        candidates.AddRange(systemPaths);
-
         // ---- 建会话 ----
         try
         {
-            _session = WfpStrictSession.Start(candidates);
+            _session = WfpStrictSession.Start(entries);
         }
         catch (Exception ex)
         {
@@ -135,7 +124,7 @@ public static class StrictModeManager
 
         var message =
             $"严格模式已开启：只放行 {_session.PermittedPrograms.Count} 个程序" +
-            $"（白名单 + 本程序 + {systemPaths.Count} 个系统必需程序）。" +
+            "（白名单 + 本程序 + 系统必需程序，按规则里设置的协议/端口范围）。" +
             "程序退出或崩溃时会自动撤销。";
 
         LocalLog.Operation($"[WAG-STRICT-012] Strict mode enabled: {_session.PermittedPrograms.Count} programs permitted.");
@@ -166,13 +155,68 @@ public static class StrictModeManager
     /// </summary>
     public static StrictModeChangeResult? RefreshIfEnabled()
     {
-        if (!IsEnabled)
+        if (!IsEnabled || _session is null)
         {
             return null;
         }
 
-        Disable();
-        return Enable();
+        List<StrictAllowEntry> entries;
+
+        try
+        {
+            entries = BuildAllowEntries();
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Error("[WAG-STRICT-018] Failed to read the allowlist while refreshing.", ex);
+            return new StrictModeChangeResult(false, $"读取白名单失败：{ex.Message}");
+        }
+
+        Exception? lastError = null;
+
+        // 失败时旧会话不会被拆掉；这里再重试一次，覆盖 BFE 的瞬时忙。
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                _session.Rebuild(entries);
+                LocalLog.Info("[WAG-STRICT-003] Strict mode session rebuilt after allowlist change: ok.");
+                return new StrictModeChangeResult(
+                    true,
+                    $"严格模式已刷新：{_session.PermittedPrograms.Count} 个程序按规则范围放行。");
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+
+                if (attempt == 0)
+                {
+                    Thread.Sleep(100);
+                }
+            }
+        }
+
+        LocalLog.Error("[WAG-STRICT-003] Strict mode session rebuild failed; old session kept.", lastError);
+        return new StrictModeChangeResult(
+            false,
+            $"刷新严格模式失败（旧白名单仍然生效）：{lastError?.Message}");
+    }
+
+    /// <summary>5.15：白名单规则 + 本程序 + 系统必需程序，按范围整理成放行清单。</summary>
+    private static List<StrictAllowEntry> BuildAllowEntries()
+    {
+        var extras = new List<string>(_extraPrograms);
+        var selfPath = Environment.ProcessPath;
+
+        if (!string.IsNullOrEmpty(selfPath))
+        {
+            extras.Add(selfPath);
+        }
+
+        return StrictAllowPlanner.Build(
+            RuleEngine.GetAllowRules(),
+            SystemAllowList.GetPaths(),
+            extras);
     }
 
     /// <summary>

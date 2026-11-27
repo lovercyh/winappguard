@@ -117,10 +117,13 @@ public sealed partial class MainForm
         _firstSeenDefaultBlockCheckBox = new CheckBox
         {
             AutoSize = true,
-            Text = Localizer.T("新程序默认阻止并弹窗询问（高风险）"),
+            Text = Localizer.T("发现新程序联网后自动阻止（高风险；只阻止后续连接）"),
             ForeColor = Color.FromArgb(180, 30, 30),
             Margin = new Padding(0, 3, 0, 0),
         };
+        _toolTip.SetToolTip(
+            _firstSeenDefaultBlockCheckBox,
+            Localizer.T("检测发生在连接建立之后，第一条连接可能已经完成；只能阻止该程序后续的连接。"));
         _firstSeenDefaultBlockCheckBox.CheckedChanged += OnFirstSeenDefaultBlockChanged;
         defaultBlockRow.Controls.Add(_firstSeenDefaultBlockCheckBox);
 
@@ -417,8 +420,8 @@ public sealed partial class MainForm
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
-            title: "开启新程序默认阻止",
-            question: "开启后，新程序会被临时阻止并弹出居中确认框。确定继续吗？",
+            title: "开启新程序自动阻止",
+            question: "开启后，发现新程序联网时会先临时阻止它，再弹窗询问是否允许。确定继续吗？",
             details: new[]
             {
                 new KeyValuePair<string, string>(
@@ -436,9 +439,9 @@ public sealed partial class MainForm
                 "这是高风险功能：新程序的第一条连接可能已经建立，只能阻止它后续的连接。",
                 "当前只检测 TCP；只使用 UDP 的程序可能不会触发这个弹窗。",
                 "受保护进程（本程序、svchost / lsass 等系统关键进程）不会被阻止。",
-                "临时阻止只在本功能运行期间有效；关闭默认阻止或主模式会立即释放。",
+                "临时阻止只在本功能运行期间有效；关闭自动阻止或主模式会立即释放。",
             },
-            confirmText: "开启默认阻止");
+            confirmText: "开启自动阻止");
 
         if (!confirmed)
         {

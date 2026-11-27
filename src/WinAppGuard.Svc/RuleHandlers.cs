@@ -173,11 +173,13 @@ internal sealed class RuleHandlers
 
     private StatusView StrictRefresh(ServiceRequest request)
     {
-        StrictModeHost.RefreshIfEnabled();
+        var result = StrictModeHost.RefreshIfEnabled();
 
         return new StatusView
         {
-            Ok = true,
+            Ok = result?.Success ?? true,
+            Error = result is { Success: false } ? result.Message : null,
+            Message = result?.Message,
             Status = ControlServer.BuildStatus(),
         };
     }
@@ -421,7 +423,14 @@ internal sealed class RuleHandlers
                     _lastTamperUtc = DateTime.UtcNow;
 
                     // 白名单可能被重建过：严格模式会话要跟着更新。
-                    StrictModeHost.RefreshIfEnabled();
+                    var strictResult = StrictModeHost.RefreshIfEnabled();
+
+                    if (strictResult is { Success: false })
+                    {
+                        ServiceLog.Warning(
+                            "WAG-STRICT-019",
+                            $"Strict mode refresh failed after tamper rebuild; old session kept: {strictResult.Message}");
+                    }
 
                     SaveSnapshotNow();
                     ServiceLog.Warning(
@@ -799,15 +808,19 @@ internal sealed class RuleHandlers
         ApplyGroup(name, request.Group);
 
         // 严格模式开着时，白名单变化必须重建会话，否则新加的程序仍然上不了网。
+        StrictModeChangeResult? strictResult = null;
+
         if (action.Value == FirewallAction.Allow)
         {
-            StrictModeHost.RefreshIfEnabled();
+            strictResult = StrictModeHost.RefreshIfEnabled();
         }
 
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-001", $"Rule {(action.Value == FirewallAction.Block ? "block" : "allow")}: {path} ({name}).");
 
-        return new WriteResult { Ok = true, Affected = 1 };
+        var result = new WriteResult { Ok = true, Affected = 1 };
+        ApplyStrictWarning(result, strictResult);
+        return result;
     }
 
     private WriteResult AddIp(ServiceRequest request)
@@ -845,12 +858,14 @@ internal sealed class RuleHandlers
         _groups.SetGroup(name, string.Empty);
         _groups.Save();
 
-        StrictModeHost.RefreshIfEnabled();
+        var strictResult = StrictModeHost.RefreshIfEnabled();
         SaveSnapshotNow();
 
         ServiceLog.Operation("WAG-RULE-003", $"Rule deleted: {name}.");
 
-        return new WriteResult { Ok = true, Affected = 1 };
+        var result = new WriteResult { Ok = true, Affected = 1 };
+        ApplyStrictWarning(result, strictResult);
+        return result;
     }
 
     private WriteResult DeleteForProgram(ServiceRequest request)
@@ -862,20 +877,64 @@ internal sealed class RuleHandlers
             return Fail(request, "没有提供程序路径。");
         }
 
-        var deleted = RuleEngine.DeleteRulesForProgram(path);
+        // 5.15：默认只删阻止规则；白名单页显式传 Action=allow 时才删允许规则。
+        var action = string.IsNullOrWhiteSpace(request.Action)
+                     || string.Equals(request.Action, "block", StringComparison.OrdinalIgnoreCase)
+            ? FirewallAction.Block
+            : string.Equals(request.Action, "allow", StringComparison.OrdinalIgnoreCase)
+                ? FirewallAction.Allow
+                : (FirewallAction?)null;
+
+        if (action is null)
+        {
+            return Fail(request, "动作只能是 block 或 allow。");
+        }
+
+        var names = RuleDeletionPlanner.SelectRulesForProgram(
+            RuleEngine.GetRules(), path, action.Value);
+
+        if (names.Count == 0)
+        {
+            return Fail(
+                request,
+                action.Value == FirewallAction.Block
+                    ? "该程序当前没有被本工具阻止。"
+                    : "该程序当前不在白名单里。");
+        }
+
+        var deleted = 0;
+
+        foreach (var name in names)
+        {
+            if (RuleEngine.DeleteRule(name))
+            {
+                deleted++;
+            }
+        }
 
         if (deleted == 0)
         {
-            return Fail(request, "该程序当前没有被本工具阻止。");
+            return Fail(request, "规则删除失败。");
         }
 
         _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
         _groups.Save();
         SaveSnapshotNow();
 
-        ServiceLog.Operation("WAG-RULE-004", $"Rule unblock: {path} ({deleted} rules deleted).");
+        StrictModeChangeResult? strictResult = null;
 
-        return new WriteResult { Ok = true, Affected = deleted };
+        if (action.Value == FirewallAction.Allow)
+        {
+            strictResult = StrictModeHost.RefreshIfEnabled();
+        }
+
+        ServiceLog.Operation(
+            "WAG-RULE-004",
+            $"Rule unblock by program: {path} ({action.Value}, {deleted} rules deleted).");
+
+        var result = new WriteResult { Ok = true, Affected = deleted };
+        ApplyStrictWarning(result, strictResult);
+        return result;
     }
 
     private WriteResult Clear(ServiceRequest request, FirewallAction action)
@@ -886,15 +945,19 @@ internal sealed class RuleHandlers
         _groups.Prune(RuleEngine.GetRules().Select(rule => rule.Name));
         _groups.Save();
 
+        StrictModeChangeResult? strictResult = null;
+
         if (action == FirewallAction.Allow)
         {
-            StrictModeHost.RefreshIfEnabled();
+            strictResult = StrictModeHost.RefreshIfEnabled();
         }
 
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-005", $"Rules cleared ({(action == FirewallAction.Block ? "blocklist" : "allowlist")}): {deleted}.");
 
-        return new WriteResult { Ok = true, Affected = deleted };
+        var result = new WriteResult { Ok = true, Affected = deleted };
+        ApplyStrictWarning(result, strictResult);
+        return result;
     }
 
     /// <summary>CLI --unblock-all：删除本工具创建的全部规则（阻止 + 允许 + IP）。</summary>
@@ -906,12 +969,14 @@ internal sealed class RuleHandlers
         _groups.Save();
 
         // 白名单可能被一起删掉；严格模式会话要重建。
-        StrictModeHost.RefreshIfEnabled();
+        var strictResult = StrictModeHost.RefreshIfEnabled();
 
         SaveSnapshotNow();
         ServiceLog.Operation("WAG-RULE-006", $"Rules cleared by CLI: {deleted}.");
 
-        return new WriteResult { Ok = true, Affected = deleted };
+        var result = new WriteResult { Ok = true, Affected = deleted };
+        ApplyStrictWarning(result, strictResult);
+        return result;
     }
 
     private WriteResult SetGroup(ServiceRequest request)
@@ -980,64 +1045,41 @@ internal sealed class RuleHandlers
         // 5.12：整个导入复用一个 WFP 引擎，避免每条规则一次 BFE 会话。
         using var engine = RuleEngine.OpenBatchEngine();
 
-        var existing = new HashSet<string>(
-            RuleEngine.GetRules(engine).Select(rule => rule.Name), StringComparer.OrdinalIgnoreCase);
+        // 5.15：身份 = 动作 + 路径 + 范围；同名不同范围的规则不会再互相吃掉。
+        var plan = RuleImportPlanner.Plan(
+            document.Rules,
+            expected.Value,
+            RuleEngine.GetRules(engine),
+            path => ProtectedProcesses.IsProtected(path, out _));
 
         var created = 0;
-        var skipped = 0;
-        var failed = 0;
+        var skipped = plan.Skipped;
+        var failed = plan.Invalid;
 
-        foreach (var entry in document.Rules)
+        foreach (var item in plan.ToCreate)
         {
+            var entry = item.Entry;
+
             try
             {
                 string ruleName;
 
-                if (entry.Kind == "ip")
+                if (string.Equals(entry.Kind, "ip", StringComparison.OrdinalIgnoreCase))
                 {
-                    ruleName = new WinAppGuard.Core.Wfp.WfpIpRule(entry.Value).DisplayName;
-
-                    if (!existing.Add(ruleName))
-                    {
-                        skipped++;
-                        continue;
-                    }
-
-                    RuleEngine.CreateIpBlockRule(engine, entry.Value);
+                    ruleName = RuleEngine.CreateIpBlockRule(engine, entry.Value);
                 }
                 else
                 {
-                    if (ProtectedProcesses.IsProtected(entry.Value, out _))
-                    {
-                        skipped++;
-                        continue;
-                    }
-
-                    RuleScope.TryParse(entry.Scope, out var scope);
                     var expiry = RuleExpiry.Parse(entry.Expiry);
 
                     ruleName = expected.Value == FirewallAction.Block
-                        ? RuleNaming.BuildBlockRuleName(entry.Value)
-                        : RuleNaming.BuildAllowRuleName(entry.Value);
-
-                    if (!existing.Add(ruleName))
-                    {
-                        skipped++;
-                        continue;
-                    }
-
-                    if (expected.Value == FirewallAction.Block)
-                    {
-                        RuleEngine.CreateBlockRule(engine, entry.Value, expiry, scope);
-                    }
-                    else
-                    {
-                        RuleEngine.CreateAllowRule(engine, entry.Value, expiry, scope);
-                    }
+                        ? RuleEngine.CreateBlockRule(engine, entry.Value, expiry, item.Scope)
+                        : RuleEngine.CreateAllowRule(engine, entry.Value, expiry, item.Scope);
                 }
 
                 if (entry.Group.Length > 0)
                 {
+                    // 必须用真实规则名（带范围后缀），否则分组会绑到不存在的名字上。
                     _groups.SetGroup(ruleName, entry.Group);
                 }
 
@@ -1052,9 +1094,11 @@ internal sealed class RuleHandlers
 
         _groups.Save();
 
+        StrictModeChangeResult? strictResult = null;
+
         if (expected.Value == FirewallAction.Allow)
         {
-            StrictModeHost.RefreshIfEnabled();
+            strictResult = StrictModeHost.RefreshIfEnabled();
         }
 
         SaveSnapshotNow();
@@ -1064,7 +1108,7 @@ internal sealed class RuleHandlers
             $"Rules imported: created {created}, skipped {skipped}, failed {failed}, "
             + $"engineOpens=1, elapsed={watch.ElapsedMilliseconds}ms.");
 
-        return new WriteResult
+        var result = new WriteResult
         {
             Ok = true,
             Affected = created,
@@ -1072,6 +1116,9 @@ internal sealed class RuleHandlers
             Failed = failed,
             Error = failed > 0 ? $"有 {failed} 条失败（详见服务日志）。" : null,
         };
+
+        ApplyStrictWarning(result, strictResult);
+        return result;
     }
 
     private WriteResult ImportGroups(ServiceRequest request)
@@ -1091,6 +1138,17 @@ internal sealed class RuleHandlers
         {
             _groups.SetGroup(ruleName, group);
             _groups.Save();
+        }
+    }
+
+    /// <summary>5.15：规则已写入，但严格模式会话刷新失败时给出非致命提醒。</summary>
+    private static void ApplyStrictWarning(
+        ResponsePayload response, StrictModeChangeResult? result)
+    {
+        if (result is { Success: false })
+        {
+            response.Warning =
+                $"规则已保存，但严格模式刷新失败（旧白名单仍然生效）：{result.Message}";
         }
     }
 

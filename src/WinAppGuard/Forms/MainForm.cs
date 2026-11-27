@@ -2376,6 +2376,8 @@ public partial class MainForm : Form
 
             LocalLog.Operation(LocalLog.Pick($"加入白名单：{path}（范围 {scope.Describe()}）", $"Add to allowlist: {path} (scope {DescribeScopeEnglish(scope)})."));
             AfterRulesChanged();
+            RefreshStrictModeStatus();
+            ShowServiceWarning(response);
         }
         catch (Exception ex)
         {
@@ -2505,6 +2507,8 @@ public partial class MainForm : Form
 
             LocalLog.Operation(LocalLog.Pick($"清空白名单：实际删除 {response.Affected} 条允许规则", $"Clear allowlist: {response.Affected} allow rules deleted."));
             AfterRulesChanged();
+            RefreshStrictModeStatus();
+            ShowServiceWarning(response);
         }
         catch (Exception ex)
         {
@@ -2770,7 +2774,17 @@ public partial class MainForm : Form
 
         AfterRulesChanged();
 
+        if (scope == FirewallAction.Allow)
+        {
+            RefreshStrictModeStatus();
+        }
+
         var lines = new List<string> { $"新建 {response.Affected} 条" };
+
+        if (!string.IsNullOrWhiteSpace(response.Warning))
+        {
+            lines.Add(response.Warning);
+        }
 
         if (!string.IsNullOrWhiteSpace(response.Error))
         {
@@ -2782,10 +2796,11 @@ public partial class MainForm : Form
         UiMessageBox.Show(
             this,
             "导入完成：\n\n" + string.Join(Environment.NewLine, lines.Select(line => "· " + line)) +
-            "\n\n已存在的同名规则会自动跳过；受保护程序也会跳过。",
+            "\n\n已存在的同一规则（动作/程序/范围都相同）会自动跳过；受保护程序也会跳过。",
             AppConstants.AppName,
             MessageBoxButtons.OK,
             string.IsNullOrWhiteSpace(response.Error)
+                && string.IsNullOrWhiteSpace(response.Warning)
                 ? MessageBoxIcon.Information
                 : MessageBoxIcon.Warning);
     }
@@ -4063,6 +4078,11 @@ public partial class MainForm : Form
                 lines.Add(response.Error);
             }
 
+            if (!string.IsNullOrWhiteSpace(response.Warning))
+            {
+                lines.Add(response.Warning);
+            }
+
             if (added == 0
                 && response.Affected == 0
                 && response.Skipped == 0
@@ -4078,7 +4098,9 @@ public partial class MainForm : Form
                 string.Join(Environment.NewLine, lines),
                 AppConstants.AppName,
                 MessageBoxButtons.OK,
-                response.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                response.Failed > 0 || !string.IsNullOrWhiteSpace(response.Warning)
+                    ? MessageBoxIcon.Warning
+                    : MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -4133,8 +4155,9 @@ public partial class MainForm : Form
             },
             warnings: new[]
             {
-                "只会删除下面这些由 WinAppGuard 创建的规则：",
+                "只会删除下面这些由 WinAppGuard 创建的阻止规则：",
                 ruleList,
+                "不会删除该程序的白名单/允许规则，也不会改动严格模式白名单。",
                 "不会创建任何允许规则 —— 2.0 起默认就是放行，删掉阻止规则就等于恢复联网。",
                 "其他程序、以及系统和其他软件设置的防火墙规则一律不受影响。",
                 "删除后该程序可以立刻重新联网；如果它没有自己恢复，重启该程序即可。",
@@ -4150,7 +4173,11 @@ public partial class MainForm : Form
         {
             var response = await CallServiceAsync<WriteResult>(
                 ServiceProtocol.Commands.DeleteRulesForProgram,
-                new ServiceRequest { Value = programPath },
+                new ServiceRequest
+                {
+                    Value = programPath,
+                    Action = "block",
+                },
                 "允许联网");
 
             if (response is null)
@@ -4280,6 +4307,8 @@ public partial class MainForm : Form
 
             LocalLog.Operation(LocalLog.Pick($"加入白名单：{programPath}", $"Add to allowlist: {programPath}."));
             AfterRulesChanged();
+            RefreshStrictModeStatus();
+            ShowServiceWarning(response);
         }
         catch (Exception ex)
         {
@@ -4295,11 +4324,33 @@ public partial class MainForm : Form
     /// </summary>
     private async void RemoveFromWhitelist(string programPath, string programName)
     {
-        var ruleName = RuleNaming.BuildAllowRuleName(programPath);
+        // 5.15：同一程序可能有多条不同范围的允许规则，必须全部列出并按真实名字删除。
+        var rules = _appGuardRules
+            .Where(rule => rule.Action == FirewallAction.Allow
+                           && PathsEqual(rule.ApplicationPath, programPath))
+            .ToList();
+
+        if (rules.Count == 0)
+        {
+            AfterRulesChanged();
+            UiMessageBox.Show(
+                this,
+                $"「{programName}」当前不在白名单里。已重新同步规则状态。",
+                AppConstants.AppName,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var ruleNames = rules
+            .Select(rule => rule.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         var warnings = new List<string>
         {
-            $"会删掉这条「允许出站」规则：{ruleName}",
+            "会删除这些「允许出站」规则：",
+            string.Join(Environment.NewLine, ruleNames.Select(name => "    " + name)),
         };
 
         if (_strictModeEnabled)
@@ -4312,7 +4363,7 @@ public partial class MainForm : Form
             warnings.Add("严格模式当前没开，所以删掉它暂时不改变什么。");
         }
 
-        warnings.Add("只会删掉这一条规则，其它规则不受影响。");
+        warnings.Add("只会删除这个程序的白名单规则，其它规则不受影响。");
 
         var confirmed = ConfirmForm.Show(
             owner: DialogOwner,
@@ -4322,7 +4373,7 @@ public partial class MainForm : Form
             {
                 new KeyValuePair<string, string>("程序名", programName),
                 new KeyValuePair<string, string>("完整路径", programPath),
-                new KeyValuePair<string, string>("将删除规则", ruleName),
+                new KeyValuePair<string, string>("将删除规则", $"{ruleNames.Count} 条"),
             },
             warnings: warnings.ToArray(),
             confirmText: "移出白名单");
@@ -4335,19 +4386,26 @@ public partial class MainForm : Form
         try
         {
             var response = await CallServiceAsync<WriteResult>(
-                ServiceProtocol.Commands.DeleteRule,
-                new ServiceRequest { RuleName = ruleName },
+                ServiceProtocol.Commands.DeleteRulesForProgram,
+                new ServiceRequest
+                {
+                    Value = programPath,
+                    Action = "allow",
+                },
                 "移出白名单");
 
             if (response is null)
             {
-                // 规则可能已经在别处被删掉：同步一次，让界面回到真实状态。
-                AfterRulesChanged();
                 return;
             }
 
-            LocalLog.Operation(LocalLog.Pick($"移出白名单：{programPath}（规则 {ruleName}）", $"Remove from allowlist: {programPath} (rule {ruleName})."));
+            LocalLog.Operation(LocalLog.Pick(
+                $"移出白名单：{programPath}（删除 {response.Affected} 条允许规则）",
+                $"Remove from allowlist: {programPath} ({response.Affected} allow rules deleted)."));
+
             AfterRulesChanged();
+            RefreshStrictModeStatus();
+            ShowServiceWarning(response);
         }
         catch (Exception ex)
         {
@@ -4408,6 +4466,13 @@ public partial class MainForm : Form
 
             LocalLog.Operation(LocalLog.Pick($"删除规则：{rule.Name}（程序 {rule.ApplicationPath}）", $"Delete rule: {rule.Name} (program {rule.ApplicationPath})."));
             AfterRulesChanged();
+
+            if (rule.Action == FirewallAction.Allow)
+            {
+                RefreshStrictModeStatus();
+            }
+
+            ShowServiceWarning(response);
         }
         catch (Exception ex)
         {
@@ -5308,6 +5373,26 @@ public partial class MainForm : Form
             RuleExpiryKind.OnNextBoot => "until next restart",
             _ => "permanent",
         };
+
+    /// <summary>5.15：操作成功但带 Warning 时统一提示（通常意味着严格模式刷新失败）。</summary>
+    private void ShowServiceWarning(ResponsePayload? response)
+    {
+        if (response is null || string.IsNullOrWhiteSpace(response.Warning))
+        {
+            return;
+        }
+
+        LocalLog.Warning(LocalLog.Pick(
+            $"操作警告：{response.Warning}",
+            $"Operation warning: {response.Warning}"));
+
+        UiMessageBox.Show(
+            this,
+            response.Warning,
+            AppConstants.AppName,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
+    }
 
     private void ShowError(string what, Exception ex, string? whatEnglish = null)
     {

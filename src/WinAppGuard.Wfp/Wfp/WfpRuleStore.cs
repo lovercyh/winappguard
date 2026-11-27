@@ -54,6 +54,20 @@ internal static class WfpRuleStore
     /// </summary>
     internal static int Add(WfpEngine engine, WfpRule rule)
     {
+        var written = 0;
+
+        // 5.15：两层写入放在一个事务里。任何一层失败都回滚，
+        // 不会再留下“界面显示已阻止、但只挡了 IPv4”的半条规则。
+        engine.RunInTransaction(
+            () => written = AddFilters(engine, rule),
+            rollback: () => DeleteFilters(engine, rule));
+
+        return written;
+    }
+
+    /// <summary>写两层过滤器；调用方负责事务。</summary>
+    private static int AddFilters(WfpEngine engine, WfpRule rule)
+    {
         var (action, weight) = rule.Action == FirewallAction.Block
             ? (WfpNativeMethods.FWP_ACTION_BLOCK, WeightBlock)
             : (WfpNativeMethods.FWP_ACTION_PERMIT, WeightAllow);
@@ -65,49 +79,50 @@ internal static class WfpRuleStore
 
         var written = 0;
 
-        // 5.15：两层写入放在一个事务里。任何一层失败都回滚，
-        // 不会再留下“界面显示已阻止、但只挡了 IPv4”的半条规则。
-        engine.RunInTransaction(() =>
+        foreach (var layer in OutboundLayers)
         {
-            written = 0;
+            var key = FilterKeyFor(rule, layer);
 
-            foreach (var layer in OutboundLayers)
+            engine.TryDeleteFilter(key);
+
+            if (rule.Scope.IsAny)
             {
-                var key = FilterKeyFor(rule, layer);
-
-                engine.TryDeleteFilter(key);
-
-                if (rule.Scope.IsAny)
-                {
-                    engine.AddAppIdFilter(
-                        key,
-                        rule.DisplayName,
-                        rule.Description,
-                        rule.ApplicationPath,
-                        layer,
-                        action,
-                        weight,
-                        persistent);
-                }
-                else
-                {
-                    engine.AddScopedAppIdFilter(
-                        key,
-                        rule.DisplayName,
-                        rule.Description,
-                        rule.ApplicationPath,
-                        layer,
-                        action,
-                        weight,
-                        persistent,
-                        rule.Scope);
-                }
-
-                written++;
+                engine.AddAppIdFilter(
+                    key,
+                    rule.DisplayName,
+                    rule.Description,
+                    rule.ApplicationPath,
+                    layer,
+                    action,
+                    weight,
+                    persistent);
             }
-        });
+            else
+            {
+                engine.AddScopedAppIdFilter(
+                    key,
+                    rule.DisplayName,
+                    rule.Description,
+                    rule.ApplicationPath,
+                    layer,
+                    action,
+                    weight,
+                    persistent,
+                    rule.Scope);
+            }
+
+            written++;
+        }
 
         return written;
+    }
+
+    private static void DeleteFilters(WfpEngine engine, WfpRule rule)
+    {
+        foreach (var layer in OutboundLayers)
+        {
+            engine.TryDeleteFilter(FilterKeyFor(rule, layer));
+        }
     }
 
     /// <summary>
@@ -142,18 +157,24 @@ internal static class WfpRuleStore
     {
         var removed = 0;
 
-        engine.RunInTransaction(() =>
-        {
-            removed = 0;
-
-            foreach (var layer in OutboundLayers)
+        engine.RunInTransaction(
+            () =>
             {
-                if (engine.TryDeleteFilter(FilterKeyFor(rule, layer)))
+                removed = 0;
+
+                foreach (var layer in OutboundLayers)
                 {
-                    removed++;
+                    if (engine.TryDeleteFilter(FilterKeyFor(rule, layer)))
+                    {
+                        removed++;
+                    }
                 }
-            }
-        });
+            },
+            rollback: () =>
+            {
+                // 降级路径：把两层恢复回去，避免只删掉一半。
+                _ = AddFilters(engine, rule);
+            });
 
         return removed;
     }

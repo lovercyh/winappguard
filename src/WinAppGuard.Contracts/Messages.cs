@@ -335,6 +335,12 @@ public sealed class NetworkAlertDto
 
     public string Category { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 5.14：设置里的规则分类 id（malware / exploit / dns / ja3 / coinminer /
+    /// phishing / web_client / other）；空字符串表示无法归类（如全量档额外规则）。
+    /// </summary>
+    public string RuleCategory { get; set; } = string.Empty;
+
     public string Protocol { get; set; } = string.Empty;
 
     public string AppProto { get; set; } = string.Empty;

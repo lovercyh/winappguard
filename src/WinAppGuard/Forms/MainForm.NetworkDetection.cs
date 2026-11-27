@@ -1,5 +1,6 @@
 using WinAppGuard.Contracts;
 using WinAppGuard.Contracts.Protocol;
+using WinAppGuard.Core.Diagnostics.NetworkDetection;
 using WinAppGuard.Localization;
 
 namespace WinAppGuard.Forms;
@@ -14,6 +15,9 @@ public sealed partial class MainForm
 {
     private const int NetworkDetectionRefreshIntervalMs = 3000;
 
+    /// <summary>分类筛选里的“未分类”哨兵值；空字符串表示“全部分类”。</summary>
+    private const string UncategorizedFilter = "__none";
+
     private TabPage _tabNetworkDetection = null!;
     private Label _ndNoticeLabel = null!;
     private Label _ndStatusLabel = null!;
@@ -25,8 +29,10 @@ public sealed partial class MainForm
     private Button _ndClearButton = null!;
     private Button _ndSettingsButton = null!;
     private CheckBox _ndAutoRefreshCheckBox = null!;
+    private ComboBox _ndCategoryFilter = null!;
     private DataGridViewBuffered _ndGrid = null!;
     private ListBox _ndBlocks = null!;
+    private int _ndCategoryColumnIndex = -1;
 
     private List<NetworkAlertDto> _ndAlerts = new();
     private List<NetworkBlockDto> _ndBlockList = new();
@@ -106,6 +112,45 @@ public sealed partial class MainForm
         var exportButton = new Button { Text = Localizer.T("导出…"), Width = 84 };
         exportButton.Click += (_, _) => ExportNetworkAlertsView();
 
+        var filterLabel = new Label
+        {
+            Text = Localizer.T("分类："),
+            AutoSize = true,
+            Margin = new Padding(12, 9, 2, 3),
+        };
+
+        _ndCategoryFilter = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 132,
+            Margin = new Padding(0, 5, 3, 3),
+        };
+
+        _ndCategoryFilter.Items.Add(
+            new CategoryFilterOption(string.Empty, Localizer.T("全部分类")));
+
+        foreach (var category in NetworkRuleCategories.All)
+        {
+            _ndCategoryFilter.Items.Add(new CategoryFilterOption(
+                category,
+                Localizer.T(NetworkRuleCategories.DisplayName(category))));
+        }
+
+        _ndCategoryFilter.Items.Add(
+            new CategoryFilterOption(UncategorizedFilter, Localizer.T("未分类")));
+        _ndCategoryFilter.SelectedIndex = 0;
+        _ndCategoryFilter.SelectedIndexChanged += (_, _) => RebuildNetworkDetection();
+
+        var filterPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Margin = new Padding(0),
+        };
+        filterPanel.Controls.Add(filterLabel);
+        filterPanel.Controls.Add(_ndCategoryFilter);
+
         _ndAutoRefreshCheckBox = new CheckBox
         {
             AutoSize = true,
@@ -123,6 +168,7 @@ public sealed partial class MainForm
         actions.Controls.Add(_ndClearButton);
         actions.Controls.Add(_ndSettingsButton);
         actions.Controls.Add(exportButton);
+        actions.Controls.Add(filterPanel);
         actions.Controls.Add(_ndAutoRefreshCheckBox);
 
         top.Controls.Add(actions);
@@ -154,6 +200,12 @@ public sealed partial class MainForm
             DataPropertyName = nameof(NdRow.SeverityText),
             HeaderText = Localizer.T("级别"),
             Width = 68,
+        });
+        _ndCategoryColumnIndex = _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            DataPropertyName = nameof(NdRow.CategoryText),
+            HeaderText = Localizer.T("分类"),
+            Width = 92,
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
@@ -193,6 +245,19 @@ public sealed partial class MainForm
         });
 
         _ndGrid.SelectionChanged += (_, _) => UpdateNetworkButtons();
+        _ndGrid.CellToolTipTextNeeded += (_, e) =>
+        {
+            if (e.RowIndex < 0
+                || e.ColumnIndex != _ndCategoryColumnIndex
+                || _ndGrid.Rows[e.RowIndex].DataBoundItem is not NdRow row
+                || string.IsNullOrWhiteSpace(row.CategoryRaw))
+            {
+                return;
+            }
+
+            // 分类列悬停时补充 Suricata 的原始粗分类，全量档的“未分类”也有上下文。
+            e.ToolTipText = row.CategoryRaw;
+        };
         _ndGrid.CellDoubleClick += (_, e) =>
         {
             if (e.RowIndex >= 0)
@@ -321,12 +386,18 @@ public sealed partial class MainForm
 
     private void RebuildNetworkDetection()
     {
+        var filter = (_ndCategoryFilter?.SelectedItem as CategoryFilterOption)?.Id
+                     ?? string.Empty;
+
         var rows = _ndAlerts
+            .Where(alert => MatchesCategoryFilter(alert, filter))
             .Select(alert => new NdRow
             {
                 Id = alert.Id,
                 TimeText = alert.TimeUtc.ToLocalTime().ToString("MM-dd HH:mm:ss"),
                 SeverityText = alert.Severity,
+                CategoryText = CategoryText(alert.RuleCategory),
+                CategoryRaw = alert.Category,
                 StatusText = Localizer.T(alert.Status switch
                 {
                     "ack" => "已读",
@@ -497,11 +568,15 @@ public sealed partial class MainForm
         _ndLastNotifiedId = newest.Id;
         _ndLastNotifyUtc = DateTime.UtcNow;
 
+        var signature = NetworkRuleCategories.IsKnown(newest.RuleCategory)
+            ? $"[{Localizer.T(NetworkRuleCategories.DisplayName(newest.RuleCategory))}] {newest.Signature}"
+            : newest.Signature;
+
         ShowTrayBalloon(
             "反网络攻击高危告警",
             Localizer.F(
                 "{0}\n{1}:{2}  {3}",
-                newest.Signature,
+                signature,
                 newest.RemoteAddress,
                 newest.RemotePort,
                 newest.ProcessName),
@@ -763,11 +838,40 @@ public sealed partial class MainForm
         RefreshNetworkDetection();
     }
 
+    private static bool MatchesCategoryFilter(NetworkAlertDto alert, string filter)
+    {
+        if (filter.Length == 0)
+        {
+            return true;
+        }
+
+        var category = alert.RuleCategory ?? string.Empty;
+
+        if (string.Equals(filter, UncategorizedFilter, StringComparison.Ordinal))
+        {
+            return !NetworkRuleCategories.IsKnown(category);
+        }
+
+        return string.Equals(category, filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CategoryText(string? category)
+        => NetworkRuleCategories.IsKnown(category)
+            ? Localizer.T(NetworkRuleCategories.DisplayName(category!))
+            : Localizer.T("未分类");
+
+    private sealed record CategoryFilterOption(string Id, string Text)
+    {
+        public override string ToString() => Text;
+    }
+
     private sealed class NdRow
     {
         public string Id { get; init; } = string.Empty;
         public string TimeText { get; init; } = string.Empty;
         public string SeverityText { get; init; } = string.Empty;
+        public string CategoryText { get; init; } = string.Empty;
+        public string CategoryRaw { get; init; } = string.Empty;
         public string StatusText { get; init; } = string.Empty;
         public string Signature { get; init; } = string.Empty;
         public string RemoteAddress { get; init; } = string.Empty;

@@ -129,6 +129,23 @@ public sealed class ResponseSemanticsTests
     }
 
     [Fact]
+    public void NetworkAlertRuleCategoryRoundTrips()
+    {
+        var dto = new NetworkAlertDto
+        {
+            Signature = "ET MALWARE demo",
+            RuleCategory = "malware",
+        };
+
+        var element = JsonSerializer.SerializeToElement(
+            dto, typeof(NetworkAlertDto), ServiceProtocol.JsonOptions);
+        var back = element.Deserialize<NetworkAlertDto>(ServiceProtocol.JsonOptions);
+
+        Assert.NotNull(back);
+        Assert.Equal("malware", back!.RuleCategory);
+    }
+
+    [Fact]
     public void WriteCommandsDoNotExposeFeatureCollections()
     {
         // 写命令只带 Affected / Message，不再回传整套检测数据。

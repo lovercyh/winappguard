@@ -1205,8 +1205,8 @@ internal static class CliRunner
         {
             Console.WriteLine($"# WinAppGuard {VersionText} — {T("网络告警", "network alerts")}：{alerts.Count} {T("条", "entry/entries")}");
             Console.WriteLine(T(
-                "# 时间\t级别\t状态\t规则\t远端\t进程\t证据",
-                "# time\tseverity\tstatus\trule\tremote\tprocess\tevidence"));
+                "# 时间\t级别\t分类\t状态\t规则\t远端\t进程\t证据",
+                "# time\tseverity\tcategory\tstatus\trule\tremote\tprocess\tevidence"));
 
             foreach (var alert in alerts)
             {
@@ -1219,7 +1219,7 @@ internal static class CliRunner
 
                 Console.WriteLine(
                     $"{alert.TimeUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}\t" +
-                    $"{alert.Severity}\t{statusText}\t{alert.Signature}\t" +
+                    $"{alert.Severity}\t{AlertCategoryText(alert.RuleCategory)}\t{statusText}\t{alert.Signature}\t" +
                     $"{alert.RemoteAddress}:{alert.RemotePort}\t" +
                     $"{alert.ProcessName}\t{alert.Evidence}");
             }
@@ -1227,6 +1227,11 @@ internal static class CliRunner
 
         return ExitOk;
     }
+
+    private static string AlertCategoryText(string? category)
+        => NetworkRuleCategories.IsKnown(category)
+            ? Localizer.T(NetworkRuleCategories.DisplayName(category!))
+            : Localizer.T("未分类");
 
     private static int RunNetworkAck(CommandLineOptions options)
     {

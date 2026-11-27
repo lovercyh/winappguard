@@ -103,6 +103,7 @@ internal static class NetworkDetectionHost
         }
 
         NetworkBlockHost.Start();
+        NetworkRuleCategoryIndex.WarmUp();
 
         if (Enabled)
         {
@@ -679,6 +680,7 @@ internal static class NetworkDetectionHost
             Signature = alert.Signature,
             Severity = alert.Severity,
             Category = alert.Category,
+            RuleCategory = NetworkRuleCategoryIndex.Resolve(alert.SignatureId),
             Protocol = alert.Protocol,
             AppProto = alert.AppProto,
             LocalAddress = alert.LocalAddress,

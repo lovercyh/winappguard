@@ -307,7 +307,7 @@ public sealed class NetworkDetectionSettingsDto
     public bool Enabled { get; set; } = true;
 
     /// <summary>standard / full。</summary>
-    public string RuleProfile { get; set; } = "standard";
+    public string RuleProfile { get; set; } = "curated";
 
     public bool Notify { get; set; } = true;
 
@@ -389,7 +389,7 @@ public sealed class NetworkDetectionStatusDto
 
     public int RuleCount { get; set; }
 
-    public string RuleProfile { get; set; } = "standard";
+    public string RuleProfile { get; set; } = "curated";
 
     public string? LastError { get; set; }
 
@@ -1106,6 +1106,19 @@ public sealed class ServiceStatus
 
     /// <summary>6.0：画像摘要（最多 50 条）。</summary>
     public List<ProgramProfileDto>? ProgramProfiles { get; set; }
+
+    /// <summary>6.0：DNS 绕过检测。</summary>
+    public DnsBypassStatusDto? DnsBypass { get; set; }
+}
+
+/// <summary>6.0：DNS 绕过状态。</summary>
+public sealed class DnsBypassStatusDto
+{
+    public long Count { get; set; }
+
+    public string LastRemote { get; set; } = string.Empty;
+
+    public DateTime? LastUtc { get; set; }
 }
 
 /// <summary>6.0：程序画像摘要。</summary>

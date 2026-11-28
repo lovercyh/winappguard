@@ -464,6 +464,7 @@ public sealed partial class MainForm
 
     private void RebuildLanView()
     {
+        RebuildLanDevicesView();
         var gatewayRows = _lanGateways.Select(item => new LanGatewayRow(item)).ToList();
 
         _lanGatewayTable ??= new BaselineTable<LanGatewayRow>(

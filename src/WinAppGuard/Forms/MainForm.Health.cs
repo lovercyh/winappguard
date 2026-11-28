@@ -70,6 +70,14 @@ public sealed partial class MainForm
                   + (string.IsNullOrWhiteSpace(etw.LastError) ? string.Empty : $"\n最近错误：{etw.LastError}");
         _etwHealthLabel.Text = etwText;
 
+        var dnsBypass = status.DnsBypass;
+        if (dnsBypass is not null)
+        {
+            _etwHealthLabel.Text += "\n" + (Localizer.IsEnglish
+                ? $"DNS bypass: {dnsBypass.Count} event(s); last={dnsBypass.LastRemote} {dnsBypass.LastUtc?.ToLocalTime():HH:mm:ss}"
+                : $"DNS 绕过：{dnsBypass.Count} 次；最近 {dnsBypass.LastRemote} {dnsBypass.LastUtc?.ToLocalTime():HH:mm:ss}");
+        }
+
         var modules = status.Modules;
         if (modules is null || modules.Count == 0)
         {

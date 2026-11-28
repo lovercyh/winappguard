@@ -153,6 +153,9 @@ public sealed class LanState
     /// <summary>4.3：用户信任的 DNS 服务器。</summary>
     public List<string> TrustedDnsServers { get; set; } = new();
 
+    /// <summary>6.0：用户信任的局域网设备 MAC；信任后该 MAC 的 ARP/DHCP 告警静默。</summary>
+    public List<string> TrustedDevices { get; set; } = new();
+
     /// <summary>4.3：DNS 基线就绪时间。</summary>
     public DateTime? DnsBaselineReadyUtc { get; set; }
 

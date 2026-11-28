@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.Diagnostics.Processes;
 using WinAppGuard.Core.Features.ProgramProfile;
 using WinAppGuard.Core.Wfp;
@@ -71,6 +72,14 @@ internal static class StatusBuilder
                 LolbinRule = profile.LastLolbinRule,
             })
             .ToList();
+
+        var dnsBypass = DnsBypassDetector.Snapshot();
+        status.DnsBypass = new DnsBypassStatusDto
+        {
+            Count = dnsBypass.Count,
+            LastRemote = dnsBypass.LastRemote,
+            LastUtc = dnsBypass.LastUtc,
+        };
 
         // 5.12：规则计数来自 RuleSnapshotCache（缓存命中时不开 WFP），
         // 子层存在性单独缓存 1 秒，避免每个 status 都打开 BFE 会话。

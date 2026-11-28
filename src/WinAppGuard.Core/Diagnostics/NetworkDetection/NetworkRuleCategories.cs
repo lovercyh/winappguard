@@ -41,6 +41,17 @@ public static class NetworkRuleCategories
         Other,
     };
 
+    /// <summary>6.0：精选档——高精确度分类，排除钓鱼和“其他”。</summary>
+    public static readonly IReadOnlyList<string> Curated = new[]
+    {
+        Malware,
+        Exploit,
+        Dns,
+        Ja3,
+        Coinminer,
+        WebClient,
+    };
+
     public static bool IsKnown(string? id)
         => !string.IsNullOrWhiteSpace(id)
            && All.Contains(id, StringComparer.OrdinalIgnoreCase);

@@ -571,6 +571,7 @@ public sealed partial class MainForm
         _tabAntiScan.Controls.Add(_protectionTabs);
 
         InitializeLanPage();
+        InitializeLanDevicePage();
         InitializeDnsSecurityPage();
         InitializeIpv6Page();
         InitializeNameResolutionPage();

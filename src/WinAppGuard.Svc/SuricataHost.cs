@@ -96,8 +96,12 @@ internal static class SuricataHost
             _stopping = false;
             _profile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
                 ? "full"
-                : "standard";
-            _enabledCategories = NormalizeCategories(enabledCategories);
+                : string.Equals(ruleProfile, "curated", StringComparison.OrdinalIgnoreCase)
+                    ? "curated"
+                    : "standard";
+            _enabledCategories = _profile == "curated"
+                ? NetworkRuleCategories.Curated
+                : NormalizeCategories(enabledCategories);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             _generation++;
 
@@ -145,8 +149,12 @@ internal static class SuricataHost
         {
             _profile = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase)
                 ? "full"
-                : "standard";
-            _enabledCategories = NormalizeCategories(enabledCategories);
+                : string.Equals(ruleProfile, "curated", StringComparison.OrdinalIgnoreCase)
+                    ? "curated"
+                    : "standard";
+            _enabledCategories = _profile == "curated"
+                ? NetworkRuleCategories.Curated
+                : NormalizeCategories(enabledCategories);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             StopProcessLocked();
             _nextRestartUtc = DateTime.MinValue;

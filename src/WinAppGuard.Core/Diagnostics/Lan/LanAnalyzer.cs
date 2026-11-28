@@ -175,6 +175,13 @@ public sealed class LanAnalyzer
                 ClearCooldownLocked(LanEventKinds.DhcpUnexpectedServer, server.ServerIp);
                 ClearCooldownLocked(LanEventKinds.DhcpMultipleServers, server.Adapter);
             }
+            else if (string.Equals(kind, "device", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_state.TrustedDevices.Contains(value, StringComparer.OrdinalIgnoreCase))
+                {
+                    _state.TrustedDevices.Add(value);
+                }
+            }
             else
             {
                 return false;
@@ -610,6 +617,12 @@ public sealed class LanAnalyzer
         string? targetMac,
         DateTime now)
     {
+        if (!string.IsNullOrWhiteSpace(sourceMac)
+            && _state.TrustedDevices.Contains(sourceMac, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         if (_state.BaselineReadyUtc is null)
         {
             return;

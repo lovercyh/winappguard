@@ -15,7 +15,7 @@ public sealed class NetworkDetectionSettings
     public bool Enabled { get; set; } = true;
 
     /// <summary>standard / full。标准档只加载客户端高价值规则。</summary>
-    public string RuleProfile { get; set; } = "standard";
+    public string RuleProfile { get; set; } = "curated";
 
     public bool Notify { get; set; } = true;
 

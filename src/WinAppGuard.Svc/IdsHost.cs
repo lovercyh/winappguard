@@ -170,7 +170,10 @@ internal static class IdsHost
     // ---------------- 采集回调 ----------------
 
     private static void OnFlow(NetworkFlowObservation observation)
-        => _analyzer.ObserveFlow(observation);
+    {
+        _analyzer.ObserveFlow(observation);
+        DnsBypassDetector.Observe(observation);
+    }
 
     private static void OnDns(DnsQueryRecord record)
         => _analyzer.ObserveDns(new NetworkDnsObservation(

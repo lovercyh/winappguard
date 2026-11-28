@@ -532,7 +532,7 @@ internal static class LanHost
 
         if (!analyzer.Trust(kind, value.Trim(), DateTime.UtcNow))
         {
-            return Error(request, "找不到要信任的网关或 DHCP 服务器。");
+            return Error(request, "找不到要信任的网关、DHCP 服务器或设备。");
         }
 
         SaveState();

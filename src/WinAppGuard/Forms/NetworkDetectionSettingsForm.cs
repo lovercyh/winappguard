@@ -67,10 +67,15 @@ internal sealed class NetworkDetectionSettingsForm : Form
             DropDownStyle = ComboBoxStyle.DropDownList,
             Width = 320,
         };
-        _profile.Items.Add(Localizer.T("标准（推荐，客户端高价值规则）"));
+        _profile.Items.Add(Localizer.T("精选（推荐，高精确度）"));
+        _profile.Items.Add(Localizer.T("标准（客户端高价值规则）"));
         _profile.Items.Add(Localizer.T("全量（ET Open 全部规则，资源占用更高）"));
         _profile.SelectedIndex = string.Equals(
-            current.RuleProfile, "full", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            current.RuleProfile, "full", StringComparison.OrdinalIgnoreCase)
+            ? 2
+            : string.Equals(current.RuleProfile, "standard", StringComparison.OrdinalIgnoreCase)
+                ? 1
+                : 0;
         layout.Controls.Add(_profile, 0, 2);
 
         layout.Controls.Add(new Label
@@ -234,7 +239,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
 
     private void UpdateCategoryState()
     {
-        var enabled = _profile.SelectedIndex != 1;
+        var enabled = _profile.SelectedIndex == 1;
         _categories.Enabled = enabled;
         _selectAll.Enabled = enabled;
         _selectNone.Enabled = enabled;
@@ -316,7 +321,12 @@ internal sealed class NetworkDetectionSettingsForm : Form
             return null;
         }
 
-        var profile = form._profile.SelectedIndex == 1 ? "full" : "standard";
+        var profile = form._profile.SelectedIndex switch
+        {
+            2 => "full",
+            1 => "standard",
+            _ => "curated",
+        };
         var categories = form.SelectedCategories();
 
         if (profile == "standard" && categories.Count == 0)

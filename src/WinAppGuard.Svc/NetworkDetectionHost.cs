@@ -193,9 +193,15 @@ internal static class NetworkDetectionHost
         var requestedProfile = string.Equals(
             dto.RuleProfile, "full", StringComparison.OrdinalIgnoreCase)
             ? "full"
-            : "standard";
+            : string.Equals(dto.RuleProfile, "curated", StringComparison.OrdinalIgnoreCase)
+                ? "curated"
+                : "standard";
 
-        if (requestedCategories.Count == 0)
+        if (requestedProfile == "curated")
+        {
+            requestedCategories = NetworkRuleCategories.Curated.ToList();
+        }
+        else if (requestedCategories.Count == 0)
         {
             if (requestedProfile == "standard")
             {
@@ -210,10 +216,7 @@ internal static class NetworkDetectionHost
             _state.Settings.Enabled = dto.Enabled;
             _state.Settings.Notify = dto.Notify;
             _state.Settings.RetentionDays = Math.Clamp(dto.RetentionDays, 1, 365);
-            _state.Settings.RuleProfile = string.Equals(
-                dto.RuleProfile, "full", StringComparison.OrdinalIgnoreCase)
-                ? "full"
-                : "standard";
+            _state.Settings.RuleProfile = requestedProfile;
             _state.Settings.EnabledRuleCategories = requestedCategories;
             _state.Settings.CaptureDeviceId = dto.CaptureDeviceId?.Trim() ?? string.Empty;
 

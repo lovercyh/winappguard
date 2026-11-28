@@ -221,7 +221,8 @@ internal sealed class AuditService : IDisposable
                     });
                 }
 
-                // ---- 每天清理一次过期文件 ----                if (DateTime.Now >= _nextPurge)
+                // ---- 每天清理一次过期文件 ----
+                if (DateTime.Now >= _nextPurge)
                 {
                     var deleted = _store.PurgeExpired(DateTime.Now);
                     if (deleted > 0)

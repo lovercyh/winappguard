@@ -236,7 +236,10 @@ public sealed partial class MainForm
         };
 
         // 托盘提示：只在用户没看着 IDS 页时每 30 秒查一次，高危才提示。
-        _idsNotifyTimer = new System.Windows.Forms.Timer { Interval = IdsNotifyIntervalMs };
+        _idsNotifyTimer = new System.Windows.Forms.Timer(components!)
+        {
+            Interval = IdsNotifyIntervalMs,
+        };
         _idsNotifyTimer.Tick += (_, _) =>
         {
             if (!IsProtectionTab(_tabIds))
@@ -582,7 +585,7 @@ public sealed partial class MainForm
         _idsSummaryLabel.Text = text;
     }
 
-    private async void UpdateIdsButtons()
+    private void UpdateIdsButtons()
     {
         var selected = SelectedIdsRow();
         var available = !_idsLoading && _idsServiceAvailable;

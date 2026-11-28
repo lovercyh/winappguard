@@ -141,7 +141,7 @@ public sealed record RuleExpiry(RuleExpiryKind Kind, DateTime? ExpiresAtUtc, Dat
         // 保留第 2 条是因为「用户没开自启、手动打开程序」时它仍然能起作用。
         RuleExpiryKind.OnNextBoot when BootTimeUtc is { } boot =>
             freshLogonSession
-            || (currentBootTimeUtc.ToUniversalTime() - boot).Duration() > BootTimeTolerance,
+            || currentBootTimeUtc.ToUniversalTime() - boot > BootTimeTolerance,
 
         // 永久：永远不到期。
         _ => false,

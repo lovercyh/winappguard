@@ -34,7 +34,7 @@ internal static class LanHost
     private static System.Threading.Timer? _timer;
     private static bool _started;
     private static bool _dirty;
-    private static bool _saving;
+    private static int _tickRunning;
     private static DateTime _nextStatsUtc = DateTime.MinValue;
     private static DateTime _nextHintsUtc = DateTime.MinValue;
     private static DateTime _nextSaveUtc = DateTime.MinValue;
@@ -1177,6 +1177,11 @@ internal static class LanHost
 
     private static void Tick()
     {
+        if (Interlocked.Exchange(ref _tickRunning, 1) == 1)
+        {
+            return;
+        }
+
         try
         {
             EnsureCapture();
@@ -1301,25 +1306,30 @@ internal static class LanHost
                 _nextPruneUtc = now.AddHours(6);
             }
 
+            bool saveNow = false;
+
             lock (Gate)
             {
                 if (_dirty && now >= _nextSaveUtc)
                 {
                     _nextSaveUtc = now.Add(SaveInterval);
                     _dirty = false;
-                    _saving = true;
+                    saveNow = true;
                 }
             }
 
-            if (_saving)
+            if (saveNow)
             {
                 SaveState();
-                _saving = false;
             }
         }
         catch (Exception ex)
         {
             ServiceLog.Warning("WAG-LAN-016", "LAN detection tick failed.", ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _tickRunning, 0);
         }
     }
 

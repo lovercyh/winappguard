@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace WinAppGuard.Core.Storage;
@@ -30,6 +31,9 @@ public sealed class JsonStateFile<T> where T : class, new()
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
+
+    private static readonly ConcurrentDictionary<string, object> PathLocks =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>迁移函数可复用的反序列化：与状态文件相同的 camelCase/大小写不敏感选项。</summary>
     public static T? Deserialize(JsonElement element) => element.Deserialize<T>(JsonOptions);
@@ -158,56 +162,62 @@ public sealed class JsonStateFile<T> where T : class, new()
     {
         ArgumentNullException.ThrowIfNull(value);
 
-        var directory = System.IO.Path.GetDirectoryName(Path);
+        var fullPath = System.IO.Path.GetFullPath(Path);
+        var pathLock = PathLocks.GetOrAdd(fullPath, _ => new object());
 
-        if (!string.IsNullOrEmpty(directory))
+        lock (pathLock)
         {
-            Directory.CreateDirectory(directory);
-        }
+            var directory = System.IO.Path.GetDirectoryName(Path);
 
-        var wrapper = new StateEnvelope<T>
-        {
-            Schema = SchemaVersion,
-            SavedAtUtc = DateTime.UtcNow,
-            Data = value,
-        };
-
-        var json = JsonSerializer.Serialize(wrapper, JsonOptions);
-        var temporary = Path + ".tmp";
-
-        try
-        {
-            using (var stream = new FileStream(
-                       temporary,
-                       FileMode.Create,
-                       FileAccess.Write,
-                       FileShare.None,
-                       4096,
-                       FileOptions.WriteThrough))
-            using (var writer = new StreamWriter(stream))
+            if (!string.IsNullOrEmpty(directory))
             {
-                writer.Write(json);
-                writer.Flush();
-                stream.Flush(flushToDisk: true);
+                Directory.CreateDirectory(directory);
             }
 
-            File.Move(temporary, Path, overwrite: true);
-        }
-        catch
-        {
+            var wrapper = new StateEnvelope<T>
+            {
+                Schema = SchemaVersion,
+                SavedAtUtc = DateTime.UtcNow,
+                Data = value,
+            };
+
+            var json = JsonSerializer.Serialize(wrapper, JsonOptions);
+            var temporary = Path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
             try
             {
-                if (File.Exists(temporary))
+                using (var stream = new FileStream(
+                           temporary,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           4096,
+                           FileOptions.WriteThrough))
+                using (var writer = new StreamWriter(stream))
                 {
-                    File.Delete(temporary);
+                    writer.Write(json);
+                    writer.Flush();
+                    stream.Flush(flushToDisk: true);
                 }
-            }
-            catch (Exception)
-            {
-                // 清理临时文件失败不掩盖原始异常。
-            }
 
-            throw;
+                File.Move(temporary, Path, overwrite: true);
+            }
+            catch
+            {
+                try
+                {
+                    if (File.Exists(temporary))
+                    {
+                        File.Delete(temporary);
+                    }
+                }
+                catch (Exception)
+                {
+                    // 清理临时文件失败不掩盖原始异常。
+                }
+
+                throw;
+            }
         }
     }
 

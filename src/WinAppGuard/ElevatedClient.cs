@@ -44,13 +44,14 @@ internal static class ElevatedClient
             return null;
         }
 
-        var requestPath = Path.Combine(
-            Path.GetTempPath(), $"wag-elevated-req-{Guid.NewGuid():N}.json");
-        var responsePath = Path.Combine(
-            Path.GetTempPath(), $"wag-elevated-resp-{Guid.NewGuid():N}.json");
+        var requestDirectory = Path.Combine(
+            Path.GetTempPath(), $"wag-elevated-{Guid.NewGuid():N}");
+        var requestPath = Path.Combine(requestDirectory, "request.json");
+        var responsePath = Path.Combine(requestDirectory, "response.json");
 
         try
         {
+            Directory.CreateDirectory(requestDirectory);
             ElevatedIpcFile.WriteRequest(requestPath, request);
 
             var startInfo = new ProcessStartInfo(helper)
@@ -108,6 +109,7 @@ internal static class ElevatedClient
         {
             TryDelete(requestPath);
             TryDelete(responsePath);
+            TryDeleteDirectory(requestDirectory);
         }
     }
 
@@ -120,6 +122,21 @@ internal static class ElevatedClient
         catch (Exception)
         {
             // 进程可能已经退出。
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception)
+        {
+            // 临时目录删不掉不影响操作结果。
         }
     }
 

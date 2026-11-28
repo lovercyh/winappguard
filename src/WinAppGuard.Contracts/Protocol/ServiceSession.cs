@@ -20,6 +20,9 @@ internal sealed class ServiceSession : IDisposable
 
     // 5.12：后台刷新共用一条会话，避免线程池换线程就重新握手。
     private static readonly SemaphoreSlim BackgroundGate = new(1, 1);
+
+    /// <summary>5.16：后台刷新排队单独放宽，避免 12 个页面同时刷新时把服务误判为离线。</summary>
+    private static readonly TimeSpan BackgroundQueueTimeout = TimeSpan.FromSeconds(30);
     private static ServiceSession? _background;
 
     private readonly IServiceSigner _signer;
@@ -111,7 +114,7 @@ internal sealed class ServiceSession : IDisposable
     {
         error = null;
 
-        if (!BackgroundGate.Wait(timeout))
+        if (!BackgroundGate.Wait(BackgroundQueueTimeout))
         {
             error = "后台 IPC 排队超时（前一个后台请求仍未完成）。";
             return null;

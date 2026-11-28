@@ -95,7 +95,34 @@ internal static class StrictModeHost
     {
         lock (Gate)
         {
-            var result = StrictModeManager.RecoverIfLeftOn(settingsPath);
+            // 5.16：1.x 遗留恢复会碰 Windows 防火墙 COM，必须在 STA 线程执行。
+            StrictModeRecoveryResult result = default!;
+            Exception? failure = null;
+
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    result = StrictModeManager.RecoverIfLeftOn(settingsPath);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "wag-strict-recovery",
+            };
+
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            if (failure is not null)
+            {
+                throw failure;
+            }
 
             if (result.WasLeftOn)
             {

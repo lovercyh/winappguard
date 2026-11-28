@@ -504,30 +504,9 @@ public partial class MainForm : Form
         // 到期清理、1.x 迁移、旧分组/审计设置迁移都归服务 / 安装器：
         // 3.0-c 起界面可能以普通权限运行，启动阶段不再触发任何写操作。
 
-        // 先把防火墙规则读进来，这样第一屏就能正确显示「已阻止 / 未阻止」。
-        // 放行状态（严格模式白名单）要在这之前读：它会让「放行」列第一屏就是对的。
-        RefreshAllowTargets();
-        RefreshRulesFromFirewall();
-
-        // 严格模式会话在服务里：先同步取一次状态，避免第一屏把"正在生效"显示成"未开启"。
-        if (_serviceAvailable)
-        {
-            var strictStatus = Gateway.TryGetStatus(TimeSpan.FromSeconds(2));
-
-            if (strictStatus is not null)
-            {
-                _strictModeEnabled = strictStatus.StrictModeActive;
-                _strictModePermittedCount = strictStatus.StrictModePermittedCount;
-                _lockdownActive = strictStatus.StrictModeLockdownActive;
-                _lockdownExpiresUtc = strictStatus.StrictModeLockdownExpiresUtc;
-
-                // 顺带把审计设置/采集状态同步到记录页（服务是唯一来源）。
-                ApplyAuditStatus(strictStatus);
-            }
-        }
-
-        // 严格模式分区也要有个初值（它读的就是上面刚缓存好的白名单）。
-        RefreshStrictModeStatus();
+        // 5.16：防火墙/白名单读取可能同步等待服务 3–5 秒，放到窗口画完之后执行，
+        // 避免启动时白屏；读取完成前表格保持空，不阻塞消息循环。
+        BeginInvoke(LoadStartupFirewallState);
 
         // 启动「临时阻断」到期检查：独立定时器，**不受**「每 3 秒自动刷新」那个开关影响。
         _expiryTimer.Start();
@@ -555,6 +534,44 @@ public partial class MainForm : Form
         }
     }
 
+    /// <summary>5.16：窗口显示后再读取防火墙/严格模式状态，避免启动白屏。</summary>
+    private void LoadStartupFirewallState()
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        try
+        {
+            RefreshAllowTargets();
+            RefreshRulesFromFirewall();
+
+            if (_serviceAvailable)
+            {
+                var strictStatus = Gateway.TryGetStatus(TimeSpan.FromSeconds(2));
+
+                if (strictStatus is not null)
+                {
+                    _strictModeEnabled = strictStatus.StrictModeActive;
+                    _strictModePermittedCount = strictStatus.StrictModePermittedCount;
+                    _lockdownActive = strictStatus.StrictModeLockdownActive;
+                    _lockdownExpiresUtc = strictStatus.StrictModeLockdownExpiresUtc;
+                    ApplyAuditStatus(strictStatus);
+                }
+            }
+
+            RefreshStrictModeStatus();
+        }
+        catch (Exception ex)
+        {
+            LocalLog.Warning(
+                LocalLog.Pick("启动时读取防火墙状态失败", "Failed to load firewall state at startup"),
+                ex);
+        }
+    }
+
+
     /// <summary>
     /// 关闭窗口时收进托盘，而不是退出程序。
     ///
@@ -576,7 +593,6 @@ public partial class MainForm : Form
         // 真正退出：停掉统一页面刷新调度器（采集在服务里，不随界面退出停止）。
         _uiScheduler?.Dispose();
         _uiCancellation.Cancel();
-        _uiCancellation.Dispose();
         _auditStore.Dispose();
 
         // 5.8：新程序默认阻止是服务里的临时动态过滤器；界面退出时主动释放，
@@ -587,6 +603,13 @@ public partial class MainForm : Form
         CaptureAndSaveUiState();
 
         base.OnFormClosing(e);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        // 5.16：等窗口真正关闭后再释放 CTS，避免后台操作拿到已释放的 Token。
+        _uiCancellation.Dispose();
+        base.OnFormClosed(e);
     }
 
     // ==================================================================

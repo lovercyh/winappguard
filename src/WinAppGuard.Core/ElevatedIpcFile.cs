@@ -14,33 +14,69 @@ namespace WinAppGuard.Core;
 /// <c>affected</c> / <c>skipped</c> / <c>failed</c> / <c>error</c> 全部读不到：
 /// 界面显示“成功 + 0 条”，实际规则已经写入。
 ///
-/// 请求方向同理，统一放在这里，避免两边再各写一套序列化选项。
+/// 5.16：提权链路用的临时文件改为唯一目录 + CreateNew + 拒绝重解析点，
+/// 避免低权进程抢注/符号链接覆盖提权助手要写的响应文件。
 /// </summary>
 internal static class ElevatedIpcFile
 {
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     internal static void WriteRequest(string path, ServiceRequest request)
-        => File.WriteAllText(
-            path,
-            JsonSerializer.Serialize(request, ServiceProtocol.JsonOptions),
-            Utf8);
+        => WriteNew(path, JsonSerializer.Serialize(request, ServiceProtocol.JsonOptions));
 
     internal static ServiceRequest? ReadRequest(string path)
         => JsonSerializer.Deserialize<ServiceRequest>(
-            File.ReadAllText(path, Encoding.UTF8),
+            ReadText(path),
             ServiceProtocol.JsonOptions);
 
     internal static void WriteResponse(string path, ResponsePayload response)
-        => File.WriteAllText(
+        => WriteNew(
             path,
             JsonSerializer.Serialize(
-                response, response.GetType(), ServiceProtocol.JsonOptions),
-            Utf8);
+                response, response.GetType(), ServiceProtocol.JsonOptions));
 
     internal static ResponsePayload? ReadResponse(string path, Type type)
         => JsonSerializer.Deserialize(
-            File.ReadAllText(path, Encoding.UTF8),
+            ReadText(path),
             type,
             ServiceProtocol.JsonOptions) as ResponsePayload;
+
+    private static void WriteNew(string path, string json)
+    {
+        EnsureNotReparsePoint(path);
+
+        using var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.Read,
+            4096,
+            FileOptions.WriteThrough);
+
+        using var writer = new StreamWriter(stream, Utf8);
+        writer.Write(json);
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static string ReadText(string path)
+    {
+        EnsureNotReparsePoint(path);
+        return File.ReadAllText(path, Encoding.UTF8);
+    }
+
+    private static void EnsureNotReparsePoint(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var attributes = File.GetAttributes(path);
+
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException($"提权 IPC 临时文件是重解析点，已拒绝：{path}");
+        }
+    }
 }

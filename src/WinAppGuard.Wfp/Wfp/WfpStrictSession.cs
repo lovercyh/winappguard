@@ -105,7 +105,8 @@ internal sealed class WfpStrictSession : IDisposable
 
                 var restored = new List<Guid>();
                 AddFilters(oldEntries, restored);
-            });
+            },
+            allowDirectFallback: false);
 
         _filterKeys = newKeys;
         _entries = normalized;

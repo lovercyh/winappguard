@@ -280,9 +280,8 @@ internal static class Program
         }
 
         ServiceControl.Start(ServiceProtocol.ServiceName);
-        Thread.Sleep(1200);
 
-        if (!ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+        if (!WaitForServiceRunning(TimeSpan.FromSeconds(10)))
         {
             Bilingual.Fail("服务没有进入运行状态。请查看 %ProgramData%\\WinAppGuard\\logs。", "The service did not reach the running state. See %ProgramData%\\WinAppGuard\\logs.");
             return 4;
@@ -764,9 +763,8 @@ internal static class Program
         }
 
         ServiceControl.Start(ServiceProtocol.ServiceName);
-        Thread.Sleep(1200);
 
-        if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+        if (WaitForServiceRunning(TimeSpan.FromSeconds(10)))
         {
             if (signerReady && !VerifyServiceAuth())
             {
@@ -1736,12 +1734,54 @@ internal static class Program
         return name.Contains("Uninstall", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool WaitForServiceRunning(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (ServiceControl.IsRunning(ServiceProtocol.ServiceName))
+            {
+                return true;
+            }
+
+            Thread.Sleep(200);
+        }
+
+        return ServiceControl.IsRunning(ServiceProtocol.ServiceName);
+    }
+
     private static void TryStopUiProcesses()
     {
+        var installRoot = InstallDirectory.TrimEnd('\\') + "\\";
+
         foreach (var process in Process.GetProcessesByName("WinAppGuard"))
         {
             try
             {
+                string? executable = null;
+
+                try
+                {
+                    executable = process.MainModule?.FileName;
+                }
+                catch (Exception)
+                {
+                    // 拿不到路径（权限/已退出）时不要按名字强杀。
+                }
+
+                if (string.IsNullOrEmpty(executable)
+                    || !executable.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (process.CloseMainWindow() && process.WaitForExit(2000))
+                {
+                    Bilingual.Say($"已关闭界面进程（PID {process.Id}）。", $"Closed UI process (PID {process.Id}).");
+                    continue;
+                }
+
                 process.Kill();
                 process.WaitForExit(5000);
                 Bilingual.Say($"已结束界面进程（PID {process.Id}）。", $"Stopped UI process (PID {process.Id}).");

@@ -11,19 +11,16 @@ internal abstract class GridTable<TRow> where TRow : class
     private readonly DataGridView _grid;
     private readonly Func<TRow, string> _signature;
     private readonly Func<TRow, string?>? _idSelector;
-    private readonly int _signatureLimit;
     private string? _lastSignature;
 
     protected GridTable(
         DataGridView grid,
         Func<TRow, string> signature,
-        Func<TRow, string?>? idSelector = null,
-        int signatureLimit = 100)
+        Func<TRow, string?>? idSelector = null)
     {
         _grid = grid ?? throw new ArgumentNullException(nameof(grid));
         _signature = signature ?? throw new ArgumentNullException(nameof(signature));
         _idSelector = idSelector;
-        _signatureLimit = Math.Max(1, signatureLimit);
     }
 
     internal void Bind(
@@ -33,9 +30,8 @@ internal abstract class GridTable<TRow> where TRow : class
     {
         ArgumentNullException.ThrowIfNull(rows);
 
-        var signature = string.Join(
-            "|",
-            rows.Take(_signatureLimit).Select(_signature));
+        // 5.16：对全部行做哈希。只取前 100 行会让长列表尾部的新事件“消失”。
+        var signature = ComputeSignature(rows);
 
         if (string.Equals(signature, _lastSignature, StringComparison.Ordinal))
         {
@@ -72,6 +68,26 @@ internal abstract class GridTable<TRow> where TRow : class
 
     /// <summary>强制下一次 Bind 重建（清空、删除、信任状态变化后使用）。</summary>
     internal void Invalidate() => _lastSignature = null;
+
+    private string ComputeSignature(IReadOnlyList<TRow> rows)
+    {
+        // FNV-1a：遍历全部行，避免长列表只比较前 100 行。
+        var hash = 1469598103934665603UL;
+
+        foreach (var row in rows)
+        {
+            foreach (var ch in _signature(row))
+            {
+                hash ^= ch;
+                hash *= 1099511628211UL;
+            }
+
+            hash ^= '\n';
+            hash *= 1099511628211UL;
+        }
+
+        return $"{rows.Count:X8}:{hash:X16}";
+    }
 }
 
 /// <summary>事件表：时间/规则/状态类列表。</summary>
@@ -80,9 +96,8 @@ internal sealed class EventTable<TRow> : GridTable<TRow> where TRow : class
     internal EventTable(
         DataGridView grid,
         Func<TRow, string> signature,
-        Func<TRow, string?>? idSelector = null,
-        int signatureLimit = 100)
-        : base(grid, signature, idSelector, signatureLimit)
+        Func<TRow, string?>? idSelector = null)
+        : base(grid, signature, idSelector)
     {
     }
 }
@@ -93,9 +108,8 @@ internal sealed class BlockTable<TRow> : GridTable<TRow> where TRow : class
     internal BlockTable(
         DataGridView grid,
         Func<TRow, string> signature,
-        Func<TRow, string?>? idSelector = null,
-        int signatureLimit = 100)
-        : base(grid, signature, idSelector, signatureLimit)
+        Func<TRow, string?>? idSelector = null)
+        : base(grid, signature, idSelector)
     {
     }
 }
@@ -106,9 +120,8 @@ internal sealed class BaselineTable<TRow> : GridTable<TRow> where TRow : class
     internal BaselineTable(
         DataGridView grid,
         Func<TRow, string> signature,
-        Func<TRow, string?>? idSelector = null,
-        int signatureLimit = 100)
-        : base(grid, signature, idSelector, signatureLimit)
+        Func<TRow, string?>? idSelector = null)
+        : base(grid, signature, idSelector)
     {
     }
 }

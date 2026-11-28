@@ -26,6 +26,7 @@ public sealed class NpcapTrafficCapture : IDisposable
 
     private readonly object _gate = new();
     private readonly List<CaptureHandle> _captures = new();
+    private readonly List<(CaptureHandle Capture, Thread Thread)> _threads = new();
     private readonly Dictionary<ulong, long> _dedup = new();
     private readonly HashSet<uint> _localV4 = new();
     private readonly HashSet<(ulong High, ulong Low)> _localV6 = new();
@@ -96,6 +97,7 @@ public sealed class NpcapTrafficCapture : IDisposable
 
             _lastError = null;
             _captures.Clear();
+            _threads.Clear();
             _dedup.Clear();
 
             var wpcapPath = NpcapLocator.FindWpcapPath();
@@ -167,6 +169,7 @@ public sealed class NpcapTrafficCapture : IDisposable
                         Name = "WinAppGuard-Traffic",
                     };
 
+                    _threads.Add((capture, thread));
                     thread.Start();
                 }
 
@@ -187,28 +190,42 @@ public sealed class NpcapTrafficCapture : IDisposable
 
     public void Stop()
     {
-        List<CaptureHandle> captures;
+        List<(CaptureHandle Capture, Thread Thread)> threads;
 
         lock (_gate)
         {
             _running = false;
-            captures = _captures.ToList();
+            threads = _threads.ToList();
         }
 
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-
-        while (Volatile.Read(ref _activeThreads) > 0 && DateTime.UtcNow < deadline)
+        foreach (var pair in threads)
         {
-            Thread.Sleep(20);
+            pair.Capture.Api.BreakLoop(pair.Capture.Handle);
+        }
+
+        var stillRunning = new HashSet<IntPtr>();
+
+        foreach (var pair in threads)
+        {
+            if (!pair.Thread.Join(TimeSpan.FromSeconds(5)))
+            {
+                stillRunning.Add(pair.Capture.Handle);
+            }
         }
 
         lock (_gate)
         {
-            foreach (var capture in captures)
+            foreach (var pair in threads)
             {
+                if (stillRunning.Contains(pair.Capture.Handle))
+                {
+                    Log?.Invoke($"精确流量采集线程未退出，保留句柄不关闭：{pair.Capture.DeviceName}");
+                    continue;
+                }
+
                 try
                 {
-                    capture.Api.Close(capture.Handle);
+                    pair.Capture.Api.Close(pair.Capture.Handle);
                 }
                 catch (Exception)
                 {
@@ -217,7 +234,13 @@ public sealed class NpcapTrafficCapture : IDisposable
             }
 
             _captures.Clear();
-            CleanupLocked();
+            _threads.Clear();
+
+            if (stillRunning.Count == 0)
+            {
+                CleanupLocked();
+            }
+
             Log?.Invoke("精确流量采集已停止。");
         }
     }
@@ -890,6 +913,9 @@ public sealed class NpcapTrafficCapture : IDisposable
         private delegate int NextExDelegate(IntPtr handle, out IntPtr header, out IntPtr data);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void BreakLoopDelegate(IntPtr handle);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void CloseDelegate(IntPtr handle);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -908,6 +934,7 @@ public sealed class NpcapTrafficCapture : IDisposable
         private readonly SetFilterDelegate _setFilter;
         private readonly FreeCodeDelegate _freeCode;
         private readonly NextExDelegate _nextEx;
+        private readonly BreakLoopDelegate? _breakLoop;
         private readonly CloseDelegate _close;
         private readonly GetErrorDelegate _getError;
         private readonly DataLinkDelegate _dataLink;
@@ -925,6 +952,15 @@ public sealed class NpcapTrafficCapture : IDisposable
             _close = Load<CloseDelegate>(library, "pcap_close");
             _getError = Load<GetErrorDelegate>(library, "pcap_geterr");
             _dataLink = Load<DataLinkDelegate>(library, "pcap_datalink");
+
+            try
+            {
+                _breakLoop = Load<BreakLoopDelegate>(library, "pcap_breakloop");
+            }
+            catch (Exception)
+            {
+                _breakLoop = null;
+            }
             _stats = Load<StatsDelegate>(library, "pcap_stats");
         }
 
@@ -1024,6 +1060,23 @@ public sealed class NpcapTrafficCapture : IDisposable
             if (handle != IntPtr.Zero)
             {
                 _close(handle);
+            }
+        }
+
+        internal void BreakLoop(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero || _breakLoop is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _breakLoop(handle);
+            }
+            catch (Exception)
+            {
+                // 打断失败时由 Stop 的 Join 超时兜底。
             }
         }
 

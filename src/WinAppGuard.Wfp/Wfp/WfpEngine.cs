@@ -999,7 +999,8 @@ internal sealed class WfpEngine : IDisposable
     /// 5.15：在一个 WFP 事务里执行一组增删。
     /// 任何一步抛异常都会 Abort，系统状态回到事务开始前。
     /// </summary>
-    internal void RunInTransaction(Action action, Action? rollback = null)
+    internal void RunInTransaction(
+        Action action, Action? rollback = null, bool allowDirectFallback = true)
     {
         ThrowIfDisposed();
 
@@ -1007,6 +1008,13 @@ internal sealed class WfpEngine : IDisposable
 
         if (rc != WfpNativeMethods.ERROR_SUCCESS)
         {
+            if (!allowDirectFallback)
+            {
+                LocalLog.Warning(
+                    $"[WAG-WFP-020] WFP transaction unavailable (0x{rc:X8}); refusing risky direct write.");
+                throw new WfpException("开始 WFP 事务（不允许降级）", rc);
+            }
+
             // 动态会话在极老的系统上可能不支持事务：退化成直接执行。
             // 调用方如果提供了 rollback，就在失败时手工恢复。
             LocalLog.Warning(

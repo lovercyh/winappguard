@@ -167,11 +167,18 @@ internal static class NewProgramGuardHost
 
         try
         {
-            path = Path.GetFullPath(path);
+            path = FirewallManager.ValidateProgramPath(path, forBlocking: true);
         }
         catch (Exception)
         {
-            // 文件已经被删除时仍然允许释放：下面按原字符串查字典。
+            try
+            {
+                path = Path.GetFullPath(path);
+            }
+            catch (Exception)
+            {
+                // 文件已经被删除时仍然允许释放：下面按原字符串查字典。
+            }
         }
 
         lock (Gate)

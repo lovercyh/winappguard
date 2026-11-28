@@ -198,7 +198,7 @@ public static class LocalLog
                 CleanupOldFilesOncePerDay(directory);
 
                 var file = Path.Combine(directory, $"{FilePrefix}{DateTime.Now:yyyyMMdd}.log");
-                var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}{Environment.NewLine}";
+                var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} [{level}] {message}{Environment.NewLine}";
 
                 File.AppendAllText(file, line, Encoding.UTF8);
             }

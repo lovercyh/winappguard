@@ -140,7 +140,22 @@ internal static class Program
                 return 1;
             }
 
-            process.WaitForExit();
+            if (!process.WaitForExit(120_000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (Exception)
+                {
+                    // 进程可能已经退出。
+                }
+
+                Console.Error.WriteLine(
+                    "CLI 转发超时（120 秒），服务进程可能卡死。");
+                return 1;
+            }
+
             return process.ExitCode;
         }
         catch (Exception ex)

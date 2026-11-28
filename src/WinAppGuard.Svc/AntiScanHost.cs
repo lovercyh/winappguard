@@ -34,6 +34,7 @@ internal static class AntiScanHost
     private static List<AntiScanEventDto> _events = new();
     private static HashSet<string> _gatewayAddresses = new(StringComparer.OrdinalIgnoreCase);
     private static bool _started;
+    private static int _tickRunning;
     private static DateTime _nextCaptureRetryUtc = DateTime.MinValue;
     private static DateTime? _lastEventUtc;
     private static string? _lastError;
@@ -353,6 +354,11 @@ internal static class AntiScanHost
 
     private static void Tick()
     {
+        if (Interlocked.Exchange(ref _tickRunning, 1) == 1)
+        {
+            return;
+        }
+
         try
         {
             DateTime now;
@@ -381,6 +387,10 @@ internal static class AntiScanHost
         catch (Exception ex)
         {
             ServiceLog.Warning("WAG-ANTISCAN-011", "Anti-scan timer failed.", ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _tickRunning, 0);
         }
     }
 

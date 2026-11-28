@@ -221,7 +221,10 @@ public sealed class JsonlEventLog<T> where T : class
 
             var days = Math.Max(1, retentionDays ?? RetentionDays);
             var now = nowUtc ?? DateTime.UtcNow;
-            var cutoffDate = now.Date.AddDays(-(days - 1));
+
+            // 分段文件名用本地日期（用户直观），整文件保留边界也必须用本地日期，
+            // 否则 UTC+8 下会出现边界文件晚/早一天被删。
+            var cutoffDate = now.ToLocalTime().Date.AddDays(-(days - 1));
             var deleted = 0;
 
             foreach (var file in EnumerateFiles().ToList())

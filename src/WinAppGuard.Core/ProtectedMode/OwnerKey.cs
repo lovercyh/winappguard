@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 
 namespace WinAppGuard.Core.ProtectedMode;
@@ -12,6 +13,9 @@ namespace WinAppGuard.Core.ProtectedMode;
 /// </summary>
 internal sealed class OwnerKey : IDisposable
 {
+    // 5.16：验签公钥缓存。每帧 ECDsa.Create+Import 成本不低，且公钥在服务生命周期内不变。
+    private static readonly ConcurrentDictionary<string, object> VerifierLocks = new();
+    private static readonly Dictionary<string, ECDsa> Verifiers = new();
     private readonly ECDsa _key;
 
     private OwnerKey(ECDsa key)
@@ -84,9 +88,20 @@ internal sealed class OwnerKey : IDisposable
     {
         try
         {
-            using var key = ECDsa.Create();
-            key.ImportSubjectPublicKeyInfo(publicKey, out _);
-            return key.VerifyData(data, signature, HashAlgorithmName.SHA256);
+            var cacheKey = Convert.ToHexString(SHA256.HashData(publicKey));
+            var gate = VerifierLocks.GetOrAdd(cacheKey, _ => new object());
+
+            lock (gate)
+            {
+                if (!Verifiers.TryGetValue(cacheKey, out var key))
+                {
+                    key = ECDsa.Create();
+                    key.ImportSubjectPublicKeyInfo(publicKey, out _);
+                    Verifiers[cacheKey] = key;
+                }
+
+                return key.VerifyData(data, signature, HashAlgorithmName.SHA256);
+            }
         }
         catch (Exception)
         {

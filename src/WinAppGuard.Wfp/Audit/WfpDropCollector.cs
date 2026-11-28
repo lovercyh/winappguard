@@ -149,9 +149,9 @@ internal sealed class WfpDropCollector : IDisposable
 
             DropDetected?.Invoke(drop);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 事件解析失败不能影响订阅本身（更不能让审计把主功能拖垮）。
+            LocalLog.Warning("[WAG-AUDIT-044] WFP drop event parse failed; event skipped.", ex);
         }
     }
 

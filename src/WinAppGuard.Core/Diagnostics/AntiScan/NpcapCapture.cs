@@ -28,6 +28,7 @@ public sealed class NpcapCapture : IDisposable
 
     private readonly object _gate = new();
     private readonly List<CaptureHandle> _captures = new();
+    private readonly List<(CaptureHandle Capture, Thread Thread)> _threads = new();
     private readonly Dictionary<string, DateTime> _dedup = new(StringComparer.Ordinal);
     private readonly HashSet<string> _localAddresses = new(StringComparer.OrdinalIgnoreCase);
     private IntPtr _library;
@@ -115,6 +116,7 @@ public sealed class NpcapCapture : IDisposable
 
             _lastError = null;
             _captures.Clear();
+            _threads.Clear();
             _dedup.Clear();
 
             var wpcapPath = NpcapLocator.FindWpcapPath();
@@ -187,6 +189,7 @@ public sealed class NpcapCapture : IDisposable
                         IsBackground = true,
                         Name = "WinAppGuard-AntiScan",
                     };
+                    _threads.Add((capture, thread));
                     thread.Start();
                 }
 
@@ -205,29 +208,44 @@ public sealed class NpcapCapture : IDisposable
 
     public void Stop()
     {
-        List<CaptureHandle> captures;
+        List<(CaptureHandle Capture, Thread Thread)> threads;
 
         lock (_gate)
         {
             _running = false;
-            captures = _captures.ToList();
+            threads = _threads.ToList();
         }
 
-        // 等线程退出再关句柄，避免 pcap_next_ex 访问已释放的 pcap_t。
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-
-        while (Volatile.Read(ref _activeThreads) > 0 && DateTime.UtcNow < deadline)
+        // 先让阻塞中的 pcap_next_ex 尽快返回，再等线程退出。
+        foreach (var pair in threads)
         {
-            Thread.Sleep(20);
+            pair.Capture.Api.BreakLoop(pair.Capture.Handle);
+        }
+
+        var stillRunning = new HashSet<IntPtr>();
+
+        foreach (var pair in threads)
+        {
+            if (!pair.Thread.Join(TimeSpan.FromSeconds(5)))
+            {
+                stillRunning.Add(pair.Capture.Handle);
+            }
         }
 
         lock (_gate)
         {
-            foreach (var capture in captures)
+            foreach (var pair in threads)
             {
+                if (stillRunning.Contains(pair.Capture.Handle))
+                {
+                    // 线程仍在使用句柄：宁可暂时泄漏，也不能 Close 后 UAF。
+                    Log?.Invoke($"反扫描采集线程未退出，保留句柄不关闭：{pair.Capture.DeviceName}");
+                    continue;
+                }
+
                 try
                 {
-                    capture.Api.Close(capture.Handle);
+                    pair.Capture.Api.Close(pair.Capture.Handle);
                 }
                 catch (Exception)
                 {
@@ -236,7 +254,13 @@ public sealed class NpcapCapture : IDisposable
             }
 
             _captures.Clear();
-            CleanupLocked();
+            _threads.Clear();
+
+            if (stillRunning.Count == 0)
+            {
+                CleanupLocked();
+            }
+
             Log?.Invoke("反扫描采集已停止。");
         }
     }
@@ -782,6 +806,9 @@ public sealed class NpcapCapture : IDisposable
         private delegate int NextExDelegate(IntPtr handle, out IntPtr header, out IntPtr data);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void BreakLoopDelegate(IntPtr handle);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void CloseDelegate(IntPtr handle);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -800,6 +827,7 @@ public sealed class NpcapCapture : IDisposable
         private readonly SetFilterDelegate _setFilter;
         private readonly FreeCodeDelegate _freeCode;
         private readonly NextExDelegate _nextEx;
+        private readonly BreakLoopDelegate? _breakLoop;
         private readonly CloseDelegate _close;
         private readonly GetErrorDelegate _getError;
         private readonly DataLinkDelegate _dataLink;
@@ -817,6 +845,15 @@ public sealed class NpcapCapture : IDisposable
             _close = Load<CloseDelegate>(library, "pcap_close");
             _getError = Load<GetErrorDelegate>(library, "pcap_geterr");
             _dataLink = Load<DataLinkDelegate>(library, "pcap_datalink");
+
+            try
+            {
+                _breakLoop = Load<BreakLoopDelegate>(library, "pcap_breakloop");
+            }
+            catch (Exception)
+            {
+                _breakLoop = null;
+            }
 
             try
             {
@@ -925,6 +962,23 @@ public sealed class NpcapCapture : IDisposable
             if (handle != IntPtr.Zero)
             {
                 _close(handle);
+            }
+        }
+
+        internal void BreakLoop(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero || _breakLoop is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _breakLoop(handle);
+            }
+            catch (Exception)
+            {
+                // 打断失败时由 Stop 的超时逻辑兜底。
             }
         }
 

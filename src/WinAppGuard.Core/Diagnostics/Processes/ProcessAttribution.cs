@@ -84,57 +84,116 @@ internal sealed record ProcessEtwStatus(
     long EventsSeen,
     long ParseFailures,
     string? LastError,
-    DateTime? LastEventUtc);
+    DateTime? LastEventUtc,
+    int RestartAttempts,
+    DateTime? NextRetryUtc);
 
-/// <summary>6.0：Kernel-Process ETW 的服务级宿主。</summary>
+/// <summary>6.0：Kernel-Process ETW 的服务级宿主。失败时自动重试。</summary>
 internal static class ProcessEtwHost
 {
     private static readonly ProcessTable Table = new();
+    private static readonly object Gate = new();
     private static ProcessEtwMonitor? _monitor;
+    private static Timer? _watchdog;
     private static bool _started;
+    private static int _restartAttempts;
+    private static string? _lastError;
+    private static DateTime? _nextRetryUtc;
 
     internal static bool Enabled { get; set; } = true;
 
     internal static void Start()
     {
-        if (_started || !Enabled)
+        lock (Gate)
         {
-            return;
-        }
+            if (_started)
+            {
+                return;
+            }
 
-        _started = true;
-        ProcessAttribution.SetTable(Table);
-        Table.SeedSnapshot();
+            _started = true;
+            ProcessAttribution.SetTable(Table);
+            Table.SeedSnapshot();
+            TryStartLocked();
 
-        _monitor = new ProcessEtwMonitor(Table);
-
-        if (!_monitor.Start())
-        {
-            // ETW 失败不阻止服务：归因自动回退到轮询。
-            _monitor.Dispose();
-            _monitor = null;
+            _watchdog ??= new Timer(
+                _ => WatchdogTick(), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
         }
     }
 
     internal static void Stop()
     {
-        _started = false;
-        _monitor?.Dispose();
-        _monitor = null;
+        lock (Gate)
+        {
+            _started = false;
+            _watchdog?.Dispose();
+            _watchdog = null;
+            _monitor?.Dispose();
+            _monitor = null;
+            _nextRetryUtc = null;
+        }
     }
 
     internal static ProcessEtwStatus Snapshot()
     {
-        var monitor = _monitor;
+        lock (Gate)
+        {
+            var monitor = _monitor;
 
-        return new ProcessEtwStatus(
-            Enabled,
-            monitor?.IsRunning == true,
-            monitor is null || !monitor.IsRunning,
-            Table.Count,
-            monitor?.EventsSeen ?? 0,
-            monitor?.ParseFailures ?? 0,
-            monitor?.LastError,
-            monitor?.LastEventUtc);
+            return new ProcessEtwStatus(
+                Enabled,
+                monitor?.IsRunning == true,
+                monitor is null || !monitor.IsRunning,
+                Table.Count,
+                monitor?.EventsSeen ?? 0,
+                monitor?.ParseFailures ?? 0,
+                _lastError ?? monitor?.LastError,
+                monitor?.LastEventUtc,
+                _restartAttempts,
+                _nextRetryUtc);
+        }
+    }
+
+    private static void WatchdogTick()
+    {
+        lock (Gate)
+        {
+            if (!_started)
+            {
+                return;
+            }
+
+            if (_monitor?.IsRunning == true)
+            {
+                return;
+            }
+
+            // ETW 会话可能在服务重启、会话被停或驱动异常后退出。
+            // 与旧服务探测一致：自动重建，不要求用户手动点开关。
+            TryStartLocked();
+        }
+    }
+
+    private static void TryStartLocked()
+    {
+        _monitor?.Dispose();
+        _monitor = null;
+
+        var monitor = new ProcessEtwMonitor(Table);
+
+        if (monitor.Start())
+        {
+            _monitor = monitor;
+            _restartAttempts = 0;
+            _lastError = null;
+            _nextRetryUtc = null;
+            return;
+        }
+
+        _lastError = monitor.LastError ?? "ETW start failed.";
+        monitor.Dispose();
+        _restartAttempts++;
+        _nextRetryUtc = DateTime.UtcNow.AddSeconds(10);
+        LocalLog.Warning($"[WAG-PROC-ETW-001] Kernel-Process ETW start failed (attempt {_restartAttempts}): {_lastError}");
     }
 }

@@ -64,8 +64,9 @@ public sealed partial class MainForm
                   + $"lastEvent={etw.LastEventUtc?.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
                   + (string.IsNullOrWhiteSpace(etw.LastError) ? string.Empty : $"\nlastError={etw.LastError}")
                 : $"进程 ETW：{(etw.Running ? "运行中" : "已降级为轮询归因")}\n"
-                  + $"进程表 {etw.TableEntries} 条，事件 {etw.EventsSeen}，解析失败 {etw.ParseFailures}\n"
+                  + $"进程表 {etw.TableEntries} 条，事件 {etw.EventsSeen}，解析失败 {etw.ParseFailures}，重启尝试 {etw.RestartAttempts}\n"
                   + $"最近事件：{etw.LastEventUtc?.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+                  + (etw.NextRetryUtc is { } next ? $"；下次重试：{next.ToLocalTime():HH:mm:ss}" : string.Empty)
                   + (string.IsNullOrWhiteSpace(etw.LastError) ? string.Empty : $"\n最近错误：{etw.LastError}");
         _etwHealthLabel.Text = etwText;
 

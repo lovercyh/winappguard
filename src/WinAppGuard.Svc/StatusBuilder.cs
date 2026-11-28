@@ -52,6 +52,8 @@ internal static class StatusBuilder
             ParseFailures = etw.ParseFailures,
             LastError = etw.LastError,
             LastEventUtc = etw.LastEventUtc,
+            RestartAttempts = etw.RestartAttempts,
+            NextRetryUtc = etw.NextRetryUtc,
         };
 
         // 5.12：规则计数来自 RuleSnapshotCache（缓存命中时不开 WFP），

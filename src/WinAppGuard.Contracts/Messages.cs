@@ -1123,6 +1123,10 @@ public sealed class ProcessEtwStatusDto
     public string? LastError { get; set; }
 
     public DateTime? LastEventUtc { get; set; }
+
+    public int RestartAttempts { get; set; }
+
+    public DateTime? NextRetryUtc { get; set; }
 }
 
 /// <summary>5.10：一个服务模块的健康状态。</summary>

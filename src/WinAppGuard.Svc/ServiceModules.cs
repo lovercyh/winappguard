@@ -1,6 +1,7 @@
 namespace WinAppGuard.Service;
 
 using WinAppGuard.Core.Diagnostics.Processes;
+using WinAppGuard.Core.Features.ProgramProfile;
 
 /// <summary>
 /// 5.9：服务的模块。
@@ -17,6 +18,14 @@ internal static class ServiceModules
                 start: ProcessEtwHost.Start,
                 stop: ProcessEtwHost.Stop,
                 detail: () => ProcessEtwHost.Snapshot().Running ? "etw" : "fallback"),
+
+            new DelegateServiceModule(
+                "program-profile",
+                order: 6,
+                restartable: false,
+                start: ProgramProfileHost.Start,
+                stop: ProgramProfileHost.Stop,
+                detail: () => $"{ProgramProfileHost.Count} profiles"),
 
             new DelegateServiceModule(
                 "rules",

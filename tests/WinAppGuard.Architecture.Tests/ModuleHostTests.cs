@@ -133,13 +133,13 @@ public sealed class ModuleHostTests
     }
 
     [Fact]
-    public void ServiceCatalogDefinesThirteenModules()
+    public void ServiceCatalogDefinesFourteenModules()
     {
         var modules = ServiceModules.Create(new ControlServer());
 
-        Assert.Equal(13, modules.Count);
-        Assert.Equal(13, modules.Select(module => module.Name).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(13, modules.Select(module => module.Order).Distinct().Count());
+        Assert.Equal(14, modules.Count);
+        Assert.Equal(14, modules.Select(module => module.Name).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(14, modules.Select(module => module.Order).Distinct().Count());
     }
 
     private static TestModule Module(string name, int order, List<string> events)

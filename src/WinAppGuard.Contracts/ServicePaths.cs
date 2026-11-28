@@ -81,6 +81,9 @@ public static class ServicePaths
 
     public static string NetworkDetectionStateFile => Path.Combine(NetworkDetectionDirectory, "state.json");
 
+    /// <summary>6.0：程序画像。</summary>
+    public static string ProgramProfilesFile => Path.Combine(DataDirectory, "program-profiles.json");
+
     /// <summary>Suricata 配置、规则、eve.json 的落盘目录。</summary>
     public static string SuricataDirectory => Path.Combine(NetworkDetectionDirectory, "suricata");
 

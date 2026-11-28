@@ -3,6 +3,7 @@ using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.NetworkDetection;
 using WinAppGuard.Core.Diagnostics.Processes;
+using WinAppGuard.Core.Features.ProgramProfile;
 
 namespace WinAppGuard.Service;
 
@@ -543,6 +544,9 @@ internal static class NetworkDetectionHost
 
             _alerts.Insert(0, alert);
             _state.AlertStatuses[alert.Id] = "new";
+
+            ProgramProfileHost.Observe(
+                alert, ProcessAttribution.Resolve(alert.Pid));
 
             if (_alerts.Count > MaxAlerts)
             {

@@ -33,6 +33,7 @@ public sealed partial class MainForm
     private DataGridViewBuffered _ndGrid = null!;
     private ListBox _ndBlocks = null!;
     private int _ndCategoryColumnIndex = -1;
+    private int _ndMinConfidence;
 
     private List<NetworkAlertDto> _ndAlerts = new();
     private List<NetworkBlockDto> _ndBlockList = new();
@@ -150,6 +151,29 @@ public sealed partial class MainForm
         };
         filterPanel.Controls.Add(filterLabel);
         filterPanel.Controls.Add(_ndCategoryFilter);
+
+        var confidenceFilter = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 130,
+            Margin = new Padding(12, 5, 3, 3),
+        };
+        confidenceFilter.Items.Add(Localizer.T("全部置信度"));
+        confidenceFilter.Items.Add(Localizer.T("中高 ≥ 60"));
+        confidenceFilter.Items.Add(Localizer.T("高 ≥ 80"));
+        confidenceFilter.SelectedIndex = 0;
+        confidenceFilter.SelectedIndexChanged += (_, _) =>
+        {
+            _ndMinConfidence = confidenceFilter.SelectedIndex switch
+            {
+                1 => 60,
+                2 => 80,
+                _ => 0,
+            };
+
+            RebuildNetworkDetection();
+        };
+        filterPanel.Controls.Add(confidenceFilter);
 
         _ndAutoRefreshCheckBox = new CheckBox
         {
@@ -397,6 +421,7 @@ public sealed partial class MainForm
 
         var rows = _ndAlerts
             .Where(alert => MatchesCategoryFilter(alert, filter))
+            .Where(alert => alert.Confidence >= _ndMinConfidence)
             .Select(alert => new NdRow
             {
                 Id = alert.Id,

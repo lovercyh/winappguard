@@ -2,6 +2,7 @@ using System.Diagnostics;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics;
+using WinAppGuard.Core.Diagnostics.Ioc;
 using WinAppGuard.Core.Diagnostics.Processes;
 using WinAppGuard.Core.Features.ProgramProfile;
 using WinAppGuard.Core.Wfp;
@@ -79,6 +80,18 @@ internal static class StatusBuilder
             Count = dnsBypass.Count,
             LastRemote = dnsBypass.LastRemote,
             LastUtc = dnsBypass.LastUtc,
+        };
+
+        var ioc = ThreatFoxIocStore.Snapshot();
+        status.Ioc = new IocStatusDto
+        {
+            Enabled = IdsHost.Enabled && ioc.Loaded,
+            Loaded = ioc.Loaded,
+            Count = ioc.TotalCount,
+            MinConfidence = ioc.MinConfidence,
+            SourceUtc = ioc.SourceUtc,
+            Matches = ioc.MatchCount,
+            LastError = ioc.LastError,
         };
 
         // 5.12：规则计数来自 RuleSnapshotCache（缓存命中时不开 WFP），

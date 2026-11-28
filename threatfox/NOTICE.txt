@@ -1,0 +1,27 @@
+ThreatFox IOC snapshot
+======================
+
+Source      : https://threatfox.abuse.ch/ (abuse.ch AG)
+Snapshot    : 2026-11-28
+Terms       : https://threatfox.abuse.ch/faq/#tos
+              https://abuse.ch/terms-of-use/
+
+Files
+-----
+full.csv                  ThreatFox full dump (CSV), SHA256 F8C882B7EFB5DFD4C5D1A7ADE3154C916373F3FD8BF0131961414BA22F6DEED3
+threatfox_suricata.rules  ThreatFox Suricata rules, SHA256 C71BB89561E61F802165FAF85A8F781AEF80D02DB81B5DA0DE1316D86AA1563F
+
+Usage in WinAppGuard
+--------------------
+- full.csv is parsed locally into an IP / domain / file-hash index.
+- Matching is alert-only; nothing is blocked from this data.
+- threatfox.rules is optional and off by default; when enabled it is
+  filtered by confidence and appended to the active Suricata rule set.
+
+Licensing
+---------
+ThreatFox data is provided by abuse.ch under its Terms of Use. Feodo Tracker,
+SSL Blacklist and YARAify are CC0; ThreatFox (and URLhaus / MalwareBazaar)
+may require a paid subscription managed by Spamhaus for commercial use or
+redistribution. Review the terms above before distributing builds that
+contain this snapshot.

@@ -32,6 +32,9 @@ internal static class EmbeddedPayload
     internal const string EtStandardRulesName = "standard.rules";
     internal const string EtAllRulesName = "all.rules";
     internal const string EtStandardCategoriesZipName = "standard-categories.zip";
+    internal const string ThreatFoxCsvName = "threatfox-full.csv";
+    internal const string ThreatFoxRulesName = "threatfox.rules";
+    internal const string ThreatFoxNoticeName = "THREATFOX-NOTICE.txt";
     internal const string EtLicenseName = "ET-LICENSE";
     internal const string EtBsdLicenseName = "ET-BSD-License.txt";
     internal const string EtGplLicenseName = "ET-GPL-2.0.txt";
@@ -100,7 +103,8 @@ internal static class EmbeddedPayload
                     or EtAllRulesName or EtLicenseName or EtBsdLicenseName
                     or EtGplLicenseName or EtClassificationName
                     or SuricataSourceOfferName or GplLicenseName or ThirdPartyNoticesName
-                    or EtStandardCategoriesZipName))
+                    or EtStandardCategoriesZipName
+                    or ThreatFoxCsvName or ThreatFoxRulesName or ThreatFoxNoticeName))
                 {
                     continue;
                 }

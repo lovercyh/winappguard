@@ -29,6 +29,12 @@ public sealed class IdsSettings
     public bool LateralRule { get; set; } = true;
 
     public bool DnsRule { get; set; } = true;
+
+    /// <summary>6.0：ThreatFox 本地 IOC 匹配。</summary>
+    public bool IocRule { get; set; } = true;
+
+    /// <summary>6.0：IOC 最低置信度。</summary>
+    public int IocMinConfidence { get; set; } = 75;
 }
 
 /// <summary>3.7：抑制一条规则/程序/目标的告警。</summary>

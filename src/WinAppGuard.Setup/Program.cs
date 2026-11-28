@@ -2012,6 +2012,13 @@ internal static class Program
                     overwriteFiles: true);
             }
 
+            Directory.CreateDirectory(ServicePaths.ThreatFoxDirectory);
+            CopyIfDifferent(payload.ThreatFoxCsv, ServicePaths.ThreatFoxCsvFile);
+            CopyIfDifferent(payload.ThreatFoxRules, ServicePaths.ThreatFoxRulesFile);
+            CopyIfDifferent(
+                payload.ThreatFoxNotice,
+                Path.Combine(ServicePaths.ThreatFoxDirectory, "THREATFOX-NOTICE.txt"));
+
             EnsureSuricataInstalled(payload);
             RemoveSuricataDesktopShortcuts();
         }
@@ -2472,6 +2479,15 @@ internal static class Program
 
         internal string EtStandardCategoriesZip => Path.Combine(
             DirectoryPath, EmbeddedPayload.EtStandardCategoriesZipName);
+
+        internal string ThreatFoxCsv => Path.Combine(
+            DirectoryPath, EmbeddedPayload.ThreatFoxCsvName);
+
+        internal string ThreatFoxRules => Path.Combine(
+            DirectoryPath, EmbeddedPayload.ThreatFoxRulesName);
+
+        internal string ThreatFoxNotice => Path.Combine(
+            DirectoryPath, EmbeddedPayload.ThreatFoxNoticeName);
 
         internal string EtLicense => Path.Combine(
             DirectoryPath, EmbeddedPayload.EtLicenseName);

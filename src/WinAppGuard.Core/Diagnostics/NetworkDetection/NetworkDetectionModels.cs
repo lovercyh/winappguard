@@ -27,6 +27,12 @@ public sealed class NetworkDetectionSettings
 
     /// <summary>5.2：监听网卡 GUID；空字符串表示自动。</summary>
     public string CaptureDeviceId { get; set; } = string.Empty;
+
+    /// <summary>6.0：附加 ThreatFox Suricata 规则。</summary>
+    public bool ThreatFoxRules { get; set; }
+
+    /// <summary>6.0：ThreatFox 规则最低置信度。</summary>
+    public int ThreatFoxMinConfidence { get; set; } = 90;
 }
 
 /// <summary>

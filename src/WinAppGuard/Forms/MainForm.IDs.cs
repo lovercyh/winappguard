@@ -98,6 +98,7 @@ public sealed partial class MainForm
             Localizer.T("端口 / 主机扫描"),
             Localizer.T("内网横向"),
             Localizer.T("DNS 异常"),
+            Localizer.T("威胁情报"),
         });
         _idsRuleFilter.SelectedIndex = 0;
         _idsRuleFilter.SelectedIndexChanged += (_, _) => RebuildIdsView();
@@ -482,6 +483,7 @@ public sealed partial class MainForm
         2 => alert.RuleId == "scan",
         3 => alert.RuleId == "lateral",
         4 => alert.RuleId == "dns",
+        5 => alert.RuleId is "ioc-ip" or "ioc-domain",
         _ => true,
     };
 
@@ -503,6 +505,8 @@ public sealed partial class MainForm
             "scan" => "端口 / 主机扫描",
             "lateral" => "内网横向",
             "dns" => "DNS 异常",
+            "ioc-ip" => "威胁情报 IP",
+            "ioc-domain" => "威胁情报域名",
             _ => alert.RuleName,
         }),
         ProcessName = string.IsNullOrEmpty(alert.ProcessName)

@@ -19,6 +19,9 @@ internal sealed class IdsSettingsForm : Form
     private readonly CheckBox _scan;
     private readonly CheckBox _lateral;
     private readonly CheckBox _dns;
+    private readonly CheckBox _ioc;
+    private readonly ComboBox _iocConfidence;
+    private readonly int[] _iocConfidenceValues = { 50, 75, 90, 100 };
     private readonly ListBox _suppressionList;
     private readonly Button _removeSuppression;
     private readonly int[] _retentionDays;
@@ -33,7 +36,7 @@ internal sealed class IdsSettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(500, 566);
+        ClientSize = new Size(500, 626);
         Font = new Font("Microsoft YaHei UI", 9F);
 
         _suppressions = suppressions.ToList();
@@ -46,12 +49,12 @@ internal sealed class IdsSettingsForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             Padding = new Padding(16),
-            RowCount = 14,
+            RowCount = 16,
         };
 
-        for (var i = 0; i < 14; i++)
+        for (var i = 0; i < 16; i++)
         {
-            layout.RowStyles.Add(i == 11
+            layout.RowStyles.Add(i == 13
                 ? new RowStyle(SizeType.Absolute, 104)
                 : new RowStyle(SizeType.AutoSize));
         }
@@ -146,6 +149,30 @@ internal sealed class IdsSettingsForm : Form
             AutoSize = true,
         };
 
+        _ioc = new CheckBox
+        {
+            Text = Localizer.T("ThreatFox 本地 IOC 匹配（IP / 域名 / 文件哈希）"),
+            Checked = current.IocRule,
+            AutoSize = true,
+        };
+
+        _iocConfidence = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 160,
+        };
+        _iocConfidence.Items.Add(Localizer.T("仅 ≥ 50%"));
+        _iocConfidence.Items.Add(Localizer.T("仅 ≥ 75%"));
+        _iocConfidence.Items.Add(Localizer.T("仅 ≥ 90%"));
+        _iocConfidence.Items.Add(Localizer.T("仅 100%"));
+        _iocConfidence.SelectedIndex = current.IocMinConfidence switch
+        {
+            <= 50 => 0,
+            <= 75 => 1,
+            <= 90 => 2,
+            _ => 3,
+        };
+
         var suppressionHeader = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.LeftToRight,
@@ -228,10 +255,12 @@ internal sealed class IdsSettingsForm : Form
         layout.Controls.Add(_scan, 0, 7);
         layout.Controls.Add(_lateral, 0, 8);
         layout.Controls.Add(_dns, 0, 9);
-        layout.Controls.Add(suppressionHeader, 0, 10);
-        layout.Controls.Add(_suppressionList, 0, 11);
-        layout.Controls.Add(hint, 0, 12);
-        layout.Controls.Add(buttons, 0, 13);
+        layout.Controls.Add(_ioc, 0, 10);
+        layout.Controls.Add(_iocConfidence, 0, 11);
+        layout.Controls.Add(suppressionHeader, 0, 12);
+        layout.Controls.Add(_suppressionList, 0, 13);
+        layout.Controls.Add(hint, 0, 14);
+        layout.Controls.Add(buttons, 0, 15);
 
         Controls.Add(layout);
         AcceptButton = ok;
@@ -313,6 +342,9 @@ internal sealed class IdsSettingsForm : Form
                 ScanRule = form._scan.Checked,
                 LateralRule = form._lateral.Checked,
                 DnsRule = form._dns.Checked,
+                IocRule = form._ioc.Checked,
+                IocMinConfidence = form._iocConfidenceValues[
+                    Math.Max(0, form._iocConfidence.SelectedIndex)],
             },
             form._originalSuppressionIds
                 .Where(id => !remaining.Contains(id))
@@ -338,6 +370,8 @@ internal sealed class IdsSettingsForm : Form
                 "scan" => Localizer.T("端口 / 主机扫描"),
                 "lateral" => Localizer.T("内网横向"),
                 "dns" => Localizer.T("DNS 异常"),
+                "ioc-ip" => Localizer.T("威胁情报 IP"),
+                "ioc-domain" => Localizer.T("威胁情报域名"),
                 "*" => Localizer.T("全部规则"),
                 _ => Value.RuleId,
             };

@@ -24,7 +24,7 @@ public sealed partial class MainForm
         {
             AutoSize = false,
             Dock = DockStyle.Top,
-            Height = 92,
+            Height = 132,
             Font = new Font(Font, FontStyle.Regular),
             Text = Localizer.T("进程 ETW：状态未知"),
         };
@@ -76,6 +76,18 @@ public sealed partial class MainForm
             _etwHealthLabel.Text += "\n" + (Localizer.IsEnglish
                 ? $"DNS bypass: {dnsBypass.Count} event(s); last={dnsBypass.LastRemote} {dnsBypass.LastUtc?.ToLocalTime():HH:mm:ss}"
                 : $"DNS 绕过：{dnsBypass.Count} 次；最近 {dnsBypass.LastRemote} {dnsBypass.LastUtc?.ToLocalTime():HH:mm:ss}");
+        }
+
+        var ioc = status.Ioc;
+        if (ioc is not null)
+        {
+            _etwHealthLabel.Text += "\n" + (Localizer.IsEnglish
+                ? $"ThreatFox IOC: {(ioc.Loaded ? $"{ioc.Count} entries" : "not loaded")} " +
+                  $"(>= {ioc.MinConfidence}%), matches={ioc.Matches}, " +
+                  $"snapshot={ioc.SourceUtc?.ToLocalTime():yyyy-MM-dd}"
+                : $"ThreatFox IOC：{(ioc.Loaded ? $"{ioc.Count} 条" : "未加载")}" +
+                  $"（≥ {ioc.MinConfidence}%），命中 {ioc.Matches} 次，" +
+                  $"快照 {ioc.SourceUtc?.ToLocalTime():yyyy-MM-dd}");
         }
 
         var modules = status.Modules;

@@ -3,6 +3,7 @@ using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics;
 using WinAppGuard.Core.Diagnostics.Ids;
+using WinAppGuard.Core.Diagnostics.Ioc;
 
 namespace WinAppGuard.Service;
 
@@ -124,6 +125,7 @@ internal static class IdsHost
         }
 
         ApplyCapture();
+        LoadIocLibrary();
 
         lock (Gate)
         {
@@ -162,6 +164,7 @@ internal static class IdsHost
             _alerts = new List<IdsAlert>();
             _store = null;
             _analyzer.Clear();
+            ThreatFoxIocStore.Unload();
         }
 
         ServiceLog.Info("WAG-IDS-002", $"IDS stopped (wasEnabled={wasEnabled}).");
@@ -173,16 +176,22 @@ internal static class IdsHost
     {
         _analyzer.ObserveFlow(observation);
         DnsBypassDetector.Observe(observation);
+        ThreatFoxIocStore.ObserveFlow(observation);
     }
 
     private static void OnDns(DnsQueryRecord record)
-        => _analyzer.ObserveDns(new NetworkDnsObservation(
+    {
+        var observation = new NetworkDnsObservation(
             record.TimeUtc,
             record.Pid,
             record.QueryName,
             record.Status ?? string.Empty,
             record.ProcessName,
-            record.ProcessPath));
+            record.ProcessPath);
+
+        _analyzer.ObserveDns(observation);
+        ThreatFoxIocStore.ObserveDns(observation);
+    }
 
     /// <summary>按当前设置挂/摘回调；只对已有 ETW 会话做 fan-out。</summary>
     private static void ApplyCapture()
@@ -260,7 +269,22 @@ internal static class IdsHost
         catch (Exception ex)
         {
             ServiceLog.Warning("WAG-IDS-005", "IDS rule evaluation failed.", ex);
-            return;
+            raised = new List<IdsAlert>();
+        }
+
+        if (settings.IocRule)
+        {
+            foreach (var hit in ThreatFoxIocStore.Drain())
+            {
+                var alert = ToIocAlert(hit);
+
+                if (IsSuppressed(alert, suppressions, DateTime.UtcNow))
+                {
+                    continue;
+                }
+
+                raised.Add(alert);
+            }
         }
 
         if (raised.Count == 0)
@@ -359,6 +383,8 @@ internal static class IdsHost
         }
 
         int retentionDays;
+        bool iocReload;
+        bool iocEnabled;
 
         lock (Gate)
         {
@@ -373,6 +399,14 @@ internal static class IdsHost
             settings.ScanRule = dto.ScanRule;
             settings.LateralRule = dto.LateralRule;
             settings.DnsRule = dto.DnsRule;
+
+            var iocConfidence = ThreatFoxIocStore.NormalizeConfidence(dto.IocMinConfidence);
+            iocReload = settings.IocRule != dto.IocRule
+                || settings.IocMinConfidence != iocConfidence;
+
+            settings.IocRule = dto.IocRule;
+            settings.IocMinConfidence = iocConfidence;
+            iocEnabled = dto.IocRule;
             retentionDays = settings.RetentionDays;
 
             if (request.IdsRemoveSuppressionIds is { Count: > 0 } removeIds)
@@ -393,12 +427,18 @@ internal static class IdsHost
         ApplyCapture();
         PruneToRetention(retentionDays);
 
+        if (iocReload || (iocEnabled && !ThreatFoxIocStore.Snapshot().Loaded))
+        {
+            LoadIocLibrary();
+        }
+
         ServiceLog.Operation(
             "WAG-IDS-007",
             $"IDS configured: enabled={Enabled}, sensitivity={GetSettings().Sensitivity}, " +
             $"retention={GetSettings().RetentionDays}d, " +
             $"rules=beacon:{GetSettings().BeaconingRule}/scan:{GetSettings().ScanRule}/" +
-            $"lateral:{GetSettings().LateralRule}/dns:{GetSettings().DnsRule}.");
+            $"lateral:{GetSettings().LateralRule}/dns:{GetSettings().DnsRule}/" +
+            $"ioc:{GetSettings().IocRule}@{GetSettings().IocMinConfidence}.");
 
         return new QueryView
         {
@@ -631,19 +671,134 @@ internal static class IdsHost
         }
     }
 
-    private static IdsStatusDto BuildStatusLocked() => new()
+    private static void LoadIocLibrary()
     {
-        Enabled = _state.Settings.Enabled,
-        Collecting = _started && _state.Settings.Enabled && TrafficHost.Collecting,
-        Sensitivity = _state.Settings.Sensitivity,
-        FlowCount = _analyzer.FlowCount,
-        EventsSeen = _analyzer.EventsSeen,
-        EventsLost = _analyzer.EventsLost + TrafficHost.FlowParseFailures,
-        AlertsNew = _alerts.Count(alert => AlertStatus(alert.Id) == "new"),
-        AlertsTotal = _alerts.Count,
-        LastAlertUtc = _lastAlertUtc,
-        SuppressionCount = _state.Suppressions.Count,
-    };
+        bool enabled;
+        int minConfidence;
+
+        lock (Gate)
+        {
+            enabled = _state.Settings.IocRule;
+            minConfidence = _state.Settings.IocMinConfidence;
+        }
+
+        if (!enabled)
+        {
+            ThreatFoxIocStore.Unload();
+            return;
+        }
+
+        var path = ServicePaths.ThreatFoxCsvFile;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (!ThreatFoxIocStore.Load(path, minConfidence))
+                {
+                    ServiceLog.Warning(
+                        "WAG-IDS-012",
+                        $"ThreatFox IOC data was not loaded: {ThreatFoxIocStore.Snapshot().LastError}");
+                }
+            }
+            catch (Exception ex)
+            {
+                ServiceLog.Warning("WAG-IDS-012", "Failed to load ThreatFox IOC data.", ex);
+            }
+        });
+    }
+
+    private static IdsAlert ToIocAlert(IocHit hit)
+    {
+        var identity = ProcessResolver.Resolve(hit.Pid);
+
+        return new IdsAlert
+        {
+            TimeUtc = hit.TimeUtc,
+            Severity = hit.Confidence >= 90
+                ? IdsSeverity.High
+                : hit.Confidence >= 75
+                    ? IdsSeverity.Medium
+                    : IdsSeverity.Low,
+            RuleId = hit.Kind == "ip" ? "ioc-ip" : "ioc-domain",
+            RuleName = string.IsNullOrWhiteSpace(hit.Malware) ? "ThreatFox IOC" : hit.Malware,
+            Pid = hit.Pid,
+            ProcessName = identity.Name,
+            ProcessPath = string.IsNullOrEmpty(identity.Path) ? null : identity.Path,
+            Target = hit.Target,
+            Evidence = $"ThreatFox: {hit.Malware} / {hit.ThreatType} / " +
+                       $"confidence {hit.Confidence}% / {hit.Reference}",
+            DedupKey = $"ioc|{hit.Kind}|{hit.Target}|{hit.Pid}",
+        };
+    }
+
+    private static bool IsSuppressed(
+        IdsAlert alert,
+        IReadOnlyList<IdsSuppression> suppressions,
+        DateTime now)
+    {
+        foreach (var suppression in suppressions)
+        {
+            if (suppression.UntilUtc is { } until && until <= now)
+            {
+                continue;
+            }
+
+            if (!string.Equals(suppression.RuleId, "*", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(suppression.RuleId, alert.RuleId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(suppression.ProcessPath)
+                && !string.Equals(suppression.ProcessPath, alert.ProcessPath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(suppression.ProcessName)
+                && !string.Equals(suppression.ProcessName, alert.ProcessName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(suppression.Target)
+                && !string.Equals(suppression.Target, alert.Target, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IdsStatusDto BuildStatusLocked()
+    {
+        var ioc = ThreatFoxIocStore.Snapshot();
+
+        return new IdsStatusDto
+        {
+            Enabled = _state.Settings.Enabled,
+            Collecting = _started && _state.Settings.Enabled && TrafficHost.Collecting,
+            Sensitivity = _state.Settings.Sensitivity,
+            FlowCount = _analyzer.FlowCount,
+            EventsSeen = _analyzer.EventsSeen,
+            EventsLost = _analyzer.EventsLost + TrafficHost.FlowParseFailures,
+            AlertsNew = _alerts.Count(alert => AlertStatus(alert.Id) == "new"),
+            AlertsTotal = _alerts.Count,
+            LastAlertUtc = _lastAlertUtc,
+            SuppressionCount = _state.Suppressions.Count,
+            IocEnabled = _state.Settings.IocRule,
+            IocLoaded = ioc.Loaded,
+            IocCount = ioc.TotalCount,
+            IocMinConfidence = ioc.MinConfidence,
+            IocSourceUtc = ioc.SourceUtc,
+            IocMatches = ioc.MatchCount,
+            IocLastError = ioc.LastError,
+        };
+    }
 
     private static IdsSettingsDto GetSettings()
     {
@@ -706,6 +861,8 @@ internal static class IdsHost
         ScanRule = settings.ScanRule,
         LateralRule = settings.LateralRule,
         DnsRule = settings.DnsRule,
+        IocRule = settings.IocRule,
+        IocMinConfidence = settings.IocMinConfidence,
     };
 
     private static IdsSettings CloneSettings(IdsSettings settings) => new()
@@ -717,6 +874,8 @@ internal static class IdsHost
         ScanRule = settings.ScanRule,
         LateralRule = settings.LateralRule,
         DnsRule = settings.DnsRule,
+        IocRule = settings.IocRule,
+        IocMinConfidence = settings.IocMinConfidence,
     };
 
     private static IdsSuppression CloneSuppression(IdsSuppression suppression) => new()

@@ -256,6 +256,12 @@ public sealed class IdsSettingsDto
     public bool LateralRule { get; set; } = true;
 
     public bool DnsRule { get; set; } = true;
+
+    /// <summary>6.0：ThreatFox 本地 IOC 匹配（默认开启）。</summary>
+    public bool IocRule { get; set; } = true;
+
+    /// <summary>6.0：IOC 最低置信度；低于该值的条目在加载时直接丢弃。</summary>
+    public int IocMinConfidence { get; set; } = 75;
 }
 
 /// <summary>3.7：一条抑制。</summary>
@@ -299,6 +305,27 @@ public sealed class IdsStatusDto
     public DateTime? LastAlertUtc { get; set; }
 
     public int SuppressionCount { get; set; }
+
+    /// <summary>6.0：ThreatFox 本地 IOC 库是否启用。</summary>
+    public bool IocEnabled { get; set; }
+
+    /// <summary>6.0：IOC 库是否已加载成功。</summary>
+    public bool IocLoaded { get; set; }
+
+    /// <summary>6.0：已加载的 IOC 条目数（按当前置信度过滤后）。</summary>
+    public int IocCount { get; set; }
+
+    /// <summary>6.0：当前生效的最低置信度。</summary>
+    public int IocMinConfidence { get; set; }
+
+    /// <summary>6.0：IOC 快照的生成时间（来自文件头）。</summary>
+    public DateTime? IocSourceUtc { get; set; }
+
+    /// <summary>6.0：累计命中次数。</summary>
+    public long IocMatches { get; set; }
+
+    /// <summary>6.0：IOC 库加载错误。</summary>
+    public string? IocLastError { get; set; }
 }
 
 /// <summary>5.0：网络被动检测配置。</summary>
@@ -318,6 +345,12 @@ public sealed class NetworkDetectionSettingsDto
 
     /// <summary>5.2：监听网卡 GUID；空字符串表示自动。</summary>
     public string CaptureDeviceId { get; set; } = string.Empty;
+
+    /// <summary>6.0：附加 ThreatFox Suricata 规则（默认关闭，与本地 IOC 库重叠）。</summary>
+    public bool ThreatFoxRules { get; set; }
+
+    /// <summary>6.0：ThreatFox 规则最低置信度（50/75/90/100）。</summary>
+    public int ThreatFoxMinConfidence { get; set; } = 90;
 }
 
 /// <summary>5.0：一条 Suricata/ET Open 网络告警。</summary>
@@ -1109,6 +1142,27 @@ public sealed class ServiceStatus
 
     /// <summary>6.0：DNS 绕过检测。</summary>
     public DnsBypassStatusDto? DnsBypass { get; set; }
+
+    /// <summary>6.0：ThreatFox 本地 IOC 库状态。</summary>
+    public IocStatusDto? Ioc { get; set; }
+}
+
+/// <summary>6.0：本地 IOC 库状态。</summary>
+public sealed class IocStatusDto
+{
+    public bool Enabled { get; set; }
+
+    public bool Loaded { get; set; }
+
+    public int Count { get; set; }
+
+    public int MinConfidence { get; set; }
+
+    public DateTime? SourceUtc { get; set; }
+
+    public long Matches { get; set; }
+
+    public string? LastError { get; set; }
 }
 
 /// <summary>6.0：DNS 绕过状态。</summary>

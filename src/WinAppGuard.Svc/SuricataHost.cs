@@ -34,6 +34,8 @@ internal static class SuricataHost
     private static string? _version;
     private static string _profile = "standard";
     private static IReadOnlyList<string> _enabledCategories = NetworkRuleCategories.DefaultEnabled;
+    private static bool _threatFoxRules;
+    private static int _threatFoxMinConfidence = 90;
     private static string _captureDeviceId = string.Empty;
     private static string? _captureDeviceName;
     private static bool _captureFallback;
@@ -88,7 +90,9 @@ internal static class SuricataHost
         bool enabled,
         string ruleProfile,
         IReadOnlyList<string>? enabledCategories = null,
-        string? captureDeviceId = null)
+        string? captureDeviceId = null,
+        bool threatFoxRules = false,
+        int threatFoxMinConfidence = 90)
     {
         lock (Gate)
         {
@@ -102,6 +106,8 @@ internal static class SuricataHost
             _enabledCategories = _profile == "curated"
                 ? NetworkRuleCategories.Curated
                 : NormalizeCategories(enabledCategories);
+            _threatFoxRules = threatFoxRules;
+            _threatFoxMinConfidence = NormalizeConfidence(threatFoxMinConfidence);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             _generation++;
 
@@ -143,7 +149,9 @@ internal static class SuricataHost
     internal static void Reload(
         string ruleProfile,
         IReadOnlyList<string>? enabledCategories = null,
-        string? captureDeviceId = null)
+        string? captureDeviceId = null,
+        bool threatFoxRules = false,
+        int threatFoxMinConfidence = 90)
     {
         lock (Gate)
         {
@@ -155,6 +163,8 @@ internal static class SuricataHost
             _enabledCategories = _profile == "curated"
                 ? NetworkRuleCategories.Curated
                 : NormalizeCategories(enabledCategories);
+            _threatFoxRules = threatFoxRules;
+            _threatFoxMinConfidence = NormalizeConfidence(threatFoxMinConfidence);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             StopProcessLocked();
             _nextRestartUtc = DateTime.MinValue;
@@ -164,6 +174,35 @@ internal static class SuricataHost
         {
             EnsureRunning(ruleProfile);
         }
+    }
+
+    private static int NormalizeConfidence(int value) => value switch
+    {
+        <= 50 => 50,
+        <= 75 => 75,
+        <= 90 => 90,
+        _ => 100,
+    };
+
+    private static int RuleConfidence(string line)
+    {
+        const string marker = "confidence_level ";
+        var index = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+
+        if (index < 0)
+        {
+            return 0;
+        }
+
+        index += marker.Length;
+        var end = index;
+
+        while (end < line.Length && char.IsAsciiDigit(line[end]))
+        {
+            end++;
+        }
+
+        return int.TryParse(line.AsSpan(index, end - index), out var value) ? value : 0;
     }
 
     private static IReadOnlyList<string> NormalizeCategories(
@@ -453,6 +492,11 @@ internal static class SuricataHost
                         writer.WriteLine(line);
                     }
                 }
+
+                if (_threatFoxRules)
+                {
+                    AppendThreatFoxRulesLocked(writer);
+                }
             }
 
             var backup = rulesFile + ".bak";
@@ -488,6 +532,42 @@ internal static class SuricataHost
             {
                 // 临时文件清理失败不影响检测。
             }
+        }
+    }
+
+    private static void AppendThreatFoxRulesLocked(StreamWriter writer)
+    {
+        var path = ServicePaths.ThreatFoxRulesFile;
+
+        if (!File.Exists(path))
+        {
+            writer.WriteLine("# ThreatFox rules not installed; IOC matching still runs in-process.");
+            return;
+        }
+
+        writer.WriteLine($"# ThreatFox rules (confidence >= {_threatFoxMinConfidence})");
+
+        var appended = 0;
+
+        foreach (var line in File.ReadLines(path, Encoding.UTF8))
+        {
+            if (!line.StartsWith("alert ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (RuleConfidence(line) < _threatFoxMinConfidence)
+            {
+                continue;
+            }
+
+            writer.WriteLine(line);
+            appended++;
+        }
+
+        if (appended == 0)
+        {
+            writer.WriteLine("# No ThreatFox rules matched the confidence threshold.");
         }
     }
 

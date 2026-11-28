@@ -20,6 +20,21 @@ WinAppGuard 5.0 整体按 **GNU General Public License v2.0** 发布，见根目
   - ET Pro 规则不随包
 - 随包文件：`standard.rules`、`all.rules`、`emerging.rules.zip`、`ET-classification.config`
 
+## ThreatFox（abuse.ch）
+
+- 项目：https://threatfox.abuse.ch/
+- 快照日期：2026-11-28
+- 随包文件：`threatfox/full.csv`（IOC 全量 CSV）、`threatfox/threatfox_suricata.rules`（Suricata 规则）
+- 用途：本地 IOC 匹配（只告警、不阻断）与可选的 Suricata 规则
+- 条款：
+  - https://threatfox.abuse.ch/faq/#tos
+  - https://abuse.ch/terms-of-use/
+- 说明：
+  - Feodo Tracker / SSL Blacklist / YARAify 为 CC0；
+  - ThreatFox（以及 URLhaus / MalwareBazaar）受 abuse.ch 条款约束，商用或再分发
+    可能需要由 Spamhaus 管理的订阅；发布前请核对条款与授权；
+  - 安装后随包说明位于 `%ProgramData%\WinAppGuard\threatfox\NOTICE.txt`。
+
 ## Npcap
 
 - 官方安装包：`npcap-1.90.exe`

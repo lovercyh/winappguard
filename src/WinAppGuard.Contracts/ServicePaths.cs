@@ -84,6 +84,15 @@ public static class ServicePaths
     /// <summary>6.0：程序画像。</summary>
     public static string ProgramProfilesFile => Path.Combine(DataDirectory, "program-profiles.json");
 
+    /// <summary>6.0：ThreatFox 威胁情报目录（IOC CSV 与 Suricata 规则快照）。</summary>
+    public static string ThreatFoxDirectory => Path.Combine(DataDirectory, "threatfox");
+
+    /// <summary>6.0：ThreatFox 全量 IOC CSV（构建期快照，运行时只读）。</summary>
+    public static string ThreatFoxCsvFile => Path.Combine(ThreatFoxDirectory, "full.csv");
+
+    /// <summary>6.0：ThreatFox Suricata 规则快照。</summary>
+    public static string ThreatFoxRulesFile => Path.Combine(ThreatFoxDirectory, "threatfox.rules");
+
     /// <summary>Suricata 配置、规则、eve.json 的落盘目录。</summary>
     public static string SuricataDirectory => Path.Combine(NetworkDetectionDirectory, "suricata");
 

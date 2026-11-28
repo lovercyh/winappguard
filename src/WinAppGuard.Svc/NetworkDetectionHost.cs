@@ -184,6 +184,8 @@ internal static class NetworkDetectionHost
         string profile;
         List<string> categories;
         string captureDeviceId;
+        bool threatFoxRules;
+        int threatFoxMinConfidence;
 
         var requestedCategories = (dto.EnabledRuleCategories ?? new List<string>())
             .Where(NetworkRuleCategories.IsKnown)
@@ -219,11 +221,16 @@ internal static class NetworkDetectionHost
             _state.Settings.RuleProfile = requestedProfile;
             _state.Settings.EnabledRuleCategories = requestedCategories;
             _state.Settings.CaptureDeviceId = dto.CaptureDeviceId?.Trim() ?? string.Empty;
+            _state.Settings.ThreatFoxRules = dto.ThreatFoxRules;
+            _state.Settings.ThreatFoxMinConfidence =
+                NormalizeConfidence(dto.ThreatFoxMinConfidence);
 
             enabled = _state.Settings.Enabled;
             profile = _state.Settings.RuleProfile;
             categories = requestedCategories.ToList();
             captureDeviceId = _state.Settings.CaptureDeviceId;
+            threatFoxRules = _state.Settings.ThreatFoxRules;
+            threatFoxMinConfidence = _state.Settings.ThreatFoxMinConfidence;
         }
 
         PersistState();
@@ -232,7 +239,7 @@ internal static class NetworkDetectionHost
         {
             StartSuricata();
             StartReader();
-            SuricataHost.Reload(profile, categories, captureDeviceId);
+            SuricataHost.Reload(profile, categories, captureDeviceId, threatFoxRules, threatFoxMinConfidence);
         }
         else
         {
@@ -244,6 +251,7 @@ internal static class NetworkDetectionHost
             "WAG-ND-023",
             $"Network detection configured: enabled={enabled}, profile={profile}, " +
             $"capture={captureDeviceId}, " +
+            $"threatfox={threatFoxRules}@{threatFoxMinConfidence}, " +
             $"retention={_state.Settings.RetentionDays}d, notify={_state.Settings.Notify}.");
 
         lock (Gate)
@@ -465,6 +473,8 @@ internal static class NetworkDetectionHost
         string profile;
         List<string> categories;
         string captureDeviceId;
+        bool threatFoxRules;
+        int threatFoxMinConfidence;
 
         lock (Gate)
         {
@@ -474,9 +484,17 @@ internal static class NetworkDetectionHost
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             captureDeviceId = _state.Settings.CaptureDeviceId;
+            threatFoxRules = _state.Settings.ThreatFoxRules;
+            threatFoxMinConfidence = _state.Settings.ThreatFoxMinConfidence;
         }
 
-        SuricataHost.Start(enabled: true, profile, categories, captureDeviceId);
+        SuricataHost.Start(
+            enabled: true,
+            profile,
+            categories,
+            captureDeviceId,
+            threatFoxRules,
+            threatFoxMinConfidence);
     }
 
     private static void StartReader()
@@ -737,7 +755,17 @@ internal static class NetworkDetectionHost
             RetentionDays = settings.RetentionDays,
             EnabledRuleCategories = settings.EnabledRuleCategories.ToList(),
             CaptureDeviceId = settings.CaptureDeviceId,
+            ThreatFoxRules = settings.ThreatFoxRules,
+            ThreatFoxMinConfidence = settings.ThreatFoxMinConfidence,
         };
+
+    private static int NormalizeConfidence(int value) => value switch
+    {
+        <= 50 => 50,
+        <= 75 => 75,
+        <= 90 => 90,
+        _ => 100,
+    };
 
     private static NetworkBlockDto ToDto(NetworkBlock block)
         => new()

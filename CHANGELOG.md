@@ -30,13 +30,15 @@
 - 「局域网设备」页：按 MAC 聚合 ARP/DHCP 事件，可一键信任设备（信任后静默其告警）。
 - DNS 绕过检测（最小版）：出站 53 到非系统 DNS、TCP 853 计数并在健康度页显示。
 - Suricata 精选档：默认使用高精确度分类，排除钓鱼与「其他」；仍保留标准/全量档。
+- ThreatFox 本地 IOC 库：构建期快照 `threatfox/full.csv`，按 IP:port / 域名 / 文件哈希匹配，只告警不阻断，默认置信度 ≥75%。
+- ThreatFox Suricata 规则：随包提供 `threatfox.rules`，设置中可选启用并按置信度过滤（默认关闭，避免与本地 IOC 库重复）。
+- IDS 设置新增「ThreatFox 本地 IOC 匹配」开关与置信度档位；告警页新增「威胁情报」筛选。
+- 检测健康度页显示 IOC 条数、快照日期、命中次数和加载状态。
 
 ### 尚未包含
 
-- ProgramProfile / EWMA 基线 / ContactSet；
-- 局域网设备信任清单页面；
-- DNS 绕过、LOLBin 告警、IOC 本地库、Suricata 精选档；
-- 完整 6.0 文档与验收。
+- IOC 在线自动更新与商业授权数据源（当前为发布期快照，来源与条款见 `threatfox/NOTICE.txt`）；
+- 完整 6.0 正式文档与发布验收。
 
 ## [5.16.0] - 2026-11-28
 

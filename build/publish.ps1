@@ -138,6 +138,22 @@ Copy-Item (Join-Path $etDir 'BSD-License.txt') (Join-Path $payloadDir 'ET-BSD-Li
 Copy-Item (Join-Path $etDir 'gpl-2.0.txt') (Join-Path $payloadDir 'ET-GPL-2.0.txt')
 Copy-Item (Join-Path $etDir 'classification.config') (Join-Path $payloadDir 'ET-classification.config')
 Copy-Item (Join-Path $etDir 'gpl-2.0.txt') (Join-Path $payloadDir 'GPL-2.0.txt')
+
+# ---- 6.0：ThreatFox 快照（本地 IOC 库 + 可选 Suricata 规则）----
+$threatFoxDir = Join-Path $root 'threatfox'
+$threatFoxCsv = Join-Path $threatFoxDir 'full.csv'
+$threatFoxRules = Join-Path $threatFoxDir 'threatfox_suricata.rules'
+$threatFoxNotice = Join-Path $threatFoxDir 'NOTICE.txt'
+
+foreach ($required in @($threatFoxCsv, $threatFoxRules, $threatFoxNotice)) {
+    if (-not (Test-Path $required)) {
+        throw "6.0 缺少 ThreatFox 数据：$required"
+    }
+}
+
+Copy-Item $threatFoxCsv (Join-Path $payloadDir 'threatfox-full.csv')
+Copy-Item $threatFoxRules (Join-Path $payloadDir 'threatfox.rules')
+Copy-Item $threatFoxNotice (Join-Path $payloadDir 'THREATFOX-NOTICE.txt')
 Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.md') (Join-Path $payloadDir 'THIRD-PARTY-NOTICES.md')
 
 if (Test-Path $payloadZip) { Remove-Item $payloadZip -Force }

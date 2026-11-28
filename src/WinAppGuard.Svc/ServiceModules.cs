@@ -1,19 +1,23 @@
 namespace WinAppGuard.Service;
 
+using WinAppGuard.Core.Diagnostics.Processes;
+
 /// <summary>
-/// 5.9：服务的 12 个模块。
-///
-/// 14 个 Host 收敛为 12 个生命周期模块：
-///   - LockdownHost / StrictModeHost 并入 rules；
-///   - SuricataHost / NetworkBlockHost 并入 network-detection；
-///   - 其余检测 Host 各自一个模块；
-///   - 控制管道作为最后一个模块启动，客户端不会在依赖模块就绪前连进来。
+/// 5.9：服务的模块。
 /// </summary>
 internal static class ServiceModules
 {
     internal static IReadOnlyList<IServiceModule> Create(ControlServer server)
         => new IServiceModule[]
         {
+            new DelegateServiceModule(
+                "process-etw",
+                order: 5,
+                restartable: true,
+                start: ProcessEtwHost.Start,
+                stop: ProcessEtwHost.Stop,
+                detail: () => ProcessEtwHost.Snapshot().Running ? "etw" : "fallback"),
+
             new DelegateServiceModule(
                 "rules",
                 order: 10,

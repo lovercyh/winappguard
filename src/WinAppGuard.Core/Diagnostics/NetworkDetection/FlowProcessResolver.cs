@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using WinAppGuard.Core.Diagnostics.Processes;
 
 namespace WinAppGuard.Core.Diagnostics.NetworkDetection;
 
@@ -43,6 +44,13 @@ internal static class FlowProcessResolver
             if (pid <= 0)
             {
                 return (0, string.Empty, string.Empty);
+            }
+
+            var attribution = ProcessAttribution.Resolve(pid);
+
+            if (!string.IsNullOrEmpty(attribution.Path))
+            {
+                return (pid, attribution.Name, attribution.Path);
             }
 
             var identity = ProcessResolver.Resolve(pid);

@@ -209,6 +209,12 @@ public sealed partial class MainForm
         });
         _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
+            DataPropertyName = nameof(NdRow.ConfidenceText),
+            HeaderText = Localizer.T("置信度"),
+            Width = 60,
+        });
+        _ndGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
             DataPropertyName = nameof(NdRow.StatusText),
             HeaderText = Localizer.T("状态"),
             Width = 55,
@@ -398,6 +404,7 @@ public sealed partial class MainForm
                 SeverityText = alert.Severity,
                 CategoryText = CategoryText(alert.RuleCategory),
                 CategoryRaw = alert.Category,
+                ConfidenceText = alert.Confidence.ToString(),
                 StatusText = Localizer.T(alert.Status switch
                 {
                     "ack" => "已读",
@@ -872,6 +879,7 @@ public sealed partial class MainForm
         public string SeverityText { get; init; } = string.Empty;
         public string CategoryText { get; init; } = string.Empty;
         public string CategoryRaw { get; init; } = string.Empty;
+        public string ConfidenceText { get; init; } = string.Empty;
         public string StatusText { get; init; } = string.Empty;
         public string Signature { get; init; } = string.Empty;
         public string RemoteAddress { get; init; } = string.Empty;

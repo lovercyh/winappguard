@@ -2,6 +2,7 @@ using WinAppGuard.Contracts;
 using WinAppGuard.Contracts.Protocol;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.NetworkDetection;
+using WinAppGuard.Core.Diagnostics.Processes;
 
 namespace WinAppGuard.Service;
 
@@ -681,6 +682,7 @@ internal static class NetworkDetectionHost
             Severity = alert.Severity,
             Category = alert.Category,
             RuleCategory = NetworkRuleCategoryIndex.Resolve(alert.SignatureId),
+            Confidence = ScoreAlert(alert),
             Protocol = alert.Protocol,
             AppProto = alert.AppProto,
             LocalAddress = alert.LocalAddress,
@@ -695,6 +697,29 @@ internal static class NetworkDetectionHost
             Status = alert.Status,
             BlockState = alert.BlockState,
         };
+
+    /// <summary>6.0：规则严重度 + 进程归因确定度，0–100。</summary>
+    private static int ScoreAlert(NetworkAlert alert)
+    {
+        var score = alert.Severity switch
+        {
+            "high" => 70,
+            "medium" => 50,
+            _ => 30,
+        };
+
+        score += NetworkRuleCategoryIndex.Resolve(alert.SignatureId) switch
+        {
+            "malware" or "exploit" => 10,
+            "dns" or "phishing" => 5,
+            _ => 0,
+        };
+
+        var attribution = ProcessAttribution.Resolve(alert.Pid);
+        score += attribution.Exact ? 15 : string.IsNullOrEmpty(attribution.Path) ? -10 : 5;
+
+        return Math.Clamp(score, 0, 100);
+    }
 
     private static NetworkDetectionSettingsDto ToDto(NetworkDetectionSettings settings)
         => new()

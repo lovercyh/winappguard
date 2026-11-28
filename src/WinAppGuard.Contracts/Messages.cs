@@ -341,6 +341,9 @@ public sealed class NetworkAlertDto
     /// </summary>
     public string RuleCategory { get; set; } = string.Empty;
 
+    /// <summary>6.0：0–100 的置信度；规则严重度 + 归因确定度。</summary>
+    public int Confidence { get; set; }
+
     public string Protocol { get; set; } = string.Empty;
 
     public string AppProto { get; set; } = string.Empty;
@@ -1097,6 +1100,29 @@ public sealed class ServiceStatus
 
     /// <summary>12 个服务模块的健康快照。</summary>
     public List<ModuleStatusDto>? Modules { get; set; }
+
+    /// <summary>6.0：Kernel-Process ETW 健康快照。</summary>
+    public ProcessEtwStatusDto? ProcessEtw { get; set; }
+}
+
+/// <summary>6.0：Kernel-Process ETW 状态。</summary>
+public sealed class ProcessEtwStatusDto
+{
+    public bool Enabled { get; set; }
+
+    public bool Running { get; set; }
+
+    public bool Fallback { get; set; }
+
+    public int TableEntries { get; set; }
+
+    public long EventsSeen { get; set; }
+
+    public long ParseFailures { get; set; }
+
+    public string? LastError { get; set; }
+
+    public DateTime? LastEventUtc { get; set; }
 }
 
 /// <summary>5.10：一个服务模块的健康状态。</summary>

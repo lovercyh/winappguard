@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
+using WinAppGuard.Core.Diagnostics.Processes;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
@@ -38,6 +39,19 @@ internal static class StatusBuilder
             Revision = rules.RuleRevision,
             RevisionEpoch = rules.RuleRevisionEpoch,
             Modules = GetModules(),
+        };
+
+        var etw = ProcessEtwHost.Snapshot();
+        status.ProcessEtw = new ProcessEtwStatusDto
+        {
+            Enabled = etw.Enabled,
+            Running = etw.Running,
+            Fallback = etw.Fallback,
+            TableEntries = etw.TableEntries,
+            EventsSeen = etw.EventsSeen,
+            ParseFailures = etw.ParseFailures,
+            LastError = etw.LastError,
+            LastEventUtc = etw.LastEventUtc,
         };
 
         // 5.12：规则计数来自 RuleSnapshotCache（缓存命中时不开 WFP），

@@ -34,8 +34,6 @@ internal static class SuricataHost
     private static string? _version;
     private static string _profile = "standard";
     private static IReadOnlyList<string> _enabledCategories = NetworkRuleCategories.DefaultEnabled;
-    private static bool _threatFoxRules;
-    private static int _threatFoxMinConfidence = 90;
     private static string _captureDeviceId = string.Empty;
     private static string? _captureDeviceName;
     private static bool _captureFallback;
@@ -90,9 +88,7 @@ internal static class SuricataHost
         bool enabled,
         string ruleProfile,
         IReadOnlyList<string>? enabledCategories = null,
-        string? captureDeviceId = null,
-        bool threatFoxRules = false,
-        int threatFoxMinConfidence = 90)
+        string? captureDeviceId = null)
     {
         lock (Gate)
         {
@@ -106,8 +102,6 @@ internal static class SuricataHost
             _enabledCategories = _profile == "curated"
                 ? NetworkRuleCategories.Curated
                 : NormalizeCategories(enabledCategories);
-            _threatFoxRules = threatFoxRules;
-            _threatFoxMinConfidence = NormalizeConfidence(threatFoxMinConfidence);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             _generation++;
 
@@ -149,9 +143,7 @@ internal static class SuricataHost
     internal static void Reload(
         string ruleProfile,
         IReadOnlyList<string>? enabledCategories = null,
-        string? captureDeviceId = null,
-        bool threatFoxRules = false,
-        int threatFoxMinConfidence = 90)
+        string? captureDeviceId = null)
     {
         lock (Gate)
         {
@@ -163,8 +155,6 @@ internal static class SuricataHost
             _enabledCategories = _profile == "curated"
                 ? NetworkRuleCategories.Curated
                 : NormalizeCategories(enabledCategories);
-            _threatFoxRules = threatFoxRules;
-            _threatFoxMinConfidence = NormalizeConfidence(threatFoxMinConfidence);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
             StopProcessLocked();
             _nextRestartUtc = DateTime.MinValue;
@@ -176,11 +166,10 @@ internal static class SuricataHost
         }
     }
 
-    private static int NormalizeConfidence(int value) => value switch
+    internal static int ThreatFoxThreshold(string profile) => profile switch
     {
-        <= 50 => 50,
-        <= 75 => 75,
-        <= 90 => 90,
+        "full" => 0,
+        "standard" => 90,
         _ => 100,
     };
 
@@ -399,7 +388,14 @@ internal static class SuricataHost
             var output = process.StandardOutput.ReadToEnd()
                 + process.StandardError.ReadToEnd();
 
-            if (!process.WaitForExit(60_000))
+            var timeout = _ruleCount switch
+            {
+                > 100_000 => 300_000,
+                > 60_000 => 180_000,
+                _ => 60_000,
+            };
+
+            if (!process.WaitForExit(timeout))
             {
                 try
                 {
@@ -450,7 +446,9 @@ internal static class SuricataHost
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (categories.Count == 0)
+        var full = string.Equals(_profile, "full", StringComparison.OrdinalIgnoreCase);
+
+        if (!full && categories.Count == 0)
         {
             _lastError = "至少需要启用一个规则分类。";
             return false;
@@ -463,24 +461,24 @@ internal static class SuricataHost
                        append: false,
                        new UTF8Encoding(false)))
             {
-                writer.WriteLine("# WinAppGuard 5.1 active rule set");
-                writer.WriteLine($"# categories: {string.Join(",", categories)}");
+                writer.WriteLine("# WinAppGuard 6.0 active rule set");
+                writer.WriteLine(full
+                    ? "# profile: full (ET Open all rules)"
+                    : $"# categories: {string.Join(",", categories)}");
                 writer.WriteLine($"# generated: {DateTime.UtcNow:O}");
 
-                foreach (var category in categories)
+                if (full)
                 {
-                    var path = Path.Combine(
-                        ServicePaths.SuricataStandardRulesDirectory,
-                        NetworkRuleCategories.FileName(category));
+                    var allRules = ServicePaths.SuricataFullRulesFile;
 
-                    if (!File.Exists(path))
+                    if (!File.Exists(allRules))
                     {
                         _lastError =
-                            $"缺少规则分类文件：{path}；请重新安装或更新 ET Open。";
+                            $"缺少全量规则文件：{allRules}；请重新安装或更新 ET Open。";
                         return false;
                     }
 
-                    foreach (var line in File.ReadLines(path, Encoding.UTF8))
+                    foreach (var line in File.ReadLines(allRules, Encoding.UTF8))
                     {
                         var trimmed = line.TrimStart();
 
@@ -492,11 +490,36 @@ internal static class SuricataHost
                         writer.WriteLine(line);
                     }
                 }
-
-                if (_threatFoxRules)
+                else
                 {
-                    AppendThreatFoxRulesLocked(writer);
+                    foreach (var category in categories)
+                    {
+                        var path = Path.Combine(
+                            ServicePaths.SuricataStandardRulesDirectory,
+                            NetworkRuleCategories.FileName(category));
+
+                        if (!File.Exists(path))
+                        {
+                            _lastError =
+                                $"缺少规则分类文件：{path}；请重新安装或更新 ET Open。";
+                            return false;
+                        }
+
+                        foreach (var line in File.ReadLines(path, Encoding.UTF8))
+                        {
+                            var trimmed = line.TrimStart();
+
+                            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                            {
+                                continue;
+                            }
+
+                            writer.WriteLine(line);
+                        }
+                    }
                 }
+
+                AppendThreatFoxRulesLocked(writer, ThreatFoxThreshold(_profile));
             }
 
             var backup = rulesFile + ".bak";
@@ -535,7 +558,28 @@ internal static class SuricataHost
         }
     }
 
-    private static void AppendThreatFoxRulesLocked(StreamWriter writer)
+    private static IEnumerable<string> EnumerateThreatFoxRules(string path, int minConfidence)
+    {
+        foreach (var line in File.ReadLines(path, Encoding.UTF8))
+        {
+            if (!line.StartsWith("alert ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (RuleConfidence(line) < minConfidence)
+            {
+                continue;
+            }
+
+            yield return line;
+        }
+    }
+
+    internal static int CountThreatFoxRules(string path, int minConfidence)
+        => EnumerateThreatFoxRules(path, minConfidence).Count();
+
+    private static void AppendThreatFoxRulesLocked(StreamWriter writer, int minConfidence)
     {
         var path = ServicePaths.ThreatFoxRulesFile;
 
@@ -545,22 +589,12 @@ internal static class SuricataHost
             return;
         }
 
-        writer.WriteLine($"# ThreatFox rules (confidence >= {_threatFoxMinConfidence})");
+        writer.WriteLine($"# ThreatFox rules (confidence >= {minConfidence})");
 
         var appended = 0;
 
-        foreach (var line in File.ReadLines(path, Encoding.UTF8))
+        foreach (var line in EnumerateThreatFoxRules(path, minConfidence))
         {
-            if (!line.StartsWith("alert ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (RuleConfidence(line) < _threatFoxMinConfidence)
-            {
-                continue;
-            }
-
             writer.WriteLine(line);
             appended++;
         }
@@ -641,16 +675,9 @@ internal static class SuricataHost
 
         string rulesFile;
 
-        if (string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase))
+        if (!BuildActiveRulesLocked(out rulesFile))
         {
-            rulesFile = ServicePaths.SuricataFullRulesFile;
-        }
-        else
-        {
-            if (!BuildActiveRulesLocked(out rulesFile))
-            {
-                return false;
-            }
+            return false;
         }
 
         if (!File.Exists(rulesFile))

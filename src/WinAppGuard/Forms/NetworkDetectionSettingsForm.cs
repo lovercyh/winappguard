@@ -17,9 +17,6 @@ internal sealed class NetworkDetectionSettingsForm : Form
     private readonly CheckedListBox _categories;
     private readonly Button _selectAll;
     private readonly Button _selectNone;
-    private readonly CheckBox _threatFox;
-    private readonly ComboBox _threatFoxConfidence;
-    private readonly int[] _threatFoxConfidenceValues = { 50, 75, 90, 100 };
 
     private NetworkDetectionSettingsForm(NetworkDetectionSettingsDto current)
     {
@@ -40,10 +37,10 @@ internal sealed class NetworkDetectionSettingsForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
             Padding = new Padding(16),
-            RowCount = 15,
+            RowCount = 13,
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 15; i++)
+        for (var i = 0; i < 13; i++)
         {
             layout.RowStyles.Add(i == 7
                 ? new RowStyle(SizeType.Absolute, 170)
@@ -54,7 +51,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
         {
             AutoSize = true,
             Checked = current.Enabled,
-            Text = Localizer.T("启用反网络攻击检测（Suricata + ET Open）"),
+            Text = Localizer.T("启用反网络攻击检测（Suricata + ET Open + ThreatFox）"),
         };
         layout.Controls.Add(_enabled, 0, 0);
 
@@ -169,33 +166,6 @@ internal sealed class NetworkDetectionSettingsForm : Form
         categoryButtons.Controls.Add(_selectNone);
         layout.Controls.Add(categoryButtons, 0, 8);
 
-        _threatFox = new CheckBox
-        {
-            AutoSize = true,
-            Checked = current.ThreatFoxRules,
-            Margin = new Padding(0, 12, 0, 0),
-            Text = Localizer.T("附加 ThreatFox Suricata 规则（默认关闭：与本地 IOC 库重叠）"),
-        };
-        layout.Controls.Add(_threatFox, 0, 9);
-
-        _threatFoxConfidence = new ComboBox
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            Width = 180,
-            Margin = new Padding(0, 4, 0, 0),
-        };
-        _threatFoxConfidence.Items.Add(Localizer.T("规则置信度 ≥ 50%"));
-        _threatFoxConfidence.Items.Add(Localizer.T("规则置信度 ≥ 75%"));
-        _threatFoxConfidence.Items.Add(Localizer.T("规则置信度 ≥ 90%（推荐）"));
-        _threatFoxConfidence.Items.Add(Localizer.T("仅 100% 规则"));
-        _threatFoxConfidence.SelectedIndex = current.ThreatFoxMinConfidence switch
-        {
-            <= 50 => 0,
-            <= 75 => 1,
-            <= 90 => 2,
-            _ => 3,
-        };
-        layout.Controls.Add(_threatFoxConfidence, 0, 10);
 
         _notify = new CheckBox
         {
@@ -204,7 +174,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Margin = new Padding(0, 12, 0, 0),
             Text = Localizer.T("新的高危告警显示托盘通知"),
         };
-        layout.Controls.Add(_notify, 0, 11);
+        layout.Controls.Add(_notify, 0, 9);
 
         var retentionPanel = new FlowLayoutPanel
         {
@@ -226,7 +196,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Width = 80,
         };
         retentionPanel.Controls.Add(_retention);
-        layout.Controls.Add(retentionPanel, 0, 12);
+        layout.Controls.Add(retentionPanel, 0, 10);
 
         layout.Controls.Add(new Label
         {
@@ -236,7 +206,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
             Margin = new Padding(0, 12, 0, 0),
             Text = Localizer.T(
                 "被动检测只告警，不自动拦截。命中后由你手动选择是否用 WFP 临时阻断；HTTPS 正文不可见。全量档忽略分类开关。"),
-        }, 0, 13);
+        }, 0, 11);
 
         var buttons = new FlowLayoutPanel
         {
@@ -249,7 +219,7 @@ internal sealed class NetworkDetectionSettingsForm : Form
         var ok = new Button { Text = Localizer.T("保存"), DialogResult = DialogResult.OK, Width = 88 };
         buttons.Controls.Add(cancel);
         buttons.Controls.Add(ok);
-        layout.Controls.Add(buttons, 0, 14);
+        layout.Controls.Add(buttons, 0, 12);
 
         _profile.SelectedIndexChanged += (_, _) => UpdateCategoryState();
         UpdateCategoryState();
@@ -379,9 +349,6 @@ internal sealed class NetworkDetectionSettingsForm : Form
             RetentionDays = (int)form._retention.Value,
             EnabledRuleCategories = categories,
             CaptureDeviceId = form.SelectedCaptureDeviceId(),
-            ThreatFoxRules = form._threatFox.Checked,
-            ThreatFoxMinConfidence = form._threatFoxConfidenceValues[
-                Math.Max(0, form._threatFoxConfidence.SelectedIndex)],
         };
     }
 

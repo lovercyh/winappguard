@@ -390,7 +390,7 @@ internal static class SuricataHost
 
             var timeout = _ruleCount switch
             {
-                > 100_000 => 300_000,
+                > 100_000 => 600_000,
                 > 60_000 => 180_000,
                 _ => 60_000,
             };

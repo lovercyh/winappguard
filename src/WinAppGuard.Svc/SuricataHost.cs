@@ -42,6 +42,8 @@ internal static class SuricataHost
     private static string _validatedSignature = string.Empty;
     private static string? _activeBackupPath;
     private static int _generation;
+    private static int _preparing;
+    private static string? _captureDevicePath;
 
     internal static bool IsRunning
     {
@@ -68,6 +70,9 @@ internal static class SuricataHost
     {
         get { lock (Gate) { return _ruleCount; } }
     }
+
+    /// <summary>6.0：正在拼接规则或执行 -T 校验。</summary>
+    internal static bool Preparing => Volatile.Read(ref _preparing) == 1;
 
     internal static string? CaptureDeviceName
     {
@@ -123,7 +128,7 @@ internal static class SuricataHost
             }
         }
 
-        EnsureRunning(ruleProfile);
+        QueueStart(ruleProfile);
     }
 
     internal static void Stop()
@@ -162,7 +167,7 @@ internal static class SuricataHost
 
         if (_enabled)
         {
-            EnsureRunning(ruleProfile);
+            QueueStart(ruleProfile);
         }
     }
 
@@ -239,112 +244,187 @@ internal static class SuricataHost
 
     private static void EnsureRunning(string ruleProfile)
     {
-        lock (Gate)
+        if (Interlocked.CompareExchange(ref _preparing, 1, 0) != 0)
         {
-            if (!_enabled || _stopping || _process is { HasExited: false })
+            return;
+        }
+
+        try
+        {
+            int generation;
+
+            lock (Gate)
             {
+                if (!_enabled || _stopping || _process is { HasExited: false })
+                {
+                    return;
+                }
+
+                generation = _generation;
+            }
+
+            // 6.0：拼接 13 万条规则并执行 Suricata -T 可能耗时数分钟。
+            // 这段必须放在锁外，否则保存设置和状态查询会一起超时。
+            if (!PrepareRules(ruleProfile))
+            {
+                lock (Gate)
+                {
+                    if (generation == _generation && _enabled && !_stopping)
+                    {
+                        ScheduleRestartLocked();
+                    }
+                }
+
                 return;
             }
 
-            var generation = _generation;
+            lock (Gate)
+            {
+                if (generation != _generation || !_enabled || _stopping
+                    || _process is { HasExited: false })
+                {
+                    _nextRestartUtc = DateTime.MinValue;
+                    return;
+                }
 
+                StartProcessLocked(ruleProfile);
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (Gate)
+            {
+                _lastError = $"启动 Suricata 失败：{ex.Message}";
+                ScheduleRestartLocked();
+            }
+
+            ServiceLog.Warning("WAG-ND-002", "Failed to start Suricata.", ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _preparing, 0);
+        }
+    }
+
+    /// <summary>
+    /// 6.0：在锁外完成规则拼接、-T 校验和网卡解析。
+    /// 返回 false 表示本轮失败，由调用方安排重试。
+    /// </summary>
+    private static bool PrepareRules(string ruleProfile)
+    {
+        if (!EnsurePrepared(ruleProfile))
+        {
+            return false;
+        }
+
+        if (!ValidateConfig())
+        {
+            RestoreActiveRulesBackup();
+            return false;
+        }
+
+        CommitActiveRulesBackup();
+
+        var resolution = NetworkCaptureDevices.Resolve(
+            _captureDeviceId,
+            NetworkCaptureDevices.Enumerate());
+
+        _captureDeviceName = resolution.AdapterName;
+        _captureFallback = resolution.Fallback;
+        _captureNote = resolution.Reason;
+
+        if (resolution.DevicePath is null)
+        {
+            _lastError = resolution.Reason
+                ?? "找不到可用的网卡；请检查 Npcap 和网络连接。";
+            return false;
+        }
+
+        _captureDevicePath = resolution.DevicePath;
+        return true;
+    }
+
+    /// <summary>6.0：进程启动只占很短的时间，放在锁内完成。</summary>
+    private static void StartProcessLocked(string ruleProfile)
+    {
+        var device = _captureDevicePath;
+
+        if (string.IsNullOrEmpty(device))
+        {
+            _lastError = "找不到可用的网卡；请检查 Npcap 和网络连接。";
+            ScheduleRestartLocked();
+            return;
+        }
+
+        var classification = Path.Combine(_installDirectory!, "classification.config");
+        var reference = Path.Combine(_installDirectory!, "reference.config");
+
+        var arguments =
+            $"-c \"{_configPath}\" " +
+            $"-i \"{device}\" " +
+            $"-l \"{ServicePaths.SuricataDirectory}\" " +
+            $"-S \"{_rulesFile}\" " +
+            $"--set \"classification-file={classification}\" " +
+            $"--set \"reference-config-file={reference}\"";
+
+        var info = new ProcessStartInfo
+        {
+            FileName = _executable!,
+            Arguments = arguments,
+            WorkingDirectory = _installDirectory!,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        ApplyNpcapPath(info);
+
+        var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+        process.OutputDataReceived += (_, e) => AppendLog(e.Data);
+        process.ErrorDataReceived += (_, e) => AppendLog(e.Data);
+
+        if (!process.Start())
+        {
+            _lastError = "无法启动 Suricata 进程。";
+            process.Dispose();
+            ScheduleRestartLocked();
+            return;
+        }
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        _process = process;
+        _restartDelaySeconds = 5;
+        _nextRestartUtc = DateTime.MinValue;
+        _lastError = null;
+
+        ServiceLog.Info(
+            "WAG-ND-001",
+            $"Suricata started (pid={process.Id}, profile={ruleProfile}, rules={_ruleCount}, device={device}).");
+    }
+
+    private static void QueueStart(string ruleProfile)
+    {
+        _ = Task.Run(() =>
+        {
             try
             {
-                if (!EnsurePreparedLocked(ruleProfile))
-                {
-                    ScheduleRestartLocked();
-                    return;
-                }
-
-                if (!ValidateConfigLocked())
-                {
-                    RestoreActiveRulesBackupLocked();
-                    ScheduleRestartLocked();
-                    return;
-                }
-
-                CommitActiveRulesBackupLocked();
-
-                var resolution = NetworkCaptureDevices.Resolve(
-                    _captureDeviceId,
-                    NetworkCaptureDevices.Enumerate());
-
-                _captureDeviceName = resolution.AdapterName;
-                _captureFallback = resolution.Fallback;
-                _captureNote = resolution.Reason;
-
-                if (resolution.DevicePath is null)
-                {
-                    _lastError = resolution.Reason
-                        ?? "找不到可用的网卡；请检查 Npcap 和网络连接。";
-                    ScheduleRestartLocked();
-                    return;
-                }
-
-                var device = resolution.DevicePath;
-
-                var classification = Path.Combine(_installDirectory!, "classification.config");
-                var reference = Path.Combine(_installDirectory!, "reference.config");
-
-                var arguments =
-                    $"-c \"{_configPath}\" " +
-                    $"-i \"{device}\" " +
-                    $"-l \"{ServicePaths.SuricataDirectory}\" " +
-                    $"-S \"{_rulesFile}\" " +
-                    $"--set \"classification-file={classification}\" " +
-                    $"--set \"reference-config-file={reference}\"";
-
-                var info = new ProcessStartInfo
-                {
-                    FileName = _executable!,
-                    Arguments = arguments,
-                    WorkingDirectory = _installDirectory!,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-
-                ApplyNpcapPath(info);
-
-                var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-                process.OutputDataReceived += (_, e) => AppendLog(e.Data);
-                process.ErrorDataReceived += (_, e) => AppendLog(e.Data);
-
-                if (!process.Start())
-                {
-                    _lastError = "无法启动 Suricata 进程。";
-                    process.Dispose();
-                    ScheduleRestartLocked();
-                    return;
-                }
-
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                _process = process;
-                _restartDelaySeconds = 5;
-                _nextRestartUtc = DateTime.MinValue;
-                _lastError = null;
-
-                ServiceLog.Info(
-                    "WAG-ND-001",
-                    $"Suricata started (pid={process.Id}, profile={ruleProfile}, rules={_ruleCount}, device={device}).");
+                EnsureRunning(ruleProfile);
             }
             catch (Exception ex)
             {
-                _lastError = $"启动 Suricata 失败：{ex.Message}";
-                ServiceLog.Warning("WAG-ND-002", "Failed to start Suricata.", ex);
-                ScheduleRestartLocked();
+                ServiceLog.Warning("WAG-ND-002", "Failed to queue Suricata start.", ex);
             }
-        }
+        });
     }
 
     /// <summary>
     /// 启动前先用 Suricata 自己的 -T 校验配置和规则。
     /// 规则/配置没变时复用上次结果，避免每次重启都扫描 1 万多条规则。
     /// </summary>
-    private static bool ValidateConfigLocked()
+    private static bool ValidateConfig()
     {
         try
         {
@@ -436,7 +516,7 @@ internal static class SuricataHost
     /// 5.1：把用户勾选的分类规则拼成 active.rules。
     /// 先写临时文件再原子替换，Suricata 校验失败时不会破坏旧文件。
     /// </summary>
-    private static bool BuildActiveRulesLocked(out string rulesFile)
+    private static bool BuildActiveRules(string ruleProfile, out string rulesFile)
     {
         rulesFile = ServicePaths.SuricataActiveRulesFile;
         var temporary = rulesFile + ".tmp";
@@ -446,7 +526,7 @@ internal static class SuricataHost
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var full = string.Equals(_profile, "full", StringComparison.OrdinalIgnoreCase);
+        var full = string.Equals(ruleProfile, "full", StringComparison.OrdinalIgnoreCase);
 
         if (!full && categories.Count == 0)
         {
@@ -519,7 +599,7 @@ internal static class SuricataHost
                     }
                 }
 
-                AppendThreatFoxRulesLocked(writer, ThreatFoxThreshold(_profile));
+                AppendThreatFoxRules(writer, ThreatFoxThreshold(ruleProfile));
             }
 
             var backup = rulesFile + ".bak";
@@ -579,7 +659,7 @@ internal static class SuricataHost
     internal static int CountThreatFoxRules(string path, int minConfidence)
         => EnumerateThreatFoxRules(path, minConfidence).Count();
 
-    private static void AppendThreatFoxRulesLocked(StreamWriter writer, int minConfidence)
+    private static void AppendThreatFoxRules(StreamWriter writer, int minConfidence)
     {
         var path = ServicePaths.ThreatFoxRulesFile;
 
@@ -605,7 +685,7 @@ internal static class SuricataHost
         }
     }
 
-    private static void CommitActiveRulesBackupLocked()
+    private static void CommitActiveRulesBackup()
     {
         if (_activeBackupPath is null)
         {
@@ -627,7 +707,7 @@ internal static class SuricataHost
         _activeBackupPath = null;
     }
 
-    private static void RestoreActiveRulesBackupLocked()
+    private static void RestoreActiveRulesBackup()
     {
         if (_activeBackupPath is null)
         {
@@ -653,7 +733,7 @@ internal static class SuricataHost
         _activeBackupPath = null;
     }
 
-    private static bool EnsurePreparedLocked(string ruleProfile)
+    private static bool EnsurePrepared(string ruleProfile)
     {
         if (_executable is null || !File.Exists(_executable))
         {
@@ -675,7 +755,7 @@ internal static class SuricataHost
 
         string rulesFile;
 
-        if (!BuildActiveRulesLocked(out rulesFile))
+        if (!BuildActiveRules(ruleProfile, out rulesFile))
         {
             return false;
         }
@@ -825,7 +905,7 @@ internal static class SuricataHost
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                process.WaitForExit(3000);
+                process.WaitForExit(1000);
             }
         }
         catch (Exception)

@@ -494,7 +494,7 @@ public sealed partial class MainForm
             _ndStatusLabel.Text = Localizer.F(
                 "反网络攻击：{0}；Suricata：{1}；规则：{2}（{3}）；告警：{4}（未读 {5}）；活动拦截：{6}",
                 Localizer.T(status.Enabled ? "已开启" : "已关闭"),
-                Localizer.T(status.Running ? "运行中" : "未运行"),
+                Localizer.T(status.Running ? "运行中" : status.Preparing ? "启动中（校验规则）" : "未运行"),
                 status.RuleCount,
                 Localizer.T(status.RuleProfile switch
                 {

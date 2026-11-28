@@ -635,6 +635,7 @@ internal static class NetworkDetectionHost
         {
             Enabled = _state.Settings.Enabled,
             Running = SuricataHost.IsRunning,
+            Preparing = SuricataHost.Preparing,
             Collecting = _reader is not null && SuricataHost.IsRunning,
             SuricataVersion = SuricataHost.Version,
             RulesVersion = "ET Open 7.0.3",

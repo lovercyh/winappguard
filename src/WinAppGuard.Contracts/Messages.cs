@@ -408,6 +408,9 @@ public sealed class NetworkDetectionStatusDto
 
     public bool Running { get; set; }
 
+    /// <summary>6.0：正在拼接规则或执行 Suricata -T 校验。</summary>
+    public bool Preparing { get; set; }
+
     public bool Collecting { get; set; }
 
     public string? SuricataVersion { get; set; }

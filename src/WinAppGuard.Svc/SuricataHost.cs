@@ -43,7 +43,9 @@ internal static class SuricataHost
     private static string? _activeBackupPath;
     private static int _generation;
     private static int _preparing;
+    private static int _startRequested;
     private static string? _captureDevicePath;
+    private static Process? _validationProcess;
 
     internal static bool IsRunning
     {
@@ -140,6 +142,7 @@ internal static class SuricataHost
             _generation++;
             _monitor?.Dispose();
             _monitor = null;
+            KillValidationProcess();
             StopProcessLocked();
         }
     }
@@ -161,6 +164,8 @@ internal static class SuricataHost
                 ? NetworkRuleCategories.Curated
                 : NormalizeCategories(enabledCategories);
             _captureDeviceId = captureDeviceId?.Trim() ?? string.Empty;
+            _generation++;
+            KillValidationProcess();
             StopProcessLocked();
             _nextRestartUtc = DateTime.MinValue;
         }
@@ -246,6 +251,7 @@ internal static class SuricataHost
     {
         if (Interlocked.CompareExchange(ref _preparing, 1, 0) != 0)
         {
+            Interlocked.Exchange(ref _startRequested, 1);
             return;
         }
 
@@ -269,7 +275,9 @@ internal static class SuricataHost
             {
                 lock (Gate)
                 {
-                    if (generation == _generation && _enabled && !_stopping)
+                    Interlocked.Exchange(ref _startRequested, 0);
+
+                    if (_enabled && !_stopping)
                     {
                         ScheduleRestartLocked();
                     }
@@ -284,6 +292,13 @@ internal static class SuricataHost
                     || _process is { HasExited: false })
                 {
                     _nextRestartUtc = DateTime.MinValue;
+
+                    if (generation != _generation && _enabled && !_stopping)
+                    {
+                        // 准备期间用户又切了档位：立即用新档位重来，不等监控定时器。
+                        Interlocked.Exchange(ref _startRequested, 1);
+                    }
+
                     return;
                 }
 
@@ -303,6 +318,18 @@ internal static class SuricataHost
         finally
         {
             Interlocked.Exchange(ref _preparing, 0);
+
+            if (Interlocked.Exchange(ref _startRequested, 0) == 1)
+            {
+                string profile;
+
+                lock (Gate)
+                {
+                    profile = _profile;
+                }
+
+                QueueStart(profile);
+            }
         }
     }
 
@@ -457,7 +484,7 @@ internal static class SuricataHost
 
             ApplyNpcapPath(info);
 
-            using var process = Process.Start(info);
+            var process = Process.Start(info);
 
             if (process is null)
             {
@@ -465,45 +492,55 @@ internal static class SuricataHost
                 return false;
             }
 
-            var output = process.StandardOutput.ReadToEnd()
-                + process.StandardError.ReadToEnd();
+            _validationProcess = process;
 
-            var timeout = _ruleCount switch
+            try
             {
-                > 100_000 => 600_000,
-                > 60_000 => 180_000,
-                _ => 60_000,
-            };
+                var output = process.StandardOutput.ReadToEnd()
+                    + process.StandardError.ReadToEnd();
 
-            if (!process.WaitForExit(timeout))
-            {
-                try
+                var timeout = _ruleCount switch
                 {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch (Exception)
+                    > 100_000 => 600_000,
+                    > 60_000 => 180_000,
+                    _ => 60_000,
+                };
+
+                if (!process.WaitForExit(timeout))
                 {
-                    // 进程可能已经退出。
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (Exception)
+                    {
+                        // 进程可能已经退出。
+                    }
+
+                    _lastError = "Suricata 配置校验超时。";
+                    return false;
                 }
 
-                _lastError = "Suricata 配置校验超时。";
-                return false;
-            }
+                if (process.ExitCode != 0)
+                {
+                    var lastLine = output
+                        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                        .LastOrDefault()?
+                        .Trim();
 
-            if (process.ExitCode != 0)
+                    _lastError = "Suricata 配置校验失败"
+                        + (string.IsNullOrEmpty(lastLine) ? "。" : $"：{lastLine}");
+                    return false;
+                }
+
+                _validatedSignature = signature;
+                return true;
+            }
+            finally
             {
-                var lastLine = output
-                    .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                    .LastOrDefault()?
-                    .Trim();
-
-                _lastError = "Suricata 配置校验失败"
-                    + (string.IsNullOrEmpty(lastLine) ? "。" : $"：{lastLine}");
-                return false;
+                _validationProcess = null;
+                process.Dispose();
             }
-
-            _validatedSignature = signature;
-            return true;
         }
         catch (Exception ex)
         {
@@ -888,6 +925,28 @@ internal static class SuricataHost
     {
         _nextRestartUtc = DateTime.UtcNow.AddSeconds(_restartDelaySeconds);
         _restartDelaySeconds = Math.Min(_restartDelaySeconds * 2, 60);
+    }
+
+    private static void KillValidationProcess()
+    {
+        var process = _validationProcess;
+
+        if (process is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception)
+        {
+            // 校验进程可能已经退出。
+        }
     }
 
     private static void StopProcessLocked()

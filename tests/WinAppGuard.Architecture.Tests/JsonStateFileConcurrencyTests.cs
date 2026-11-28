@@ -8,7 +8,7 @@ namespace WinAppGuard.Architecture.Tests;
 public sealed class JsonStateFileConcurrencyTests
 {
     [Fact]
-    public void ConcurrentSavesLeaveAValidStateFile()
+    public async Task ConcurrentSavesLeaveAValidStateFile()
     {
         var path = Path.Combine(
             Path.GetTempPath(),
@@ -26,7 +26,7 @@ public sealed class JsonStateFileConcurrencyTests
                 writer.Save(new State { Value = index });
             }));
 
-            Task.WaitAll(tasks.ToArray());
+            await Task.WhenAll(tasks);
 
             var loaded = first.Load(out var error);
 

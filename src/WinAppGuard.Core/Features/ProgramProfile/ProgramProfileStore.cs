@@ -16,6 +16,10 @@ internal sealed class ProgramProfileRecord
 
     public int AlertCount { get; set; }
 
+    public double EwmaAlertsPerHour { get; set; }
+
+    public bool ColdStart { get; set; }
+
     public string? LastServiceInstance { get; set; }
 
     public string? LastLolbinRule { get; set; }
@@ -91,6 +95,13 @@ internal sealed class ProgramProfileStore : IDisposable
 
             profile.LastSeenUtc = now;
             profile.AlertCount++;
+
+            var hours = Math.Max(1, (now - profile.FirstSeenUtc).TotalHours);
+            var instantRate = profile.AlertCount / hours;
+            profile.EwmaAlertsPerHour = profile.EwmaAlertsPerHour <= 0
+                ? instantRate
+                : profile.EwmaAlertsPerHour * 0.8 + instantRate * 0.2;
+            profile.ColdStart = now - profile.FirstSeenUtc < TimeSpan.FromDays(7);
 
             if (!string.IsNullOrWhiteSpace(serviceInstance))
             {
@@ -195,6 +206,8 @@ internal sealed class ProgramProfileStore : IDisposable
         FirstSeenUtc = source.FirstSeenUtc,
         LastSeenUtc = source.LastSeenUtc,
         AlertCount = source.AlertCount,
+        EwmaAlertsPerHour = source.EwmaAlertsPerHour,
+        ColdStart = source.ColdStart,
         LastServiceInstance = source.LastServiceInstance,
         LastLolbinRule = source.LastLolbinRule,
         RemoteAddresses = source.RemoteAddresses.ToList(),

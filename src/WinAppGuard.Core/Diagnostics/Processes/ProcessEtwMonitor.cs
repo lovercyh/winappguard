@@ -23,6 +23,7 @@ internal sealed class ProcessEtwMonitor : IDisposable
     private EtwRealtimeSession? _session;
     private long _eventsSeen;
     private long _parseFailures;
+    private long _lolbinMatches;
     private string? _lastError;
     private DateTime? _lastEventUtc;
 
@@ -36,6 +37,8 @@ internal sealed class ProcessEtwMonitor : IDisposable
     internal long EventsSeen => Interlocked.Read(ref _eventsSeen);
 
     internal long ParseFailures => Interlocked.Read(ref _parseFailures);
+
+    internal long LolbinMatches => Interlocked.Read(ref _lolbinMatches);
 
     internal string? LastError => _lastError;
 
@@ -139,6 +142,11 @@ internal sealed class ProcessEtwMonitor : IDisposable
                 LolbinRule = LolbinMatcher.Match(imagePath, commandLine),
                 StartUtc = timestamp,
             });
+
+            if (LolbinMatcher.Match(imagePath, commandLine) is not null)
+            {
+                Interlocked.Increment(ref _lolbinMatches);
+            }
 
             Interlocked.Increment(ref _eventsSeen);
             _lastEventUtc = timestamp;

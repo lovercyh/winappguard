@@ -361,6 +361,7 @@ public partial class MainForm : Form
         InitializeNetworkDetectionPage();
         InitializeAntiScanPage();
         InitializeHealthPage();
+        InitializeProgramProfilePage();
 
         // 5.9：所有可见页共用一个刷新调度器；后台通知定时器仍独立。
         RegisterPageRefresh();
@@ -5772,6 +5773,7 @@ public partial class MainForm : Form
     internal void UpdateServiceStatusLabel(ServiceStatus? status, string? error = null)
     {
         UpdateHealthPage(status);
+        UpdateProgramProfilePage(status);
         UpdateNpcapStatusLabel(status);
 
         if (status is null)

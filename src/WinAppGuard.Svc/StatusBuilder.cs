@@ -2,6 +2,7 @@ using System.Diagnostics;
 using WinAppGuard.Contracts;
 using WinAppGuard.Core;
 using WinAppGuard.Core.Diagnostics.Processes;
+using WinAppGuard.Core.Features.ProgramProfile;
 using WinAppGuard.Core.Wfp;
 using WinAppGuard.Models;
 
@@ -50,11 +51,26 @@ internal static class StatusBuilder
             TableEntries = etw.TableEntries,
             EventsSeen = etw.EventsSeen,
             ParseFailures = etw.ParseFailures,
+            LolbinMatches = etw.LolbinMatches,
             LastError = etw.LastError,
             LastEventUtc = etw.LastEventUtc,
             RestartAttempts = etw.RestartAttempts,
             NextRetryUtc = etw.NextRetryUtc,
         };
+
+        status.ProgramProfiles = ProgramProfileHost.Snapshot(50)
+            .Select(profile => new ProgramProfileDto
+            {
+                Path = profile.Path,
+                FirstSeenUtc = profile.FirstSeenUtc,
+                LastSeenUtc = profile.LastSeenUtc,
+                AlertCount = profile.AlertCount,
+                EwmaAlertsPerHour = profile.EwmaAlertsPerHour,
+                ColdStart = profile.ColdStart,
+                ServiceInstance = profile.LastServiceInstance,
+                LolbinRule = profile.LastLolbinRule,
+            })
+            .ToList();
 
         // 5.12：规则计数来自 RuleSnapshotCache（缓存命中时不开 WFP），
         // 子层存在性单独缓存 1 秒，避免每个 status 都打开 BFE 会话。

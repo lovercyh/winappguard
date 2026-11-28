@@ -1103,6 +1103,29 @@ public sealed class ServiceStatus
 
     /// <summary>6.0：Kernel-Process ETW 健康快照。</summary>
     public ProcessEtwStatusDto? ProcessEtw { get; set; }
+
+    /// <summary>6.0：画像摘要（最多 50 条）。</summary>
+    public List<ProgramProfileDto>? ProgramProfiles { get; set; }
+}
+
+/// <summary>6.0：程序画像摘要。</summary>
+public sealed class ProgramProfileDto
+{
+    public string Path { get; set; } = string.Empty;
+
+    public DateTime FirstSeenUtc { get; set; }
+
+    public DateTime LastSeenUtc { get; set; }
+
+    public int AlertCount { get; set; }
+
+    public double EwmaAlertsPerHour { get; set; }
+
+    public bool ColdStart { get; set; }
+
+    public string? ServiceInstance { get; set; }
+
+    public string? LolbinRule { get; set; }
 }
 
 /// <summary>6.0：Kernel-Process ETW 状态。</summary>
@@ -1119,6 +1142,8 @@ public sealed class ProcessEtwStatusDto
     public long EventsSeen { get; set; }
 
     public long ParseFailures { get; set; }
+
+    public long LolbinMatches { get; set; }
 
     public string? LastError { get; set; }
 

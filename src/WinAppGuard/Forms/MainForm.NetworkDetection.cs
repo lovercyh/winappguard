@@ -496,7 +496,12 @@ public sealed partial class MainForm
                 Localizer.T(status.Enabled ? "已开启" : "已关闭"),
                 Localizer.T(status.Running ? "运行中" : "未运行"),
                 status.RuleCount,
-                Localizer.T(status.RuleProfile == "full" ? "全量" : "标准"),
+                Localizer.T(status.RuleProfile switch
+                {
+                    "full" => "全量",
+                    "standard" => "标准",
+                    _ => "精选",
+                }),
                 status.AlertsTotal,
                 status.AlertsNew,
                 status.ActiveBlocks);

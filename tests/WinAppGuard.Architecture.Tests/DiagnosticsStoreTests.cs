@@ -109,7 +109,7 @@ public sealed class DiagnosticsStoreTests
             Assert.Null(error);
             Assert.True(migrated);
             Assert.False(state.Settings.Enabled);
-            Assert.Equal("standard", state.Settings.RuleProfile);
+            Assert.Equal("curated", state.Settings.RuleProfile);
             Assert.Equal(365, state.Settings.RetentionDays);
             Assert.Equal("device-1", state.Settings.CaptureDeviceId);
             Assert.Equal("ack", state.AlertStatuses["a"]);

@@ -193,10 +193,12 @@ public static class NetworkDetectionStateFile
             state.Settings.CaptureDeviceId = state.Settings.CaptureDeviceId.Trim();
         }
 
-        state.Settings.RuleProfile = string.Equals(
-            state.Settings.RuleProfile, "full", StringComparison.OrdinalIgnoreCase)
-            ? "full"
-            : "standard";
+        state.Settings.RuleProfile = state.Settings.RuleProfile?.ToLowerInvariant() switch
+        {
+            "full" => "full",
+            "standard" => "standard",
+            _ => "curated",
+        };
 
         state.AlertStatuses = new Dictionary<string, string>(
             state.AlertStatuses, StringComparer.Ordinal);

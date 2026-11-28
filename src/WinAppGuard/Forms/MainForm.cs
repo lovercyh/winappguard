@@ -1121,7 +1121,7 @@ public partial class MainForm : Form
         if (plusIndex <= 0)
         {
             // 不在 git 仓库里构建时就没有提交号后缀，直接用版本号。
-            return version;
+            return FormatBeta(version);
         }
 
         var number = version[..plusIndex];
@@ -1132,7 +1132,24 @@ public partial class MainForm : Form
             revision = revision[..7];
         }
 
-        return $"{number} · {revision}";
+        return $"{FormatBeta(number)} · {revision}";
+    }
+
+    private static string FormatBeta(string version)
+    {
+        if (!version.EndsWith("-beta", StringComparison.OrdinalIgnoreCase))
+        {
+            return version;
+        }
+
+        var core = version[..^5];
+
+        if (core.EndsWith(".0", StringComparison.Ordinal))
+        {
+            core = core[..^2];
+        }
+
+        return $"{core} Beta";
     }
 
     // ==================================================================
